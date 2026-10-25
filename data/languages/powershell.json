@@ -1,0 +1,14 @@
+{
+  "name": "PowerShell",
+  "aliases": ["ps1", "pwsh"],
+  "line_comment": "#",
+  "strings": ["\"", "'"],
+  "keywords": ["if","else","elseif","for","foreach","while","do","switch",
+               "function","param","return","break","continue","try","catch",
+               "finally","begin","process","end","class","using","in"],
+  "builtins": ["Write-Host","Get-ChildItem","Set-Content","Get-Content",
+               "Select-String","Start-Process","Stop-Process","Test-Path",
+               "New-Item","Copy-Item","Remove-Item","Add-Member",
+               "ConvertFrom-Json","ConvertTo-Json","Measure-Command",
+               "Tee-Object","ForEach-Object","Where-Object"]
+}

@@ -51,6 +51,7 @@ add_executable(krastor
     src/llm_models.cpp
     src/md_format.cpp
     src/formatters.cpp
+    src/highlight.cpp
     src/voices.cpp
     src/tts.cpp
     src/stt.cpp

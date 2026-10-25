@@ -1,0 +1,7 @@
+{
+  "name": "INI",
+  "aliases": ["toml", "cfg", "conf", "editorconfig"],
+  "line_comment": ";",
+  "strings": ["\""],
+  "keywords": ["true", "false"]
+}

@@ -18,6 +18,7 @@
 #include "config.h"
 #include "conversation.h"
 #include "formatters.h"
+#include "highlight.h"
 #include "gui.h"
 #include "llm_client.h"
 #include "llm_models.h"
@@ -163,6 +164,11 @@ int main(int argc, char** argv)
 
     krastor::LlmClient llm(cfg.llm);
     krastor::OutputFormatter fmt(cfg);
+    krastor::Highlighter hl;
+    if (hl.load_default())
+        fmt.set_highlighter([&hl](const std::string& code, const std::string& lang) {
+            return hl.highlight(code, lang);
+        });
     krastor::Conversation conversation(cfg.llm.system_prompt);
     print_help();
 

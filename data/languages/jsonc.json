@@ -1,0 +1,8 @@
+{
+  "name": "JSONC",
+  "aliases": ["jsonc", "json5"],
+  "line_comment": "//",
+  "block_comment": ["/*", "*/"],
+  "strings": ["\""],
+  "keywords": ["true", "false", "null"]
+}

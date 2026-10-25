@@ -1,0 +1,18 @@
+{
+  "name": "Python",
+  "aliases": ["py", "python3"],
+  "line_comment": "#",
+  "strings": ["\"", "'"],
+  "triples": ["\"\"\"", "'''"],
+  "keywords": ["and","as","assert","async","await","break","class","continue",
+               "def","del","elif","else","except","finally","for","from","global",
+               "if","import","in","is","lambda","match","case","nonlocal","not",
+               "or","pass","raise","return","try","while","with","yield","self"],
+  "types": ["int","str","float","bool","list","dict","tuple","set","bytes",
+            "bytearray","complex","frozenset","type","None","True","False"],
+  "builtins": ["print","len","range","open","input","enumerate","zip","map",
+               "filter","sorted","sum","min","max","abs","round","isinstance",
+               "hasattr","getattr","setattr","super","format","join","split",
+               "strip","replace","append","extend","keys","values","items","get"],
+  "decorators": true
+}

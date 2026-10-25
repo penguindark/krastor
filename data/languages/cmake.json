@@ -1,0 +1,18 @@
+{
+  "name": "CMake",
+  "line_comment": "#",
+  "strings": ["\""],
+  "keywords": ["add_executable","add_library","target_link_libraries",
+               "target_include_directories","target_sources",
+               "target_compile_definitions","set","set_target_properties",
+               "message","if","elseif","else","endif","foreach","endforeach",
+               "while","endwhile","function","endfunction","macro","endmacro",
+               "option","find_package","include","project",
+               "cmake_minimum_required","install","add_subdirectory","list",
+               "string","math","file","configure_file","add_custom_command",
+               "add_custom_target"],
+  "builtins": ["CMAKE_BUILD_TYPE","CMAKE_CXX_STANDARD","CMAKE_SOURCE_DIR",
+               "CMAKE_CURRENT_SOURCE_DIR","CMAKE_BINARY_DIR","PRIVATE","PUBLIC",
+               "INTERFACE","DEBUG","RELEASE","WIN32","UNIX","ON","OFF","TRUE",
+               "FALSE"]
+}

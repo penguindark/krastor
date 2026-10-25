@@ -1,0 +1,18 @@
+{
+  "name": "JavaScript",
+  "aliases": ["js", "ts", "typescript", "jsx", "tsx"],
+  "line_comment": "//",
+  "block_comment": ["/*", "*/"],
+  "strings": ["\"", "'", "`"],
+  "keywords": ["async","await","break","case","catch","class","const","continue",
+               "debugger","default","delete","do","else","export","extends",
+               "finally","for","function","if","import","in","instanceof","let",
+               "new","of","return","static","switch","this","throw","try",
+               "typeof","var","void","while","yield","interface","type","enum",
+               "implements","public","private","readonly"],
+  "types": ["string","number","boolean","any","unknown","never","object","symbol",
+            "bigint","Array","Promise","Map","Set","Date","RegExp","Error"],
+  "builtins": ["console","document","window","fetch","JSON","Math","Object",
+               "parseInt","parseFloat","setTimeout","setInterval","require",
+               "module","process","toString"]
+}

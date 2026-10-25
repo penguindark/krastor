@@ -1,0 +1,12 @@
+{
+  "name": "Bash",
+  "aliases": ["sh", "shell", "zsh"],
+  "line_comment": "#",
+  "strings": ["\"", "'"],
+  "keywords": ["if","then","else","elif","fi","for","while","do","done","case",
+               "esac","function","in","export","local","return","echo","cd",
+               "source","exit","set","trap","read","shift","test"],
+  "builtins": ["sudo","git","cmake","make","grep","sed","awk","curl","wget",
+               "tar","mkdir","rm","cp","mv","ls","cat","chmod","chown","docker",
+               "python","python3","node","npm","pip","pip3","ssh","scp"]
+}

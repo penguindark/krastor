@@ -40,6 +40,7 @@
 #include "llm_client.h"
 #include "llm_models.h"
 #include "formatters.h"
+#include "highlight.h"
 #include "stt.h"
 #include "tts.h"
 #include "voices.h"
@@ -195,6 +196,7 @@ struct AppState {
     std::string name = "Krastor";  // agent persona (agent.name), live-editable
     LlmModelRegistry models;       // llm_models.json (Settings model combo)
     OutputFormatter fmt;           // raw reply -> ANSI-styled display text
+    Highlighter hl;                // data/languages/*.json code-block packs
 
     // Images pasted/attached to the message being composed (sent as vision
     // attachments together with the text).
@@ -255,6 +257,12 @@ struct AppState {
         name = c.agent.name;
         // Model list for the Settings combo (URL/key/context come from this file).
         models.load(LlmModelRegistry::default_path());
+        // Syntax highlighting for fenced code blocks (data/languages/*.json).
+        if (hl.load_default())
+            fmt.set_highlighter([this](const std::string& code,
+                                       const std::string& lang) {
+                return hl.highlight(code, lang);
+            });
         lines.push_back({"sys", name + " ready. Type below (Enter sends, "
                                   "Shift+Enter = newline). Ctrl+V pastes text or "
                                   "an image. Settings = LLM/voice config."});

@@ -641,3 +641,21 @@ Step 1 (this commit):
   not valid build-preset fields - `jobs` is).
 - Verified: KRASTOR_UITEST seeds a full markdown sample; screenshot shows
   every construct styled correctly. Both toolchains build clean.
+
+## 2026-10-26 (later) - Output formatting Step 2: syntax highlighting
+
+- `src/highlight.{h,cpp}`: `Highlighter` - per-line token scanner (comments/
+  strings -> numbers -> identifiers) with state carried across lines for
+  triple quotes and block comments; fg-only resets (39) keep the code-block
+  background. Colors: keyword purple, type cyan, builtin yellow, string green,
+  comment gray, number orange, decorator yellow.
+- Language packs are data plugins: `data/languages/*.json` (name, aliases,
+  line_comment, block_comment, strings, triples, keywords/types/builtins,
+  decorators). Shipped: python, cpp(+c), json, jsonc, bash, powershell,
+  javascript(+ts), cmake, ini. Lookup exe_dir()/data/languages then cwd;
+  broken files are skipped.
+- Wired: `AppState` loads the packs once and plugs a lambda into
+  `OutputFormatter::set_highlighter`; same in the CLI. Unknown language tag
+  keeps the block unhighlighted.
+- Verified: UITEST python block renders print=yellow, 'hello'=green,
+  comment=gray on the block background. Both toolchains clean.
