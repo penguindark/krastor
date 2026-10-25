@@ -95,9 +95,12 @@ Config Config::load(const std::string& path)
             const auto& j = root["gui"];
             cfg.gui.font_size = j.value("font_size", cfg.gui.font_size);
             cfg.gui.effect = j.value("effect", cfg.gui.effect);
+            cfg.gui.effect_intensity =
+                j.value("effect_intensity", cfg.gui.effect_intensity);
         }
         if (root.contains("agent")) {
             const auto& j = root["agent"];
+            cfg.agent.name = j.value("name", cfg.agent.name);
             cfg.agent.continuous = j.value("continuous", cfg.agent.continuous);
             cfg.agent.ignore_while_speaking =
                 j.value("ignore_while_speaking", cfg.agent.ignore_while_speaking);
@@ -134,8 +137,10 @@ void Config::save(const std::string& path) const
     root["gui"] = {
         {"font_size", gui.font_size},
         {"effect", gui.effect},
+        {"effect_intensity", gui.effect_intensity},
     };
     root["agent"] = {
+        {"name", agent.name},
         {"continuous", agent.continuous},
         {"ignore_while_speaking", agent.ignore_while_speaking},
     };

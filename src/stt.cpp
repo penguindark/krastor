@@ -48,6 +48,10 @@ struct Stt::Impl {
     std::atomic<float> level{0.0f};  // max |sample| of the most recent block
     std::atomic<float> peak{0.0f};   // max |sample| since the last reset
 
+    // Hands-free stream mode (see Stt::start_stream).
+    std::thread feeder;
+    std::atomic<bool> stream_run{false};
+
     // Lock-free ring of recent mic samples for the shader spectrum feed.
     // Single producer (mic callback), single consumer (render thread).
     static constexpr size_t kRing = 16384;  // 1 s @ 16 kHz
@@ -67,6 +71,9 @@ struct Stt::Impl {
 
     ~Impl()
     {
+        stream_run.store(false);
+        if (feeder.joinable())
+            feeder.join();
         if (mic_ok)
             ma_device_uninit(&mic);
         if (vad)
@@ -365,6 +372,8 @@ double Stt::monitor(double seconds, int device_index)
 
 std::string Stt::listen(double max_seconds, int device_index)
 {
+    if (impl_->stream_run.load())  // recognizer busy on the stream feeder
+        return "";
     if (!ensure_loaded() || !impl_->open_mic(device_index))
         return "";
     std::printf("[stt] input: %s\n", impl_->mic_name().c_str());
@@ -440,6 +449,83 @@ std::string Stt::transcribe_file(const std::string& path)
     return impl_->decode(samples.data(), static_cast<int>(samples.size()));
 }
 
+std::string Stt::recognize(const float* samples, size_t n)
+{
+    if (!ensure_loaded() || !samples || n < static_cast<size_t>(kSampleRate / 10))
+        return "";
+    return impl_->decode(samples, static_cast<int>(n));
+}
+
+bool Stt::start_stream(int device_index,
+                       std::function<void(std::vector<float>)> on_utterance)
+{
+    if (impl_->stream_run.load())
+        return true;  // already streaming
+    if (!ensure_loaded() || !impl_->open_mic(device_index))
+        return false;
+
+    SherpaOnnxVoiceActivityDetectorClear(impl_->vad);
+    {
+        std::lock_guard<std::mutex> lock(impl_->pcm_mutex);
+        impl_->pcm.clear();
+    }
+    impl_->stream_run.store(true);
+    Impl* impl = impl_.get();
+    impl->feeder = std::thread([impl, on_utterance] {
+        std::vector<float> local;
+        while (impl->stream_run.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            {
+                std::lock_guard<std::mutex> lock(impl->pcm_mutex);
+                local.swap(impl->pcm);
+            }
+            // Feed the VAD in fixed 512-sample windows; keep the remainder.
+            size_t off = 0;
+            while (off + kVadWindow <= local.size()) {
+                SherpaOnnxVoiceActivityDetectorAcceptWaveform(
+                    impl->vad, local.data() + off, kVadWindow);
+                off += kVadWindow;
+            }
+            if (off < local.size()) {
+                std::lock_guard<std::mutex> lock(impl->pcm_mutex);
+                impl->pcm.insert(impl->pcm.begin(), local.begin() + off,
+                                 local.end());
+            }
+            local.clear();
+            // Hand every closed segment's audio to the pipeline callback.
+            while (!SherpaOnnxVoiceActivityDetectorEmpty(impl->vad)) {
+                const SherpaOnnxSpeechSegment* seg =
+                    SherpaOnnxVoiceActivityDetectorFront(impl->vad);
+                std::vector<float> audio;
+                if (seg->n >= kSampleRate / 4)  // ignore < 0.25 s blips
+                    audio.assign(seg->samples, seg->samples + seg->n);
+                SherpaOnnxDestroySpeechSegment(seg);
+                SherpaOnnxVoiceActivityDetectorPop(impl->vad);
+                if (!audio.empty() && on_utterance)
+                    on_utterance(std::move(audio));
+            }
+        }
+    });
+    return true;
+}
+
+void Stt::stop_stream()
+{
+    if (!impl_->stream_run.exchange(false))
+        return;
+    if (impl_->feeder.joinable())
+        impl_->feeder.join();
+    if (impl_->vad)
+        SherpaOnnxVoiceActivityDetectorClear(impl_->vad);
+    if (impl_->mic_ok)
+        ma_device_stop(&impl_->mic);
+}
+
+bool Stt::streaming() const
+{
+    return impl_->stream_run.load();
+}
+
 size_t Stt::latest(float* dst, size_t n) const
 {
     using ImplT = Stt::Impl;
@@ -475,6 +561,10 @@ std::string Stt::list_input_devices() { return "stt: not available on this platf
 double Stt::monitor(double, int) { return -1.0; }
 std::string Stt::listen(double, int) { return ""; }
 std::string Stt::transcribe_file(const std::string&) { return ""; }
+std::string Stt::recognize(const float*, size_t) { return ""; }
+bool Stt::start_stream(int, std::function<void(std::vector<float>)>) { return false; }
+void Stt::stop_stream() {}
+bool Stt::streaming() const { return false; }
 size_t Stt::latest(float*, size_t) const { return 0; }
 
 } // namespace krastor

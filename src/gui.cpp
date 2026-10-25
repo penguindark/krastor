@@ -21,6 +21,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <cmath>
 #include <cstdio>
@@ -66,6 +67,7 @@ struct ChatLine {
 };
 
 struct SettingsState {
+    char name[128] = {0};
     char base_url[512] = {0};
     char model[256] = {0};
     char system_prompt[4096] = {0};
@@ -78,15 +80,19 @@ struct SettingsState {
     // Background effect plugins (display names; index 0 = built-in gradient).
     std::vector<std::string> effect_names;
     std::string effect = "gradient";
+    float effect_intensity = 1.0f;   // brightness knob, debounced auto-save
+    double intensity_due = 0.0;      // save timestamp, 0 = nothing pending
 
     void load_from(const Config& cfg, const VoiceRegistry& voices)
     {
+        std::snprintf(name, sizeof(name), "%s", cfg.agent.name.c_str());
         std::snprintf(base_url, sizeof(base_url), "%s", cfg.llm.base_url.c_str());
         std::snprintf(model, sizeof(model), "%s", cfg.llm.model.c_str());
         std::snprintf(system_prompt, sizeof(system_prompt), "%s",
                       cfg.llm.system_prompt.c_str());
         temperature = static_cast<float>(cfg.llm.temperature);
         max_tokens = cfg.llm.max_tokens;
+        effect_intensity = static_cast<float>(cfg.gui.effect_intensity);
         const auto* v = voices.current();
         voice = v ? v->id : (voices.voices().empty() ? std::string() : voices.voices()[0].id);
     }
@@ -102,6 +108,7 @@ struct AppState {
 
     std::vector<ChatLine> lines;   // main thread only
     SettingsState settings;
+    std::string name = "Krastor";  // agent persona (agent.name), live-editable
 
     // Images pasted/attached to the message being composed (sent as vision
     // attachments together with the text).
@@ -117,6 +124,20 @@ struct AppState {
     std::future<std::string> stt_fut;
     std::atomic<bool> speaking{false};
     bool auto_speak = true;
+
+    // ---- Hands-free pipeline (mic -> STT -> chat -> LLM -> TTS) ----
+    // The Stt feeder thread pushes closed VAD segments into `utterances`; a
+    // pipeline worker recognizes them and pushes the text into `heard`, which
+    // the render loop drains each frame and feeds to send(). Reusing send()
+    // keeps the single conversation/LLM worker path intact.
+    std::mutex ut_mtx;
+    std::condition_variable ut_cv;
+    std::vector<std::vector<float>> utterances;
+    std::thread pipe_thread;
+    std::atomic<bool> pipe_run{false};
+    std::mutex heard_mtx;
+    std::vector<std::string> heard;
+
     // Multiline chat input (Enter sends, Shift+Enter inserts a newline).
     // Large buffer so pasted code/long prompts are never silently truncated.
     char input[16384] = {0};
@@ -124,9 +145,10 @@ struct AppState {
     AppState(Config& c, VoiceRegistry& v)
         : cfg(c), voices(v), conv(c.llm.system_prompt), llm(c.llm), tts(v, c), stt(c)
     {
-        lines.push_back({"sys", "Krastor ready. Type below (Enter sends, "
-                                "Shift+Enter = newline). Ctrl+V pastes text or "
-                                "an image. Settings = LLM/voice config."});
+        name = c.agent.name;
+        lines.push_back({"sys", name + " ready. Type below (Enter sends, "
+                                  "Shift+Enter = newline). Ctrl+V pastes text or "
+                                  "an image. Settings = LLM/voice config."});
         // Screenshot-test hook: seed a styled sample line and attach whatever
         // image (if any) is on the clipboard, so renderers can be verified.
         if (std::getenv("KRASTOR_UITEST")) {
@@ -195,13 +217,84 @@ struct AppState {
 
     void start_listen()
     {
-        if (worker != Worker::None)
+        if (worker != Worker::None || stt.streaming())
             return;
         worker = Worker::Listening;
         const int idx = cfg.stt.input_device;
         Stt& stt_ref = stt;
         stt_fut = std::async(std::launch::async,
                              [&stt_ref, idx] { return stt_ref.listen(10.0, idx); });
+    }
+
+    ~AppState() { stop_hands_free(); }
+
+    bool hands_free() const { return pipe_run.load(); }
+
+    // Starts the continuous cycle: mic stream -> VAD -> recognize -> send().
+    // Validated by the mic actually opening; persisted to agent.continuous.
+    void start_hands_free()
+    {
+        if (pipe_run.load())
+            return;
+        if (!stt.start_stream(cfg.stt.input_device, [this](std::vector<float> audio) {
+                std::lock_guard<std::mutex> lk(ut_mtx);
+                if (utterances.size() < 8)  // cap the recognition backlog
+                    utterances.push_back(std::move(audio));
+                ut_cv.notify_one();
+            })) {
+            lines.push_back({"sys", "hands-free: cannot open the microphone "
+                                    "(check the device, CLI /devices)"});
+            return;
+        }
+        pipe_run.store(true);
+        pipe_thread = std::thread([this] {
+            std::vector<float> audio;
+            for (;;) {
+                {
+                    std::unique_lock<std::mutex> lk(ut_mtx);
+                    ut_cv.wait(lk, [this] {
+                        return !pipe_run.load() || !utterances.empty();
+                    });
+                    if (!pipe_run.load() && utterances.empty())
+                        return;
+                    audio = std::move(utterances.front());
+                    utterances.erase(utterances.begin());
+                }
+                const std::string text = stt.recognize(audio.data(), audio.size());
+                if (!text.empty()) {
+                    std::lock_guard<std::mutex> lk(heard_mtx);
+                    heard.push_back(text);
+                }
+            }
+        });
+        cfg.agent.continuous = true;
+        try {
+            cfg.save();  // validated: the mic stream is running
+        } catch (const std::exception&) {
+        }
+        lines.push_back({"sys", "hands-free ON - just speak; I listen until you "
+                                "toggle it off."});
+    }
+
+    void stop_hands_free()
+    {
+        stt.stop_stream();
+        if (pipe_run.exchange(false)) {
+            ut_cv.notify_all();
+            if (pipe_thread.joinable())
+                pipe_thread.join();
+        }
+        {
+            std::lock_guard<std::mutex> lk(ut_mtx);
+            utterances.clear();
+        }
+        if (cfg.agent.continuous) {
+            cfg.agent.continuous = false;
+            try {
+                cfg.save();
+            } catch (const std::exception&) {
+            }
+        }
     }
 
     // Polls finished worker tasks once per frame.
@@ -222,12 +315,31 @@ struct AppState {
         }
         if (worker == Worker::Listening &&
             stt_fut.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            const std::string heard = stt_fut.get();
+            const std::string one_shot = stt_fut.get();
             worker = Worker::None;
-            if (heard.empty())
+            if (one_shot.empty())
                 lines.push_back({"sys", "(nothing heard)"});
             else
-                send(heard);
+                send(one_shot);
+        }
+
+        // Hands-free: drain transcriptions produced by the pipeline worker.
+        {
+            std::vector<std::string> ready;
+            {
+                std::lock_guard<std::mutex> lk(heard_mtx);
+                ready.swap(heard);
+            }
+            for (const auto& text : ready) {
+                const bool busy = worker != Worker::None || speaking.load();
+                if (busy && cfg.agent.ignore_while_speaking) {
+                    std::string snippet = text.size() > 48 ? text.substr(0, 48) + "..." : text;
+                    lines.push_back({"sys", "(heard while busy, ignored: " +
+                                            snippet + ")"});
+                    continue;
+                }
+                send(text);
+            }
         }
     }
 };
@@ -239,9 +351,19 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     if (!s.open)
         return false;
 
-    const int mw = 520, mh = 480;
+    const int mw = 520, mh = 592;
+    // The modal needs its own opaque background: the main window's
+    // fixed_background is fully transparent so the shader shows through.
+    nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
+                             nk_style_item_color(nk_rgba(16, 18, 24, 235)));
     nk_begin(ctx, "Settings", nk_rect((win_w - mw) / 2.0f, (win_h - mh) / 2.0f, mw, mh),
              NK_WINDOW_TITLE | NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE);
+
+    nk_layout_row_dynamic(ctx, 26, 1);
+    nk_label(ctx, "Agent name", NK_LEFT);
+    nk_layout_row_dynamic(ctx, 26, 1);
+    nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, s.name,
+                                   sizeof(s.name) - 1, nk_filter_default);
 
     nk_layout_row_dynamic(ctx, 22, 1);
     nk_label(ctx, "LLM Engine", NK_LEFT);
@@ -291,6 +413,42 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         nk_combo_end(ctx);
     }
 
+    // Effect brightness: multiplies the plugin output (u_intensity). Applied
+    // live while dragging; auto-saved 500 ms after the last change.
+    nk_layout_row_dynamic(ctx, 26, 1);
+    nk_property_float(ctx, "Effect brightness", 0.2f, &s.effect_intensity, 3.0f,
+                      0.05f, 0.05f);
+    if (std::fabs(s.effect_intensity - cfg.gui.effect_intensity) > 1e-4) {
+        cfg.gui.effect_intensity = s.effect_intensity;
+        s.intensity_due = glfwGetTime() + 0.5;  // debounce the write
+    }
+    if (s.intensity_due > 0.0 && glfwGetTime() >= s.intensity_due) {
+        s.intensity_due = 0.0;
+        try {
+            cfg.save();  // validated: the value is live on screen
+            char buf[48];
+            std::snprintf(buf, sizeof(buf), "effect brightness: %.2fx",
+                          s.effect_intensity);
+            s.status = buf;
+        } catch (const std::exception&) {
+        }
+    }
+
+    // Hands-free echo guard (saved immediately: a plain validated toggle).
+    nk_layout_row_dynamic(ctx, 24, 1);
+    {
+        nk_bool ignore = cfg.agent.ignore_while_speaking ? nk_true : nk_false;
+        if (nk_checkbox_label(ctx, "Ignore mic while thinking/speaking", &ignore)) {
+            cfg.agent.ignore_while_speaking = ignore != 0;
+            try {
+                cfg.save();
+            } catch (const std::exception&) {
+            }
+            s.status = std::string("ignore while busy: ") +
+                       (cfg.agent.ignore_while_speaking ? "on" : "off");
+        }
+    }
+
     nk_layout_row_dynamic(ctx, 26, 1);
     nk_property_float(ctx, "Temperature", 0.0f, &s.temperature, 2.0f, 0.05f, 0.01f);
     nk_layout_row_dynamic(ctx, 26, 1);
@@ -309,6 +467,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
 
     nk_layout_row_dynamic(ctx, 30, 2);
     if (nk_button_label(ctx, "Save")) {
+        cfg.agent.name = s.name;
         cfg.llm.base_url = s.base_url;
         cfg.llm.model = s.model;
         cfg.llm.system_prompt = s.system_prompt;
@@ -332,6 +491,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
 
     const bool closed_by_x = nk_window_is_closed(ctx, "Settings") != 0;
     nk_end(ctx);
+    nk_style_pop_style_item(ctx);
     if (closed_by_x) {
         s.open = false;
         s.status.clear();
@@ -531,6 +691,8 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
     // dynamic-ratio row (one column at ratio 1.0) with the fixed pixel height.
     nk_layout_row_begin(ctx, NK_DYNAMIC, height, 1);
     nk_layout_row_push(ctx, 1.0f);
+    // Translucent panel background so the shader effect shows through.
+    nk_style_push_color(ctx, &ctx->style.window.background, nk_rgba(14, 16, 22, 105));
     if (nk_group_begin(ctx, "##chat", NK_WINDOW_BORDER)) {
         const float spacing = ctx->style.window.spacing.y;
         // Usable text width inside the group: window width minus group padding,
@@ -540,7 +702,7 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         float content_h = 0.0f;
         for (const auto& l : app.lines) {
             const std::string prefix = l.who == "you" ? "> " :
-                                       l.who == "krastor" ? "Krastor: " : "! ";
+                                       l.who == "krastor" ? app.name + ": " : "! ";
             struct nk_color col = nk_rgb(160, 160, 160);
             if (l.who == "you") col = nk_rgb(120, 180, 255);
             else if (l.who == "krastor") col = nk_rgb(130, 220, 150);
@@ -556,6 +718,7 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         nk_group_end(ctx);
         nk_layout_row_end(ctx);
     }
+    nk_style_pop_color(ctx);
 }
 
 } // namespace
@@ -677,10 +840,12 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         nk_style_set_font(&device.ctx, &fonts[font_index_for(font_px)]->handle);
     bool prev_plus = false, prev_minus = false, prev_zero = false;
     double font_save_due = 0.0;  // debounce timestamp for auto-save
-    // Semi-transparent panels so the shader background shows through.
-    // NOTE: the window body is painted from style.window.fixed_background;
-    // style.window.background only colors dynamic panels (groups, popups).
-    device.ctx.style.window.fixed_background = nk_style_item_color(nk_rgba(16, 18, 24, 200));
+    // The main window is fully transparent so the shader background shows
+    // through everywhere; readability comes from the chat group's own panel
+    // (see chat_panel) and the opaque Settings modal. NOTE: the window body
+    // is painted from style.window.fixed_background; style.window.background
+    // only colors dynamic panels (groups, popups).
+    device.ctx.style.window.fixed_background = nk_style_item_color(nk_rgba(16, 18, 24, 0));
     device.ctx.style.window.background = nk_rgba(16, 18, 24, 200);
 
     AppState app(cfg, voices);
@@ -696,6 +861,11 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         cfg.gui.effect.clear();
     }
     app.settings.effect = fx.current();
+    // Restore hands-free mode (loads the STT models synchronously: the first
+    // frame is delayed a few seconds, then everything runs on worker threads).
+    if (cfg.agent.continuous)
+        app.start_hands_free();
+    glfwSetWindowTitle(win, app.name.c_str());
     // Override the backend paste plugin so Ctrl+V can also grab clipboard images.
     g_paste_app = &app;
     device.ctx.clip.paste = krastor_paste;
@@ -789,7 +959,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         // Spectrum feed: live mic while listening, synthetic animation
         // otherwise; then shift one column into the history ring and check
         // whether the active shader file changed on disk.
-        if (app.worker == AppState::Worker::Listening &&
+        if ((app.worker == AppState::Worker::Listening || app.stt.streaming()) &&
             app.stt.latest(spec_window.data(), spec_window.size()) == spec_window.size())
             spec.feed(spec_window.data());
         else
@@ -812,10 +982,18 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             const float status_h = fh * 1.2f;
             const float chip_h = fh * 1.45f;
 
-            // Top bar: title | speak toggle | settings
-            nk_layout_row_begin(ctx, NK_DYNAMIC, top_h, 3);
-            nk_layout_row_push(ctx, 0.62f);
-            nk_label(ctx, "Krastor", NK_MIDDLE_LEFT);
+            // Top bar: title | hands-free | speak toggle | settings
+            nk_layout_row_begin(ctx, NK_DYNAMIC, top_h, 4);
+            nk_layout_row_push(ctx, 0.34f);
+            nk_label(ctx, app.name.c_str(), NK_MIDDLE_LEFT);
+            nk_layout_row_push(ctx, 0.28f);
+            if (nk_button_label(ctx, app.hands_free() ? "Hands-free: ON"
+                                                      : "Hands-free: OFF")) {
+                if (app.hands_free())
+                    app.stop_hands_free();
+                else
+                    app.start_hands_free();
+            }
             nk_layout_row_push(ctx, 0.18f);
             if (nk_button_label(ctx, app.auto_speak ? "Speak: ON" : "Speak: OFF"))
                 app.auto_speak = !app.auto_speak;
@@ -894,6 +1072,13 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             else if (app.worker == AppState::Worker::Listening)
                 status = "listening... speak now (max 10 s)";
             else if (app.speaking.load()) status = "speaking...";
+            else if (app.hands_free()) {
+                status_buf = "hands-free: listening - just speak"
+                             "  (ignore while busy: ";
+                status_buf += cfg.agent.ignore_while_speaking ? "on" : "off";
+                status_buf += ")";
+                status = status_buf.c_str();
+            }
             else if (const Voice* v = voices.current()) {
                 status_buf = "voice: " + v->id + "  |  mic: " +
                              (cfg.stt.input_device < 0 ? std::string("default")
@@ -908,6 +1093,12 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
 
         settings_modal(ctx, cfg, voices, app.settings, w, h, fx);
 
+        // A saved name change propagates to the top bar and the window title.
+        if (cfg.agent.name != app.name) {
+            app.name = cfg.agent.name;
+            glfwSetWindowTitle(win, app.name.c_str());
+        }
+
         // ---- render: shader background, then the UI ----
         int fb_w = 0, fb_h = 0;
         glfwGetFramebufferSize(win, &fb_w, &fb_h);
@@ -916,8 +1107,9 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         glClear(GL_COLOR_BUFFER_BIT);
         fx.draw(fb_w, fb_h, float(glfwGetTime() - t0), spec.level(),
                 spec.history(), SpectrumAnalyzer::kHistory, SpectrumAnalyzer::kBands,
-                spec.head(), app.worker == AppState::Worker::Listening,
-                app.speaking.load());
+                spec.head(), app.worker == AppState::Worker::Listening ||
+                                 app.stt.streaming(),
+                app.speaking.load(), static_cast<float>(cfg.gui.effect_intensity));
         nk_glfw3_render(&device, NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);
 
         glfwSwapBuffers(win);

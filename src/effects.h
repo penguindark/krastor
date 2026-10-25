@@ -42,9 +42,10 @@ public:
 
     // Draws the fullscreen background. `bands`/`level`/`hist` come from the
     // SpectrumAnalyzer (hist = history ring, hist_w x hist_bands, R8).
+    // `intensity` multiplies the plugin output (global brightness knob).
     void draw(int w, int h, float t, float level, const unsigned char* hist,
               int hist_w, int hist_bands, int hist_head, bool listening,
-              bool speaking);
+              bool speaking, float intensity = 1.0f);
 
 private:
     GLuint compile_prog(const std::string& frag_source);

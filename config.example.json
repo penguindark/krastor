@@ -17,9 +17,11 @@
   },
   "gui": {
     "font_size": 18,
-    "effect": ""
+    "effect": "",
+    "effect_intensity": 1.0
   },
   "agent": {
+    "name": "Krastor",
     "continuous": false,
     "ignore_while_speaking": true
   }

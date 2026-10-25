@@ -374,3 +374,43 @@ toolchains; live mic reactivity arrives with the hands-free stream (plan step C)
 
 Gotchas: `std::filesystem::last_write_time` returns `file_time_type` (not
 `system_clock::time_point`); includes must go before `namespace {` in gui.cpp.
+
+---
+
+## 2026-10-26 (later) — hands-free cycle + effect brightness + agent name + transparency fix
+
+**Hands-free continuous cycle** (plan step C): `Stt` gained stream mode —
+`start_stream(device_index, on_utterance)` runs a feeder thread (drain mic ->
+VAD 512-windows -> closed segments to callback), `stop_stream()` joins it and
+closes the mic, `recognize()` decodes raw PCM on the caller's thread. The GUI
+pipeline: feeder callback queues segments -> pipeline worker thread recognizes ->
+`heard` queue -> render loop drains and reuses `send()` (single LLM worker
+path preserved). Top-bar **Hands-free: ON/OFF** toggle (persisted to
+`agent.continuous`, auto-starts at launch); echo guard drops segments while
+thinking/speaking when `agent.ignore_while_speaking` (checkbox in Settings).
+Verified: auto-start opens the mic and the status line reflects the state; live
+speech->reply loop left to the user (no mic access from this session).
+
+**Effect brightness** (user request "spectrogram is very dark"): new uniform
+`u_intensity` + Settings slider (0.2-3, debounced auto-save to
+`gui.effect_intensity`). Engine wraps every plugin: `#define main
+effect_main` + prototype, footer `#undef main` + real `main()` multiplying
+rgb — without the `#undef` GLSL reports "already defined" (the footer's main
+gets renamed too).
+
+**Root cause of the darkness**: Nuklear paints `style.window.fixed_background`
+for EVERY fixed window — the main window's rgba(16,18,24,200) was covering the
+shader at 78%. Main window now fully transparent (alpha 0), chat group gets a
+translucent pushed `window.background` (alpha 105, via `nk_style_push_color`
+— it is an nk_color, not style_item), Settings modal pushes its own opaque
+fixed_background. Ring shader re-tuned after the fix removed the dimming: four
+thin woven strands (2 cyan + 2 magenta), moderate boost; halo switched from
+`pow(h,2.0)` (undefined for negative base!) to `h*h`. Result matches the
+reference image.
+
+**Configurable agent name**: `agent.name` (default "Krastor") shown in window
+title, top bar, chat prefix and greeting; editable in Settings (Save applies
+live via glfwSetWindowTitle).
+
+Gotchas logged: Nuklear fixed_background semantics; GLSL pow(negative) undefined;
+main()-wrapper pattern.

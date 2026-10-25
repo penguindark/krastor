@@ -14,7 +14,8 @@ Runtime assets: fonts, images, icons (SVG), and later GLSL shaders.
   may declare its display name with a first-line comment
   `// krastor-effect: <name>`; the engine (`src/effects.h`) prepends the uniform
   contract (time, resolution, mic level, spectrum history texture, listening/speaking
-  flags) and the plugin writes `frag_color`. Active plugin hot-reloads on save.
+  flags, `u_intensity` global brightness from Settings) and the plugin writes
+  `frag_color`. Active plugin hot-reloads on save.
   - `ring_spectrogram.frag` — circular mic spectrogram: cyan/magenta woven ribbons
     around a ring, driven by the 64-band spectrum history texture.
 - Still to come: `icons/` (SVG icons for UI).

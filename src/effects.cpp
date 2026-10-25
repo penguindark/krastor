@@ -23,7 +23,18 @@ constexpr const char* kHeader =
     "uniform float u_spec_head;   // newest column of u_spectrum.x (0..1)\n"
     "uniform float u_listening;   // 1 while hands-free listening is active\n"
     "uniform float u_speaking;    // 1 while TTS playback runs\n"
-    "out vec4 frag_color;\n";
+    "uniform float u_intensity;   // global brightness multiplier (settings)\n"
+    "out vec4 frag_color;\n"
+    // The plugin's main() is renamed; the real main applies the brightness.
+    "#define main effect_main\n"
+    "void effect_main();\n";
+
+constexpr const char* kFooter =
+    "#undef main\n"
+    "void main() {\n"
+    "  effect_main();\n"
+    "  frag_color.rgb *= u_intensity;\n"
+    "}\n";
 
 // Built-in fallback: the original animated gradient.
 constexpr const char* kBuiltinSource =
@@ -129,7 +140,7 @@ void EffectEngine::init()
 {
     glGenVertexArrays(1, &vao_);
     glGenTextures(1, &tex_);
-    const GLuint p = compile_prog(std::string(kHeader) + kBuiltinSource);
+    const GLuint p = compile_prog(std::string(kHeader) + kBuiltinSource + kFooter);
     if (p) {
         prog_ = p;
         current_ = kBuiltinName;
@@ -164,7 +175,7 @@ bool EffectEngine::select(const std::string& name, const std::string& dir)
 {
     error_.clear();
     if (name.empty() || name == kBuiltinName) {
-        const GLuint p = compile_prog(std::string(kHeader) + kBuiltinSource);
+        const GLuint p = compile_prog(std::string(kHeader) + kBuiltinSource + kFooter);
         if (!p)
             return false;
         glDeleteProgram(prog_);
@@ -181,7 +192,7 @@ bool EffectEngine::select(const std::string& name, const std::string& dir)
             error_ = "cannot read " + e.path;
             return false;
         }
-        const GLuint p = compile_prog(std::string(kHeader) + src);
+        const GLuint p = compile_prog(std::string(kHeader) + src + kFooter);
         if (!p)
             return false;  // keep the previous effect
         glDeleteProgram(prog_);
@@ -207,7 +218,7 @@ bool EffectEngine::check_reload()
     std::string src;
     if (!load_file(active_path_, src))
         return false;
-    const GLuint p = compile_prog(std::string(kHeader) + src);
+    const GLuint p = compile_prog(std::string(kHeader) + src + kFooter);
     if (!p)
         return false;  // broken edit: keep the last good version running
     glDeleteProgram(prog_);
@@ -220,7 +231,8 @@ bool EffectEngine::check_reload()
 
 void EffectEngine::draw(int w, int h, float t, float level,
                         const unsigned char* hist, int hist_w, int hist_bands,
-                        int hist_head, bool listening, bool speaking)
+                        int hist_head, bool listening, bool speaking,
+                        float intensity)
 {
     if (!prog_)
         return;
@@ -251,6 +263,7 @@ void EffectEngine::draw(int w, int h, float t, float level,
                 hist_w ? float(hist_head) / float(hist_w) : 0.0f);
     glUniform1f(glGetUniformLocation(prog_, "u_listening"), listening ? 1.0f : 0.0f);
     glUniform1f(glGetUniformLocation(prog_, "u_speaking"), speaking ? 1.0f : 0.0f);
+    glUniform1f(glGetUniformLocation(prog_, "u_intensity"), intensity);
     glBindVertexArray(vao_);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glUseProgram(0);

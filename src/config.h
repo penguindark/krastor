@@ -36,9 +36,11 @@ struct SttConfig {
 struct GuiConfig {
     int font_size = 18;             // px, Ctrl +/- steps within [12, 30]
     std::string effect;             // shader effect name ("" = built-in gradient)
+    double effect_intensity = 1.0;  // background brightness multiplier 0.2..3
 };
 
 struct AgentConfig {
+    std::string name = "Krastor";       // agent persona name (UI + window title)
     bool continuous = false;            // hands-free mic -> STT -> LLM -> TTS loop
     bool ignore_while_speaking = true;  // drop mic segments while thinking/speaking
 };

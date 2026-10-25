@@ -161,10 +161,12 @@ Each tracked folder has a `development.md` describing its development in detail.
 12–30 px, layout rows scale with font height, size auto-saved debounced to the
 exe-folder config). **Pluggable GLSL background effects**: `data/shaders/*.frag`
 plugins with a fixed uniform contract (mic level + 64-band spectrum history
-texture), Settings dropdown, compile-validated selection persisted to
+texture + brightness), Settings dropdown, compile-validated selection persisted to
 `gui.effect`, hot-reload on file edit; first plugin `ring_spectrogram.frag`
-draws audio-reactive cyan/magenta mesh ribbons (synthetic feed when the mic is
-closed). Remaining: markdown→styled
+draws audio-reactive cyan/magenta mesh ribbons (synthetic animation when the mic
+is closed). **Hands-free continuous cycle**: mic → VAD → STT → LLM → text → TTS
+with echo guard and `agent.continuous` auto-start. **Configurable agent name**
+and **effect brightness** in Settings. Remaining: markdown→styled
   rendering of LLM replies, mic selector in the GUI.
   **Next-phase design:** `spectogram_plan.md` (font scaling, shader-effect plugins,
   mic spectrogram, hands-free cycle, exe-folder config persistence).
