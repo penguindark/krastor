@@ -532,3 +532,9 @@ called", no `krastor_error.log` - so not a C++ exception).
   dead `nk_window_is_closed()` path was removed.
 - Verified headlessly: hide -> close -> reopen -> hide cycles ran repeatedly
   with the app surviving; both toolchains build clean. Repro hooks removed.
+
+Follow-up polish: while the Settings modal is open it overlaps the chat, but
+Nuklear's `nk_input` is global - clicks/drags/wheel over the modal also hit the
+chat group's hover rect and were processed as chat input. `chat_panel` now
+skips the wheel-scroll, click and drag-extend branches while
+`app.settings.open` (the keyboard selection path already had this gate).

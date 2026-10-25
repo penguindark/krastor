@@ -1021,6 +1021,10 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         const float row_h = ctx->style.font && ctx->style.font->height > 0.0f
                                 ? ctx->style.font->height : 18.0f;
 
+        // The Settings modal overlaps the chat but is a separate window: while
+        // it is open, mouse input on it must not register as chat input.
+        const bool modal_blocks = app.settings.open;
+
         // Mouse wheel over the chat: leave follow-bottom mode and scroll
         // manually (3 text lines per notch). The delta is consumed so
         // Nuklear's own 10%-of-height step does not stack on top of it.
@@ -1032,7 +1036,8 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         const bool uitest_hover =
             std::getenv("KRASTOR_UITEST") != nullptr ||
             nk_input_is_mouse_hovering_rect(&ctx->input, gb);
-        if (ctx->input.mouse.scroll_delta.y != 0.0f && uitest_hover) {
+        if (ctx->input.mouse.scroll_delta.y != 0.0f && uitest_hover &&
+            !modal_blocks) {
             app.follow_bottom = false;
             nk_uint sx = 0, sy = 0;
             nk_window_get_scroll(ctx, &sx, &sy);
@@ -1047,7 +1052,7 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         struct nk_input* in = &ctx->input;
         const bool over = nk_input_is_mouse_hovering_rect(in, gb);
         struct nk_mouse_button* L = &in->mouse.buttons[NK_BUTTON_LEFT];
-        if (L->clicked && over) {
+        if (L->clicked && over && !modal_blocks) {
             app.chat_focused = true;
             // Release the text-edit focus (next frame) so keyboard goes to the
             // selection keys instead of moving the invisible edit caret.
@@ -1084,7 +1089,8 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                 app.sel_anchor = app.sel_caret = -1;
                 app.sel_dragging = false;
             }
-        } else if (L->down && app.sel_dragging && app.sel_anchor >= 0) {
+        } else if (L->down && app.sel_dragging && !modal_blocks &&
+                   app.sel_anchor >= 0) {
             int line = 0, cp = 0;
             if (chat_hit_test(app, in->mouse.pos.x, in->mouse.pos.y, line, cp)) {
                 const int off = app.doc_start[line] + cp;

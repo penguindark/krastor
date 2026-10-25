@@ -110,6 +110,11 @@ are git-ignored — run `tools/download_deps.py` once after cloning.
   `if (!nk_begin(...)) { nk_end(ctx); nk_window_show(ctx, name, NK_SHOWN);
   ...treat as closed...; }` - the `NK_SHOWN` un-hide lets the window be
   reopened later (and lets the GC free it meanwhile).
+- Nuklear's `nk_input` is **global**: an overlapping window (e.g. the Settings
+  modal) does not swallow input for windows beneath it, so hover-rect checks
+  (`nk_input_is_mouse_hovering_rect`) fire for clicks/drags/wheel landing on
+  the modal too. App-level windows that overlap must gate their own input on
+  "modal open" (see `modal_blocks` in `chat_panel`).
 - Shader `main()` wrapper trick: prepend `#define main effect_main` + a
   `void effect_main();` prototype, append the real `main()` after
   `#undef main` — without the `#undef` the footer's `main` is renamed too and
