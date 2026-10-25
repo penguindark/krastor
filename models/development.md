@@ -22,6 +22,7 @@ weights never enter the repository.
 | `tts-piper-en-us-lessac/` | TTS English | Piper en_US lessac (medium) | BSD-3 / CC-BY | via sherpa-onnx VITS |
 | `stt-whisper-small/` | STT multilingual | sherpa-onnx-whisper-small (~640 MB int8) | BSD-3/MIT | 99 langs auto-detect; RTF ~0.6 CPU; IT accuracy weak |
 | `stt-parakeet-multilingual/` | STT multilingual | NVIDIA Parakeet TDT 0.6B v3 int8 (~650 MB) | CC-BY-4.0 | **25 langs incl EN+IT auto-detect, punctuation+capitalization, RTF ~0.15** — best single-model candidate |
+| `vad-silero/` | VAD | silero_vad.onnx (~2 MB) | BSD-3 | segments mic audio for Parakeet/Whisper near-live mode |
 | `espeak-ng-data/` | TTS frontend | espeak-ng data (shared G2P) | GPL-3 | required by Piper voices on sherpa-onnx 1.x |
 
 ## Hardware acceleration (dev machine, checked 2026-10-26)

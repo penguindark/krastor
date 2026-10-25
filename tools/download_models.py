@@ -40,6 +40,12 @@ MODELS: dict[str, dict[str, str]] = {
         "license": "Apache-2.0 (model trained on LibriSpeech)",
         "purpose": "Streaming STT, English (word-level partial results)",
     },
+    "vad-silero": {
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+        "kind": "raw",
+        "license": "BSD-3 (Silero)",
+        "purpose": "Voice activity detection for near-live Parakeet/Whisper transcription",
+    },
     "stt-parakeet-multilingual": {
         "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
              "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
@@ -107,7 +113,10 @@ def download(name: str) -> Path:
     archive = dest / Path(info["url"]).name
     print(f"[get ] {name}: {info['url']}")
     urlretrieve(info["url"], archive)
-    _extract(archive, info["kind"], dest)
+    if info["kind"] == "raw":
+        pass  # single file, keep as-is
+    else:
+        _extract(archive, info["kind"], dest)
 
     readme = dest / "README.md"
     files = "\n".join(f"- `{p.relative_to(dest)}`" for p in sorted(dest.rglob("*")) if p.is_file())

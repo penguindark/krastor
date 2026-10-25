@@ -16,9 +16,13 @@ product. Never part of the shipped agent.
 - `download_models.py` — downloads all STT/TTS models into `../models/` (idempotent,
   generates a README per model with source/license/files).
   `.venv\Scripts\python.exe tools\download_models.py [--only <name>]`
-- `parrot.py` — **the Phase 2 parrot**: microphone -> streaming STT (Vosk, word-level
-  partial results shown live) -> TTS (sherpa-onnx Piper) -> speaker.
-  `.venv\Scripts\python.exe tools\parrot.py --lang it|en [--no-play] [--small] [--list-devices]`
+- `parrot.py` — **the Phase 2 parrot**, two engines:
+  - `--engine vosk --lang it|en` — true streaming: word-level live partials while
+    speaking (one language per run).
+  - `--engine parakeet` — near-live: Silero VAD segments the mic stream, NVIDIA
+    Parakeet TDT v3 transcribes each phrase (EN+IT auto-detect, punctuation).
+  Both pipe the final text to the Piper TTS voice and play it back.
+  `.venv\Scripts\python.exe tools\parrot.py --engine parakeet [--no-play] [--list-devices]`
 - `roundtrip_test.py` — automated no-mic test: TTS -> WAV -> chunked streaming STT ->
   compare. Writes samples to `tools/out/` (git-ignored) for listening.
   `.venv\Scripts\python.exe tools\roundtrip_test.py`
