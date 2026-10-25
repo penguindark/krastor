@@ -139,7 +139,9 @@ Each tracked folder has a `development.md` describing its development in detail.
   Piper/sherpa-onnx TTS (EN+IT). Python parrot prototype validates the pipeline.
 - **Phase 3 — Core agent (done 2026-10-26).** Config loader, OpenAI-compatible HTTP
   client (WinHTTP/libcurl), conversation loop, CLI with runtime TTS voice selection.
-- **Phase 4 — Local STT/TTS integration** in C++ (mic capture + playback pipeline).
+- **Phase 4 — Local STT/TTS integration (done 2026-10-26).** sherpa-onnx C API
+  (pinned 1.13.8) + miniaudio: Piper TTS with runtime voice switching, Parakeet
+  multilingual STT with Silero VAD and mic capture, `/say`, `/listen`, `/transcribe`.
 - **Phase 5 — GUI (started 2026-10-26).** Foundation landed: GLFW + OpenGL 3.3 +
   Nuklear window with a gear icon opening a settings modal (LLM URL, TTS voice,
   params). Remaining: GLSL effect surface, terminal I/O panel, attachments input.

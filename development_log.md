@@ -201,3 +201,37 @@ GUI window opens and render loop stays alive; CLI regression OK.
 close check is `nk_window_is_closed`. glad CLI uses `--api gl=3.3 --profile core`.
 
 **Next**: GLSL effect surface behind the UI, terminal I/O panel, then Phase 4 audio.
+
+---
+
+## 2026-10-26 — Phase 4: local STT/TTS in C++ (sherpa-onnx C API + miniaudio)
+
+**Dependency strategy resolved**: sherpa-onnx ships prebuilt win-x64 shared libs
+(MSVC-built). We use only the **C API** (`c_api.h`, extern "C"), so the MSVC import
+lib links cleanly from MinGW too — verified on both toolchains. **Pinned v1.13.8**:
+v2.0.0 ignores the espeak-ng `data_dir` for VITS/Piper, which would break our Piper
+voices. Binaries (`*.dll` + import lib) are git-ignored; new
+`tools/download_deps.py` fetches them; CMake copies the DLLs next to the exe and
+fails configure with a hint if they are missing. miniaudio pinned to the 0.11.22
+release header (master renamed APIs), implementation compiled once in
+`libs/miniaudio_impl.c`.
+
+**New modules**: `src/tts.h/.cpp` — Piper TTS via `SherpaOnnxOfflineTts`, model
+lazily (re)loaded when `VoiceRegistry::current()` changes (runtime voice switching
+works); playback = float PCM wrapped in an in-memory 44-byte WAV header into
+`ma_decoder` -> `ma_engine`. `src/stt.h/.cpp` — Parakeet TDT v3 int8
+(`nemo_transducer`) + Silero VAD via the offline-recognizer pattern of
+`tools/parrot.py`; mic via miniaudio capture (16 kHz mono float); `listen()`
+returns the first VAD-closed utterance; `transcribe_file()` decodes wav/mp3/flac
+for headless tests. CLI: `/say <text>`, `/listen [sec]` (transcription goes to
+the LLM), `/transcribe <file>`. Version bumped to 0.4.0.
+
+**Verified** (MinGW + MSVC): `/say` speaks IT/EN with voice switching (1.6–2.2 s
+audio generated in ~150–190 ms); `/transcribe` returns exact IT and EN
+transcriptions incl. punctuation and accents; `/listen` opens the mic, VAD loop
+runs, clean timeout on silence (one run even picked up room sound and answered it via
+LM Studio). Gotchas: v2.0.0 `data_dir` deprecation; miniaudio master API churn;
+`ma_decoder` needs a container (hence the WAV header trick); VAD C API takes
+`(vad, samples, n)` without sample rate.
+
+**Next**: Phase 5 — GLSL effect surface, terminal I/O panel, wire TTS/STT into the GUI.

@@ -16,6 +16,8 @@
 #include "conversation.h"
 #include "gui.h"
 #include "llm_client.h"
+#include "stt.h"
+#include "tts.h"
 #include "voices.h"
 
 namespace {
@@ -27,6 +29,10 @@ void print_help()
         "  /help              show this help\n"
         "  /voices            list available TTS voices\n"
         "  /voice <id>        switch TTS voice at runtime (e.g. /voice en-us-lessac)\n"
+        "  /say <text>        speak the text with the current TTS voice\n"
+        "  /listen [sec]      record the microphone and transcribe one utterance\n"
+        "                     (Parakeet EN+IT auto-detect; default 20 s max)\n"
+        "  /transcribe <file> transcribe an audio file (wav/mp3/flac)\n"
         "  /reset             clear the conversation (keeps system prompt)\n"
         "  /config            show the active LLM configuration\n"
         "  /exit              quit\n"
@@ -70,7 +76,7 @@ int main(int argc, char** argv)
         if (a == "--gui") use_gui = true;
         else config_path = a;
     }
-    std::cout << "Krastor v0.3.0 (Phase 3 core agent)\n";
+    std::cout << "Krastor v0.4.0 (Phase 4 voice I/O)\n";
 
     krastor::Config cfg = [&] {
         try {
@@ -93,6 +99,10 @@ int main(int argc, char** argv)
 
     print_voice(voices);
 
+    krastor::Tts tts(voices, cfg);
+    tts.init();
+    krastor::Stt stt(cfg);
+
     if (cfg.llm.api_key.empty())
         std::cout << "note: no API key configured (config.json llm.api_key or "
                      "KRASTOR_API_KEY) — LLM calls will fail\n";
@@ -108,6 +118,28 @@ int main(int argc, char** argv)
             break;  // EOF (Ctrl+Z/Ctrl+D)
         if (line.empty())
             continue;
+
+        if (line.rfind("/listen", 0) == 0) {
+            double max_s = 20.0;
+            std::string arg = line.size() > 7 ? line.substr(7) : "";
+            arg.erase(0, arg.find_first_not_of(" \t"));
+            if (!arg.empty()) {
+                max_s = std::atof(arg.c_str());
+                if (max_s <= 0.0) max_s = 20.0;
+            }
+            std::cout << "[stt] listening... (speak now, up to " << max_s << "s)\n";
+            const std::string heard = stt.listen(max_s);
+            if (heard.empty()) { std::cout << "[stt] nothing heard\n"; continue; }
+            std::cout << "[stt] " << heard << "\n\n";
+            line = heard;  // fall through: the transcription goes to the LLM
+        } else if (line.rfind("/transcribe", 0) == 0) {
+            std::string arg = line.size() > 11 ? line.substr(11) : "";
+            arg.erase(0, arg.find_first_not_of(" \t"));
+            if (arg.empty()) { std::cout << "usage: /transcribe <audio file>\n"; continue; }
+            const std::string text = stt.transcribe_file(arg);
+            std::cout << (text.empty() ? "(no speech recognized)" : text) << "\n";
+            continue;
+        }
 
         if (line == "/exit" || line == "/quit")
             break;
@@ -130,6 +162,13 @@ int main(int argc, char** argv)
                 std::cout << "TTS voice switched -> " << voices.current()->id << '\n';
             else
                 std::cout << "unknown voice '" << arg << "' (see /voices)\n";
+            continue;
+        }
+        if (line.rfind("/say", 0) == 0) {
+            std::string arg = line.size() > 4 ? line.substr(4) : "";
+            arg.erase(0, arg.find_first_not_of(" \t"));
+            if (arg.empty()) { std::cout << "usage: /say <text>\n"; continue; }
+            tts.speak(arg);
             continue;
         }
         if (line[0] == '/') {

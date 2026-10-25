@@ -27,14 +27,33 @@ set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
 add_subdirectory(libs/glfw EXCLUDE_FROM_ALL)
 
+# sherpa-onnx prebuilt C API for local TTS/STT (Windows). The binaries are
+# git-ignored; fetch them first with:  .venv\Scripts\python tools\download_deps.py
+if(WIN32)
+    set(SHERPA_DIR "${CMAKE_SOURCE_DIR}/libs/sherpa-onnx")
+    if(NOT EXISTS "${SHERPA_DIR}/lib/sherpa-onnx-c-api.lib")
+        message(FATAL_ERROR
+            "sherpa-onnx binaries missing in libs/sherpa-onnx/lib — "
+            "run: .venv\\Scripts\\python tools\\download_deps.py")
+    endif()
+    add_library(sherpa-onnx-c-api SHARED IMPORTED GLOBAL)
+    set_target_properties(sherpa-onnx-c-api PROPERTIES
+        IMPORTED_IMPLIB   "${SHERPA_DIR}/lib/sherpa-onnx-c-api.lib"
+        IMPORTED_LOCATION "${SHERPA_DIR}/lib/sherpa-onnx-c-api.dll")
+    target_include_directories(sherpa-onnx-c-api INTERFACE "${SHERPA_DIR}/include")
+endif()
+
 add_executable(krastor
     src/main.cpp
     src/config.cpp
     src/conversation.cpp
     src/llm_client.cpp
     src/voices.cpp
+    src/tts.cpp
+    src/stt.cpp
     src/gui.cpp
     libs/glad/src/glad.c
+    libs/miniaudio_impl.c
 )
 
 target_compile_features(krastor PRIVATE cxx_std_20)
@@ -51,7 +70,14 @@ target_link_libraries(krastor PRIVATE glfw)
 if(WIN32)
     # HTTPS via WinHTTP (built into Windows) — identical behavior on MinGW and MSVC.
     target_sources(krastor PRIVATE src/http_client_winhttp.cpp)
-    target_link_libraries(krastor PRIVATE winhttp opengl32)
+    target_link_libraries(krastor PRIVATE winhttp opengl32 sherpa-onnx-c-api)
+    # Runtime DLLs must sit next to the executable.
+    add_custom_command(TARGET krastor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHERPA_DIR}/lib/sherpa-onnx-c-api.dll"
+            "${SHERPA_DIR}/lib/onnxruntime.dll"
+            "${SHERPA_DIR}/lib/onnxruntime_providers_shared.dll"
+            "$<TARGET_FILE_DIR:krastor>/")
 else()
     target_sources(krastor PRIVATE src/http_client_curl.cpp)
     find_package(CURL REQUIRED)
