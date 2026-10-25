@@ -753,3 +753,15 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
 - Language packs already cover the requested set via aliases: bash (sh/
   shell/zsh), python (py/python3), javascript (js/ts/typescript),
   cpp (c/c++/cc/cxx). Both toolchains clean.
+
+## 2026-10-26 (later) - Config file confusion resolved
+
+- Diagnosis: the Settings modal *was* loading config correctly - the app
+  loads bin/config.json (next to the exe, see Config::default_path), while
+  the user had edited the legacy repo-root config.json, which is only used
+  as a fallback when bin/config.json does not exist.
+- Merged the user's edits (Italian system prompt, max_tokens 64000,
+  api_key) from the root config.json into bin/config.json.
+- main.cpp now prints "config: <path>" at startup so the loaded file is
+  always visible. Verified via UITEST screenshot: modal shows the merged
+  values. Both toolchains clean.

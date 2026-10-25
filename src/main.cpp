@@ -122,6 +122,9 @@ int main(int argc, char** argv)
             ::exit(1);
         }
     }();
+    // Show which file was actually loaded: a stale ./config.json in the working
+    // directory is ignored once bin/config.json exists (see default_path()).
+    std::cout << "config: " << config_path << '\n';
     // Migrate a legacy working-directory config to the canonical location next
     // to the executable so future auto-saves have a complete file to update.
     if (config_path == "config.json") {
