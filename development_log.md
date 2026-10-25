@@ -78,3 +78,29 @@ real-time, streaming preserved). **Big model is now the default Italian STT**
 (`models/stt-vosk-it-large/`); small kept via `parrot.py --small`.
 
 **Next:** Phase 3 — core C++ agent (config, OpenAI-compatible HTTP client, loop).
+
+---
+
+## 2026-10-26 — Single multilingual STT research (EN+IT without model switching)
+
+User asked for one STT model covering Italian + English, real-time fast, and to check
+HW acceleration + HuggingFace options.
+
+**HW:** i7-11800H, 64 GB RAM, RTX 3080 Laptop (CUDA available). CPU-only is already
+sufficient for all candidates; GPU kept as later lever.
+
+**Downloaded & benchmarked** (`tools/bench_stt.py` on the round-trip WAVs):
+- `stt-whisper-small` (int8): RTF 0.6, EN perfect, IT weak.
+- `stt-parakeet-multilingual` (NVIDIA Parakeet TDT 0.6B v3 int8, 25 langs, auto-detect,
+  punctuation+capitalization): **RTF 0.15 (6.6x realtime)**, EN perfect, IT good.
+  Runs natively on sherpa-onnx (`model_type="nemo_transducer"`) -> C++ path exists.
+
+**Web research:** Nemotron 3.5 ASR Streaming (40 locales incl IT, true streaming,
+RTF ~0.14 CPU) and Voxtral Mini 4B Realtime (13 langs, IT WER 3.3%, 240 ms delay)
+are the true-streaming state of the art; sherpa-onnx support pending — revisit later.
+
+**Recommendation:** Parakeet TDT v3 as the single EN+IT model (VAD near-live, final
+~0.4 s after phrase); Vosk big-it kept where word-level live partials are required.
+Decision to be confirmed by user after a live mic test.
+
+**Next:** user live test -> confirm STT strategy -> Phase 3.

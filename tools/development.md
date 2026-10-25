@@ -22,6 +22,9 @@ product. Never part of the shipped agent.
 - `roundtrip_test.py` — automated no-mic test: TTS -> WAV -> chunked streaming STT ->
   compare. Writes samples to `tools/out/` (git-ignored) for listening.
   `.venv\Scripts\python.exe tools\roundtrip_test.py`
+- `bench_stt.py` — benchmark multilingual STT candidates (Whisper small vs Parakeet
+  TDT v3) on the round-trip WAVs: accuracy + RTF.
+  `.venv\Scripts\python.exe tools\bench_stt.py`
 
 ## Current state (Phase 2, 2026-10-25)
 Stack chosen: **Vosk** streaming STT + **Piper via sherpa-onnx** TTS (see

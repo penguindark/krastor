@@ -40,6 +40,20 @@ MODELS: dict[str, dict[str, str]] = {
         "license": "Apache-2.0 (model trained on LibriSpeech)",
         "purpose": "Streaming STT, English (word-level partial results)",
     },
+    "stt-parakeet-multilingual": {
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+             "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
+        "kind": "tar.bz2",
+        "license": "CC-BY-4.0 (NVIDIA)",
+        "purpose": "Multilingual STT (25 langs incl EN+IT, auto-detect), very fast CPU",
+    },
+    "stt-whisper-small": {
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+             "sherpa-onnx-whisper-small.tar.bz2",
+        "kind": "tar.bz2",
+        "license": "BSD-3 (OpenAI Whisper weights, MIT)",
+        "purpose": "Multilingual STT (EN+IT auto-detect), VAD near-live, benchmark",
+    },
     "espeak-ng-data": {
         "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/espeak-ng-data.zip",
         "kind": "zip",
