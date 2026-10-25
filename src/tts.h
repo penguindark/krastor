@@ -34,6 +34,11 @@ public:
     // finished. Prints a one-line status. Returns false on synthesis failure.
     bool speak(const std::string& text);
 
+    // Requests the currently playing utterance to stop as soon as possible
+    // (barge-in when the user speaks over the TTS). Safe from any thread,
+    // no-op when nothing is playing; the pending synthesis is skipped too.
+    void interrupt();
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

@@ -184,8 +184,12 @@ struct AppState {
             return;
         speaking.store(true);
         std::thread([this, text] {
-            tts.speak(text);
-            speaking.store(false);
+            try {
+                tts.speak(text);
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "tts failed: %s\n", e.what());
+            }
+            speaking.store(false);  // always released, even on error
         }).detach();
     }
 
@@ -260,10 +264,16 @@ struct AppState {
                     audio = std::move(utterances.front());
                     utterances.erase(utterances.begin());
                 }
-                const std::string text = stt.recognize(audio.data(), audio.size());
-                if (!text.empty()) {
-                    std::lock_guard<std::mutex> lk(heard_mtx);
-                    heard.push_back(text);
+                try {
+                    const std::string text = stt.recognize(audio.data(), audio.size());
+                    if (!text.empty()) {
+                        std::lock_guard<std::mutex> lk(heard_mtx);
+                        heard.push_back(text);
+                    }
+                } catch (const std::exception& e) {
+                    // Never let an exception escape: it would terminate() the
+                    // whole process. Log and keep the pipeline alive.
+                    std::fprintf(stderr, "hands-free recognize failed: %s\n", e.what());
                 }
             }
         });
@@ -302,7 +312,13 @@ struct AppState {
     {
         if (worker == Worker::Thinking &&
             llm_fut.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            const LlmReply reply = llm_fut.get();
+            LlmReply reply;
+            try {
+                reply = llm_fut.get();
+            } catch (const std::exception& e) {
+                reply.ok = false;
+                reply.error = e.what();
+            }
             worker = Worker::None;
             if (reply.ok) {
                 conv.add_assistant(reply.content);
@@ -315,7 +331,12 @@ struct AppState {
         }
         if (worker == Worker::Listening &&
             stt_fut.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            const std::string one_shot = stt_fut.get();
+            std::string one_shot;
+            try {
+                one_shot = stt_fut.get();
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "listen failed: %s\n", e.what());
+            }
             worker = Worker::None;
             if (one_shot.empty())
                 lines.push_back({"sys", "(nothing heard)"});
@@ -337,6 +358,12 @@ struct AppState {
                     lines.push_back({"sys", "(heard while busy, ignored: " +
                                             snippet + ")"});
                     continue;
+                }
+                if (speaking.load()) {
+                    // Barge-in (guard off): the user spoke over the TTS —
+                    // cut playback short and handle the utterance instead.
+                    tts.interrupt();
+                    lines.push_back({"sys", "(speech interrupted playback)"});
                 }
                 send(text);
             }

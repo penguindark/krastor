@@ -414,3 +414,23 @@ live via glfwSetWindowTitle).
 
 Gotchas logged: Nuklear fixed_background semantics; GLSL pow(negative) undefined;
 main()-wrapper pattern.
+
+---
+
+## 2026-10-26 (later) — barge-in + crash hardening (terminate handler)
+
+**Barge-in** (user request): speaking while the TTS plays now cuts the playback
+short. `Tts::interrupt()` sets an atomic cancel flag checked by the playback
+wait-loop (`ma_sound_stop` + skips pending synthesis). In the hands-free heard
+drain: with the ignore-guard **off**, a heard utterance while speaking calls
+`tts.interrupt()` and is processed immediately (chat line "(speech interrupted
+playback)"); with the guard on, segments are still dropped as before.
+
+**Crash hardening**: user hit "Debug Error! abort() has been called" when
+closing Settings — a bare `abort()` means an uncaught C++ exception on some
+thread (terminate), not a Nuklear assert. Could not reproduce headless (no mic
+input), so every remaining escape route was sealed: STT VAD feeder loop,
+hands-free recognize loop, detached speak thread and both `future::get()`
+calls in `poll()` are now try/caught (log + keep running). `main()` installs
+a `std::set_terminate` handler that writes the real exception message to
+`exe_dir()/krastor_error.log` — if the abort ever recurs, the cause is on disk.

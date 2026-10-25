@@ -165,7 +165,8 @@ texture + brightness), Settings dropdown, compile-validated selection persisted 
 `gui.effect`, hot-reload on file edit; first plugin `ring_spectrogram.frag`
 draws audio-reactive cyan/magenta mesh ribbons (synthetic animation when the mic
 is closed). **Hands-free continuous cycle**: mic → VAD → STT → LLM → text → TTS
-with echo guard and `agent.continuous` auto-start. **Configurable agent name**
+with echo guard and `agent.continuous` auto-start; **barge-in** (speak over the
+TTS to cut it short when the ignore-guard is off). **Configurable agent name**
 and **effect brightness** in Settings. Remaining: markdown→styled
   rendering of LLM replies, mic selector in the GUI.
   **Next-phase design:** `spectogram_plan.md` (font scaling, shader-effect plugins,

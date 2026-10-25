@@ -4,6 +4,7 @@
 
 #include "tts.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -32,6 +33,7 @@ struct Tts::Impl {
     std::string loaded_folder;  // voice folder currently loaded into `tts`
     ma_engine engine{};
     bool engine_ok = false;
+    std::atomic<bool> cancel{false};  // set by interrupt(): stop playback now
 
     Impl(VoiceRegistry& v, const Config& c) : voices(v), cfg(c) {}
     ~Impl()
@@ -142,8 +144,10 @@ struct Tts::Impl {
             return;
         }
         ma_sound_start(&sound);
-        while (ma_sound_is_playing(&sound))
+        while (ma_sound_is_playing(&sound) && !cancel.load())
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        if (cancel.load())
+            ma_sound_stop(&sound);
         ma_sound_uninit(&sound);
         ma_decoder_uninit(&decoder);
     }
@@ -171,6 +175,7 @@ bool Tts::speak(const std::string& text)
 {
     if (text.empty())
         return false;
+    impl_->cancel.store(false);
     if (!impl_->ensure_voice())
         return false;
 
@@ -197,7 +202,7 @@ bool Tts::speak(const std::string& text)
 
     const double secs = audio->n / static_cast<double>(audio->sample_rate);
     const int rate = audio->sample_rate;
-    if (impl_->engine_ok)
+    if (impl_->engine_ok && !impl_->cancel.load())
         impl_->play(audio->samples, audio->n, audio->sample_rate);
     const bool silent = !impl_->engine_ok;
     SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio);
@@ -207,6 +212,11 @@ bool Tts::speak(const std::string& text)
                 static_cast<long long>(gen_ms),
                 silent ? " (silent: no output device)" : "");
     return true;
+}
+
+void Tts::interrupt()
+{
+    impl_->cancel.store(true);
 }
 
 } // namespace krastor
@@ -228,6 +238,7 @@ bool Tts::init()
 }
 
 bool Tts::speak(const std::string&) { return false; }
+void Tts::interrupt() {}
 
 } // namespace krastor
 

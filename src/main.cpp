@@ -3,7 +3,9 @@
 // TTS voice selection. STT/TTS audio and the GUI arrive in Phases 4/5.
 // See project.md (master description) and src/development.md (this folder).
 
+#include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -70,6 +72,32 @@ int main(int argc, char** argv)
     // Correct rendering of accented Italian text in the console.
     SetConsoleOutputCP(CP_UTF8);
 #endif
+
+    // An uncaught exception on any thread would abort() with no trace (the GUI
+    // has no console when double-clicked). Log the real cause next to the exe.
+    std::set_terminate([] {
+        const std::string log_path = krastor::Config::exe_dir() + "/krastor_error.log";
+        std::FILE* f = std::fopen(log_path.c_str(), "a");
+        auto report = [&](const std::string& what) {
+            std::fprintf(stderr, "FATAL: %s\n", what.c_str());
+            if (f) {
+                std::fprintf(f, "uncaught: %s\n", what.c_str());
+                std::fclose(f);
+            }
+        };
+        if (const auto e = std::current_exception()) {
+            try {
+                std::rethrow_exception(e);
+            } catch (const std::exception& ex) {
+                report(ex.what());
+            } catch (...) {
+                report("non-standard exception");
+            }
+        } else {
+            report("unknown termination (joinable thread destroyed?)");
+        }
+        std::abort();
+    });
 
     // Args: [--gui] [config.json]
     bool use_gui = false;

@@ -474,6 +474,7 @@ bool Stt::start_stream(int device_index,
     impl->feeder = std::thread([impl, on_utterance] {
         std::vector<float> local;
         while (impl->stream_run.load()) {
+          try {
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
             {
                 std::lock_guard<std::mutex> lock(impl->pcm_mutex);
@@ -504,6 +505,13 @@ bool Stt::start_stream(int device_index,
                 if (!audio.empty() && on_utterance)
                     on_utterance(std::move(audio));
             }
+          } catch (const std::exception& e) {
+            // An escaping exception would terminate() the process; log,
+            // back off briefly and keep the stream alive.
+            std::fprintf(stderr, "stt stream error: %s\n", e.what());
+            local.clear();
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+          }
         }
     });
     return true;
