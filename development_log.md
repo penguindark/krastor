@@ -104,3 +104,19 @@ are the true-streaming state of the art; sherpa-onnx support pending — revisit
 Decision to be confirmed by user after a live mic test.
 
 **Next:** user live test -> confirm STT strategy -> Phase 3.
+
+---
+
+## 2026-10-26 — GPU acceleration benchmark (Whisper vs Parakeet)
+
+Measured on the RTX 3080 with faster-whisper (CTranslate2 CUDA):
+- Whisper small int8: CPU RTF ~0.55 -> CUDA ~0.13 (~4x).
+- Whisper large-v3-turbo fp16 CUDA: RTF ~0.32 with **perfect Italian + punctuation**
+  — the real GPU advantage is quality unlock, not just speed.
+- Parakeet: no GPU wheel for py313; unnecessary anyway (CPU RTF 0.15, VAD endpointing
+  dominates perceived latency).
+Scripts: `tools/bench_gpu.py`, `tools/requirements-gpu.txt`.
+C++ note: CUDA excludes MinGW; GPU path would be MSVC-only — keep CPU default and
+design the STT interface provider-agnostic.
+
+**Next:** user live test -> confirm STT strategy -> Phase 3.

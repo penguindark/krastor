@@ -43,6 +43,23 @@ RTF ~0.14 CPU) and Mistral Voxtral Mini 4B Realtime (13 langs, IT WER 3.3%, 240 
 delay) are the state-of-the-art streaming options; neither is confirmed to run on
 sherpa-onnx yet — revisit when C++ support lands.
 
+## GPU benchmark (RTX 3080, tools/bench_gpu.py, 2026-10-26)
+
+| Config | RTF | Italian quality |
+|---|---|---|
+| Whisper small int8 / CPU | ~0.55 | weak ("su pezcan epiglio") |
+| Whisper small int8 / CUDA | ~0.13 | same model -> same weak IT |
+| **Whisper large-v3-turbo fp16 / CUDA** | ~0.32 | **perfect** ("La volpe rapida marrone salta sopra il cane pigro.") |
+
+Takeaways:
+- GPU speeds Whisper ~4x on the same model, but its real value is **unlocking
+  large-v3-turbo**: perfect EN+IT with punctuation at ~3x realtime — impossible on CPU.
+- Parakeet needs no GPU: already RTF 0.15 on CPU; perceived latency is dominated by
+  VAD endpointing (~0.5 s silence wait), so GPU gains would be imperceptible.
+- C++ constraint: CUDA does not support MinGW — a GPU path means MSVC + onnxruntime
+  CUDA (or DirectML). Keep CPU inference as the default; design the STT interface so
+  a GPU provider can be added later.
+
 ## Research notes (why these)
 - sherpa-onnx streaming zipformer has **no Italian** model; Kokoro port in
   sherpa-onnx is zh+en only -> not usable for Italian.

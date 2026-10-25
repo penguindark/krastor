@@ -1,0 +1,6 @@
+# GPU benchmark extras (Python 3.13, .venv) — RTX 3080 CUDA testing
+# Used by tools/bench_gpu.py (faster-whisper / CTranslate2 CUDA path).
+faster-whisper==1.2.1
+av<19
+nvidia-cublas-cu12
+nvidia-cudnn-cu12
