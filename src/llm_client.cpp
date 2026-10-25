@@ -44,9 +44,14 @@ void extract_inline_thinking(std::string& content, std::string& reasoning)
 
 LlmClient::LlmClient(LlmConfig config) : config_(std::move(config)) {}
 
-LlmReply LlmClient::complete(const Conversation& conversation) const
+LlmReply LlmClient::complete(const Conversation& conversation,
+                             CancelToken* cancel) const
 {
     LlmReply reply;
+    if (cancel && cancel->load()) {
+        reply.error = "cancelled";
+        return reply;
+    }
 
     // base_url is like https://api.openai.com/v1 -> append /chat/completions
     std::string url = config_.base_url;
@@ -84,7 +89,8 @@ LlmReply LlmClient::complete(const Conversation& conversation) const
     };
 
     const std::string payload = body.dump();
-    const auto res = https_post(url, headers, payload);
+    const auto res = https_post(url, headers, payload, "application/json",
+                                cancel);
     if (res.status == 0) {
         reply.error = "HTTP request failed: " + res.error;
         return reply;

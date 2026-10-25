@@ -216,6 +216,7 @@ struct AppState {
 
     enum class Worker { None, Thinking, Listening } worker = Worker::None;
     std::future<LlmReply> llm_fut;
+    std::shared_ptr<CancelToken> llm_cancel;  // Stop button aborts the request
     std::future<std::string> stt_fut;
     std::atomic<bool> speaking{false};
     bool auto_speak = true;
@@ -382,13 +383,26 @@ struct AppState {
         worker = Worker::Thinking;
         const LlmClient client(llm);          // snapshot: survives settings changes
         const Conversation snapshot = conv;   // copy for the worker thread
-        llm_fut = std::async(std::launch::async, [client, snapshot] {
+        llm_cancel = std::make_shared<CancelToken>();
+        auto cancel = llm_cancel;
+        llm_fut = std::async(std::launch::async, [client, snapshot, cancel] {
             const auto t_start = std::chrono::steady_clock::now();
-            LlmReply r = client.complete(snapshot);
+            LlmReply r = client.complete(snapshot, cancel.get());
             r.elapsed_ms = std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - t_start).count();
             return r;
         });
+    }
+
+    // Stop button: abort the in-flight LLM request immediately and cut any
+    // TTS playback. Safe to press at any time (no-ops when idle).
+    void stop()
+    {
+        if (worker == Worker::Thinking && llm_cancel) {
+            llm_cancel->cancel();  // makes the blocking HTTP call return now
+            lines.push_back({"sys", "(stopped)"});
+        }
+        tts.interrupt();  // no-op when nothing is playing
     }
 
     void start_listen()
@@ -484,6 +498,7 @@ struct AppState {
     {
         if (worker == Worker::Thinking &&
             llm_fut.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            const bool stopped = llm_cancel && llm_cancel->load();
             LlmReply reply;
             try {
                 reply = llm_fut.get();
@@ -492,7 +507,10 @@ struct AppState {
                 reply.error = e.what();
             }
             worker = Worker::None;
-            if (reply.ok) {
+            if (stopped) {
+                // The Stop button already printed "(stopped)"; the aborted
+                // reply is discarded (the user turn stays in the history).
+            } else if (reply.ok) {
                 conv.add_assistant(reply.content);
                 ChatLine line{"krastor", fmt.format(reply.content), ""};
                 if (!reply.reasoning.empty()) {
@@ -1897,23 +1915,27 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             nk_layout_row_end(ctx);
 
             // Action buttons on their own row below the input box.
-            nk_layout_row_begin(ctx, NK_DYNAMIC, btn_h, 4);
-            nk_layout_row_push(ctx, 0.16f);
+            nk_layout_row_begin(ctx, NK_DYNAMIC, btn_h, 5);
+            nk_layout_row_push(ctx, 0.15f);
             const bool send_click =
                 nk_button_label(ctx, app.worker == AppState::Worker::None ? "Send" : "...");
-            nk_layout_row_push(ctx, 0.10f);
+            nk_layout_row_push(ctx, 0.09f);
             const bool img_click = nk_button_label(ctx, "Img");
-            nk_layout_row_push(ctx, 0.20f);
+            nk_layout_row_push(ctx, 0.18f);
             const bool listen_click =
                 nk_button_label(ctx, app.worker == AppState::Worker::Listening
                                         ? "Listening..." : "Listen");
-            nk_layout_row_push(ctx, 0.20f);
+            nk_layout_row_push(ctx, 0.18f);
             if (nk_button_label(ctx, app.speaking.load() ? "Speaking..." : "Test voice"))
                 app.speak_async("Ciao, la voce funziona.");
+            nk_layout_row_push(ctx, 0.13f);
+            const bool stop_click = nk_button_label(ctx, "Stop");
             nk_layout_row_end(ctx);
 
             if (img_click)
                 app.attach_clipboard_image();
+            if (stop_click)
+                app.stop();
 
             if ((send_click || (edit_state & NK_EDIT_COMMITED) != 0) &&
                 app.worker == AppState::Worker::None) {

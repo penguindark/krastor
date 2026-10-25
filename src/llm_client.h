@@ -9,6 +9,7 @@
 
 #include "config.h"
 #include "conversation.h"
+#include "http_client.h"
 
 namespace krastor {
 
@@ -34,7 +35,10 @@ public:
 
     // Blocking chat completion for the given conversation history.
     // Never throws: transport and protocol errors come back as LlmReply::error.
-    LlmReply complete(const Conversation& conversation) const;
+    // `cancel` (optional) aborts the in-flight HTTP request immediately when
+    // cancel() is called from another thread (the GUI's Stop button).
+    LlmReply complete(const Conversation& conversation,
+                      CancelToken* cancel = nullptr) const;
 
 private:
     LlmConfig config_;

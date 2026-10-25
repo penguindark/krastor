@@ -177,5 +177,7 @@ selection & UTF-8 copy (mouse + Shift+arrows). **Output formatting plugins**
 (`output_format_plan.md`, complete): Markdown -> ANSI formatter styles LLM
 replies (headings, bold/italic, inline code, lists, quotes, tables), data-driven
 syntax highlighting (`data/languages/*.json`), collapsible "Thought" blocks for
-model reasoning, and full-color emoji via a Noto sprite atlas.
+model reasoning, and full-color emoji via a Noto sprite atlas. **Stop button**
+aborts an in-flight LLM request instantly (cross-thread WinHTTP handle close /
+curl progress abort) and cuts TTS playback mid-utterance.
   **Past design doc:** **`chat_ux_plan.md`** (the chat UX increment above).

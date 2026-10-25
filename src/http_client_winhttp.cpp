@@ -25,12 +25,33 @@ struct HandleDeleter {
 };
 using HInternet = std::unique_ptr<void, HandleDeleter>;
 
+void close_request(void* h) { WinHttpCloseHandle(static_cast<HINTERNET>(h)); }
+
+// Owns the request handle, honouring a CancelToken: if cancel() already took
+// the handle (and thereby aborted the pending call), the exchange yields null
+// and we must not close it again.
+struct RequestGuard {
+    HINTERNET h = nullptr;
+    CancelToken* tok = nullptr;
+    ~RequestGuard()
+    {
+        if (tok) {
+            void* p = tok->handle.exchange(nullptr);
+            if (p)
+                close_request(p);
+        } else if (h) {
+            WinHttpCloseHandle(h);
+        }
+    }
+};
+
 } // namespace
 
 HttpResponse https_post(const std::string& url,
                         const std::map<std::string, std::string>& headers,
                         const std::string& body,
-                        const std::string& content_type)
+                        const std::string& content_type,
+                        CancelToken* cancel)
 {
     HttpResponse out;
 
@@ -70,12 +91,25 @@ HttpResponse https_post(const std::string& url,
     if (!connect) { out.error = "WinHttpConnect failed"; return out; }
 
     DWORD flags = https ? WINHTTP_FLAG_SECURE : 0;
-    HInternet request(WinHttpOpenRequest(connect.get(), L"POST", path,
-                                         nullptr, WINHTTP_NO_REFERER,
-                                         WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
-    if (!request) { out.error = "WinHttpOpenRequest failed"; return out; }
+    RequestGuard guard;
+    guard.h = WinHttpOpenRequest(connect.get(), L"POST", path,
+                                 nullptr, WINHTTP_NO_REFERER,
+                                 WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!guard.h) { out.error = "WinHttpOpenRequest failed"; return out; }
 
-    WinHttpSetTimeouts(request.get(), kConnectTimeoutMs, kConnectTimeoutMs,
+    // Register the handle with the cancel token: a cross-thread cancel() now
+    // closes it, which makes every pending synchronous call fail at once.
+    if (cancel) {
+        guard.tok = cancel;
+        cancel->closer = &close_request;
+        cancel->handle.store(guard.h);
+        if (cancel->load()) {  // cancelled before registration took effect
+            out.error = "cancelled";
+            return out;
+        }
+    }
+
+    WinHttpSetTimeouts(guard.h, kConnectTimeoutMs, kConnectTimeoutMs,
                        kConnectTimeoutMs, kReadTimeoutMs);
 
     std::wstring header_blob;
@@ -83,41 +117,53 @@ HttpResponse https_post(const std::string& url,
         header_blob += wstr(name) + L": " + wstr(value) + L"\r\n";
     header_blob += L"Content-Type: " + wstr(content_type) + L"\r\n";
 
-    if (!WinHttpSendRequest(request.get(), header_blob.c_str(),
+    if (!WinHttpSendRequest(guard.h, header_blob.c_str(),
                             static_cast<DWORD>(header_blob.size()),
                             const_cast<char*>(body.data()),
                             static_cast<DWORD>(body.size()),
                             static_cast<DWORD>(body.size()), 0)) {
-        out.error = "WinHttpSendRequest failed (" +
-                    std::to_string(GetLastError()) + ")";
+        out.error = cancel && cancel->load()
+                        ? "cancelled"
+                        : "WinHttpSendRequest failed (" +
+                              std::to_string(GetLastError()) + ")";
         return out;
     }
 
-    if (!WinHttpReceiveResponse(request.get(), nullptr)) {
-        out.error = "WinHttpReceiveResponse failed (" +
-                    std::to_string(GetLastError()) + ")";
+    if (!WinHttpReceiveResponse(guard.h, nullptr)) {
+        out.error = cancel && cancel->load()
+                        ? "cancelled"
+                        : "WinHttpReceiveResponse failed (" +
+                              std::to_string(GetLastError()) + ")";
         return out;
     }
 
     DWORD status = 0, size = sizeof(status);
-    WinHttpQueryHeaders(request.get(),
+    WinHttpQueryHeaders(guard.h,
                         WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                         WINHTTP_HEADER_NAME_BY_INDEX, &status, &size,
                         WINHTTP_NO_HEADER_INDEX);
     out.status = status;
 
     for (;;) {
+        if (cancel && cancel->load()) {
+            out.error = "cancelled";
+            return out;
+        }
         DWORD available = 0;
-        if (!WinHttpQueryDataAvailable(request.get(), &available))
+        if (!WinHttpQueryDataAvailable(guard.h, &available))
             break;
         if (available == 0)
             break;
         std::string chunk(available, '\0');
         DWORD read = 0;
-        if (!WinHttpReadData(request.get(), chunk.data(), available, &read))
+        if (!WinHttpReadData(guard.h, chunk.data(), available, &read))
             break;
         chunk.resize(read);
         out.body += chunk;
+    }
+    if (cancel && cancel->load()) {
+        out.status = 0;
+        out.error = "cancelled";
     }
     return out;
 }

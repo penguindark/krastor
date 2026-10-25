@@ -20,12 +20,23 @@ size_t write_callback(void* data, size_t size, size_t nmemb, void* userp)
     return size * nmemb;
 }
 
+// Progress callback: non-zero return aborts the transfer. curl invokes it
+// frequently (roughly every 100 ms even while waiting on a slow server), so a
+// cancel() is noticed almost immediately.
+int progress_callback(void* clientp, curl_off_t, curl_off_t, curl_off_t,
+                      curl_off_t)
+{
+    auto* token = static_cast<CancelToken*>(clientp);
+    return token && token->load() ? 1 : 0;
+}
+
 } // namespace
 
 HttpResponse https_post(const std::string& url,
                         const std::map<std::string, std::string>& headers,
                         const std::string& body,
-                        const std::string& content_type)
+                        const std::string& content_type,
+                        CancelToken* cancel)
 {
     HttpResponse out;
     std::call_once(curl_global_init_flag, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
@@ -43,6 +54,10 @@ HttpResponse https_post(const std::string& url,
     curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 120L);
     curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &out.body);
+    if (cancel) {
+        curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, progress_callback);
+        curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, cancel);
+    }
 
     struct curl_slist* header_list = nullptr;
     auto add_header = [&header_list](const std::string& line) {
@@ -58,7 +73,9 @@ HttpResponse https_post(const std::string& url,
         curl_slist_free_all(header_list);
 
     if (rc != CURLE_OK) {
-        out.error = curl_easy_strerror(rc);
+        out.error = rc == CURLE_ABORTED_BY_CALLBACK
+                        ? "cancelled"
+                        : curl_easy_strerror(rc);
         return out;
     }
 

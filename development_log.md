@@ -692,3 +692,24 @@ Step 1 (this commit):
 - Bonus (from the plan): font atlas now bakes Latin-1/punctuation/box-drawing.
 - Verified: UITEST emoji line renders all in color (zoomed screenshot);
   both toolchains clean.
+
+## 2026-10-26 (later) - Stop button: instant LLM request + TTS cancellation
+
+- `http_client`: new `CancelToken` (atomic flag + atomically exchanged
+  platform handle + closer fn). `https_post(..., CancelToken*)`:
+  - WinHTTP registers the request handle with the token; `cancel()` from the
+    UI thread closes it cross-thread (the documented way to abort a
+    synchronous call), so the pending send/receive fails immediately. A
+    RequestGuard + atomic exchange guarantee the handle is closed exactly
+    once whichever thread wins the race.
+  - libcurl: `CURLOPT_XFERINFOFUNCTION` progress callback polls the flag
+    (~100 ms granularity) -> CURLE_ABORTED_BY_CALLBACK -> error "cancelled".
+- `LlmClient::complete(conversation, cancel)` passes the token through.
+- GUI: **Stop button** in the action row (Send/Img/Listen/Test voice/Stop).
+  `AppState::stop()` cancels the in-flight request (sys line "(stopped)")
+  and always calls `tts.interrupt()` (no-op when silent). `poll()` detects
+  the cancelled token and discards the aborted reply instead of printing an
+  LLM error; the user turn stays in the conversation history.
+- Verified: standalone test against a TCP listener that accepts but never
+  responds -> https_post returned 0 ms after cancel() with error
+  "cancelled". Screenshot shows the new button row. Both toolchains clean.
