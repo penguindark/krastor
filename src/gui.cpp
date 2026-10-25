@@ -39,6 +39,7 @@
 #include "gui.h"
 #include "llm_client.h"
 #include "llm_models.h"
+#include "formatters.h"
 #include "stt.h"
 #include "tts.h"
 #include "voices.h"
@@ -193,6 +194,7 @@ struct AppState {
     SettingsState settings;
     std::string name = "Krastor";  // agent persona (agent.name), live-editable
     LlmModelRegistry models;       // llm_models.json (Settings model combo)
+    OutputFormatter fmt;           // raw reply -> ANSI-styled display text
 
     // Images pasted/attached to the message being composed (sent as vision
     // attachments together with the text).
@@ -247,7 +249,8 @@ struct AppState {
     bool uitest_sel_done = false;  // one-shot selection seed for screenshot tests
 
     AppState(Config& c, VoiceRegistry& v)
-        : cfg(c), voices(v), conv(c.llm.system_prompt), llm(c.llm), tts(v, c), stt(c)
+        : cfg(c), voices(v), conv(c.llm.system_prompt), llm(c.llm), tts(v, c), stt(c),
+          fmt(c)
     {
         name = c.agent.name;
         // Model list for the Settings combo (URL/key/context come from this file).
@@ -278,6 +281,21 @@ struct AppState {
                               "the lazy dog", i);
                 lines.push_back({"sys", buf});
             }
+            // Markdown formatter sample (output_format_plan.md Step 1), placed
+            // after the filler so it is visible in a bottom-pinned screenshot.
+            lines.push_back({"krastor", fmt.format(
+                "# Heading one\n"
+                "Some **bold**, *italic* and `inline code` text.\n"
+                "- first item\n"
+                "- second **item**\n"
+                "  - nested\n"
+                "1. ordered\n"
+                "> quoted text\n"
+                "---\n"
+                "| Col A | Col B |\n"
+                "|---|---|\n"
+                "| 1 | two |\n"
+                "```python\nprint('hello')  # code block\n```")});
             // Auto-send one short message so the response stats line and the
             // context footer are visible in a screenshot without typing.
             auto_speak = false;  // keep the screenshot test silent
@@ -444,7 +462,7 @@ struct AppState {
             worker = Worker::None;
             if (reply.ok) {
                 conv.add_assistant(reply.content);
-                ChatLine line{"krastor", reply.content, ""};
+                ChatLine line{"krastor", fmt.format(reply.content), ""};
                 // Stats sub-line: "model - time - tok/s" ("~" when the server
                 // omitted usage and the token counts are estimated).
                 const double secs =
@@ -1318,11 +1336,20 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                             std::istreambuf_iterator<char>());
     }
     std::vector<struct nk_font*> fonts;  // index i -> kFontMin + i*kFontStep px
+    // Glyph ranges baked into the atlas: ASCII + Latin-1 (Italian accents) +
+    // general punctuation (curly quotes, dashes, ellipsis) + box drawing
+    // (the │ ─ bars used by quotes/tables/rules). Without this Nuklear bakes
+    // ASCII only and everything else renders as "?".
+    static const nk_rune kGlyphRanges[] = {
+        32, 0x00FF, 0x2000, 0x205B, 0x2500, 0x257F, 0
+    };
     for (int px = kFontMin; px <= kFontMax; px += kFontStep) {
+        struct nk_font_config fcfg = nk_font_config((float)px);
+        fcfg.range = kGlyphRanges;
         struct nk_font* fn = font_buf.empty()
-            ? nk_font_atlas_add_default(atlas, (float)px, nullptr)
+            ? nk_font_atlas_add_default(atlas, (float)px, &fcfg)
             : nk_font_atlas_add_from_memory(atlas, font_buf.data(), font_buf.size(),
-                                            (float)px, nullptr);
+                                            (float)px, &fcfg);
         if (fn)
             fonts.push_back(fn);
     }

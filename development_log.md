@@ -611,3 +611,33 @@ window come from the file.
   files need `json::parse(file, nullptr, true, true)`.
 - Verified: CLI startup resolves the lmstudio ref; screenshot of the modal
   shows the combo + endpoint. Both toolchains build clean.
+
+---
+
+## 2026-10-26 (later) - Output formatting: plan + Step 1 Markdown formatter
+
+New plan `output_format_plan.md`: transform raw LLM replies into colored,
+formatted chat output (opencode-style) via ANSI-emitting text plugins -
+Markdown, syntax highlighting, Thought blocks, color emoji. Key enablers
+verified: the glfw backend binds the texture per draw command (emoji atlas
+needs no backend patch) and the chat already renders ANSI runs, so formatters
+are pure string->string transforms; only the displayed text is styled
+(conversation + TTS keep the raw reply).
+
+Step 1 (this commit):
+- `src/md_format.{h,cpp}`: Markdown -> ANSI/SGR. Headings (blue/cyan bold),
+  **bold**, *italic* (bold+purple), `inline code` (khaki on dark bg), lists
+  with orange bullets/numbers, blockquotes (dim + bar), rules, links
+  (blue + dim url), column-aligned tables (dim bars, bold header), fenced
+  blocks (dim language label + dark background). Input containing ESC bytes
+  passes through untouched.
+- `src/formatters.{h,cpp}`: `OutputFormatter` chain wrapper (kill-switch
+  `gui.format_output`, default true; Step 2 will plug the highlighter in).
+- Hooked into the GUI assistant line and the CLI reply print.
+- Font atlas now bakes Latin-1 + general punctuation + box-drawing ranges
+  (`nk_font_config.range`) - Italian accents and the `| -` bars no longer
+  render as "?". (Gotcha: ranges go via `nk_font_config`, not a direct arg.)
+- Build presets gained `"jobs": 16` (parallel compile; `env`/`parallel` are
+  not valid build-preset fields - `jobs` is).
+- Verified: KRASTOR_UITEST seeds a full markdown sample; screenshot shows
+  every construct styled correctly. Both toolchains build clean.

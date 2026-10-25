@@ -101,6 +101,7 @@ Config Config::load(const std::string& path)
                 j.value("effect_intensity", cfg.gui.effect_intensity);
             cfg.gui.window_w = j.value("window_w", cfg.gui.window_w);
             cfg.gui.window_h = j.value("window_h", cfg.gui.window_h);
+            cfg.gui.format_output = j.value("format_output", cfg.gui.format_output);
         }
         if (root.contains("agent")) {
             const auto& j = root["agent"];
@@ -146,6 +147,7 @@ void Config::save(const std::string& path) const
         {"effect_intensity", gui.effect_intensity},
         {"window_w", gui.window_w},
         {"window_h", gui.window_h},
+        {"format_output", gui.format_output},
     };
     root["agent"] = {
         {"name", agent.name},

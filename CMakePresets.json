@@ -71,13 +71,14 @@
     }
   ],
   "buildPresets": [
-    { "name": "mingw-debug", "configurePreset": "mingw-debug" },
-    { "name": "mingw-release", "configurePreset": "mingw-release" },
-    { "name": "msvc-2026-debug", "configurePreset": "msvc-2026-debug", "configuration": "Debug" },
-    { "name": "msvc-2026-release", "configurePreset": "msvc-2026-release", "configuration": "Release" },
-    { "name": "msvc-2022-debug", "configurePreset": "msvc-2022-debug", "configuration": "Debug" },
-    { "name": "msvc-2022-release", "configurePreset": "msvc-2022-release", "configuration": "Release" },
-    { "name": "linux-gcc-debug", "configurePreset": "linux-gcc-debug" },
-    { "name": "linux-gcc-release", "configurePreset": "linux-gcc-release" }
+    { "name": "mingw-debug", "configurePreset": "mingw-debug", "jobs": 16 },
+    { "name": "mingw-release", "configurePreset": "mingw-release", "jobs": 16 },
+    { "name": "msvc-2026-debug", "configurePreset": "msvc-2026-debug", "configuration": "Debug", "jobs": 16 },
+    { "name": "msvc-2026-release", "configurePreset": "msvc-2026-release", "configuration": "Release", "jobs": 16 },
+    { "name": "msvc-2022-debug", "configurePreset": "msvc-2022-debug", "configuration": "Debug", "jobs": 16 },
+    { "name": "msvc-2022-release", "configurePreset": "msvc-2022-release", "configuration": "Release", "jobs": 16 },
+    { "name": "linux-gcc-debug", "configurePreset": "linux-gcc-debug", "jobs": 16 },
+    { "name": "linux-gcc-release", "configurePreset": "linux-gcc-release", "jobs": 16 }
   ]
 }
+

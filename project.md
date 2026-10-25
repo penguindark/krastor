@@ -173,6 +173,9 @@ TTS to cut it short when the ignore-guard is off). **Configurable agent name**
 and **effect brightness** in Settings. **Chat UX increment** (`chat_ux_plan.md`,
 complete): per-response stats sub-line + context-usage footer (`llm.context_size`),
 window-size persistence, wheel/keyboard scrolling with follow-bottom, chat text
-selection & UTF-8 copy (mouse + Shift+arrows). Remaining: markdown→styled
-  rendering of LLM replies, mic selector in the GUI.
+selection & UTF-8 copy (mouse + Shift+arrows). **Output formatting plugins**
+(`output_format_plan.md`): Markdown -> ANSI formatter (`src/md_format`) styles
+LLM replies (headings, bold/italic, inline code, lists, quotes, tables, code
+blocks); syntax highlighting, Thought blocks and color emoji are next steps of
+the same plan. Remaining: mic selector in the GUI.
   **Past design doc:** **`chat_ux_plan.md`** (the chat UX increment above).

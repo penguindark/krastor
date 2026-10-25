@@ -17,6 +17,7 @@
 
 #include "config.h"
 #include "conversation.h"
+#include "formatters.h"
 #include "gui.h"
 #include "llm_client.h"
 #include "llm_models.h"
@@ -161,6 +162,7 @@ int main(int argc, char** argv)
                      "KRASTOR_API_KEY) — LLM calls will fail\n";
 
     krastor::LlmClient llm(cfg.llm);
+    krastor::OutputFormatter fmt(cfg);
     krastor::Conversation conversation(cfg.llm.system_prompt);
     print_help();
 
@@ -252,7 +254,7 @@ int main(int argc, char** argv)
         std::cout << "\r" << std::string(40, ' ') << "\r";  // clear the placeholder
         if (reply.ok) {
             conversation.add_assistant(reply.content);
-            std::cout << reply.content << "\n\n";
+            std::cout << fmt.format(reply.content) << "\n\n";
         } else {
             // The user turn stays in history; the model can still see the question.
             std::cerr << "LLM error: " << reply.error << "\n\n";
