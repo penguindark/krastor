@@ -778,3 +778,19 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   `---:`, `:---:`) left/right/center-pad every cell in the column.
 - UITEST seeds a 3-column table (inline-code first column + centered
   last column) as the regression sample. Both toolchains clean.
+
+## 2026-10-26 (later) - FIX: mouse-wheel chat scrolling
+
+- Symptom: the wheel barely moved the chat and never accumulated; keyboard
+  PageUp/PageDown were equally broken.
+- Root cause: inside a Nuklear 4.13.3 group, ctx->current is still the MAIN
+  window (groups are panels, not windows), so nk_window_get_scroll() read the
+  main window's scrollbar.y (always 0) while nk_group_set_scroll() wrote the
+  group's real offset in the parent window's value store. Every wheel notch
+  therefore computed 0 + 3 lines and the view never accumulated past ~84 px;
+  the follow-bottom re-enable check (sy >= bottom-4) could also never fire.
+- Fix: read the offset with nk_group_get_scroll (same value store as the
+  setter) in the wheel handler, the keyboard scroll commands and the
+  follow-bottom check. Verified by injecting WM_MOUSEWHEEL messages into the
+  UITEST build: 25 down notches now reach the bottom, 3 up notches stay put
+  (no snap-back). Both toolchains clean.

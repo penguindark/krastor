@@ -62,6 +62,11 @@ are git-ignored — run `tools/download_deps.py` once after cloning.
     `nk_group_set_scroll(ctx, id, x, y)` with the group's own id. Nuklear only clamps
     the offset while the scrollbar is visible, so compute the bottom offset yourself
     (content height − visible height) rather than pinning to a huge value.
+    **Read with `nk_group_get_scroll`, never `nk_window_get_scroll`**: inside a group
+    `ctx->current` is still the main window (groups are panels, not windows), so
+    `nk_window_get_scroll` returns the main window's `scrollbar.y` (always 0) while
+    the group's live offset lives in the parent window's value store — mixing the two
+    makes wheel/PageUp/PageDown never accumulate (each notch re-computes from 0).
   - **`nk_glfw3_render` buffer args are BYTES, not vertex counts.** The small default
     (4096) holds ~200 vertices and silently drops every command after them — the
     classic "only the first row renders" symptom. Use `512*1024, 128*1024`.

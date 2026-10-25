@@ -1214,7 +1214,11 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
             !modal_blocks) {
             app.follow_bottom = false;
             nk_uint sx = 0, sy = 0;
-            nk_window_get_scroll(ctx, &sx, &sy);
+            // nk_group_get_scroll (NOT nk_window_get_scroll): inside a group,
+            // ctx->current is still the main window, whose scrollbar.y is not
+            // the group's offset. The group's live offset lives in the parent
+            // window's value store, which both group scroll accessors use.
+            nk_group_get_scroll(ctx, "##chat", &sx, &sy);
             float off = (float)sy - ctx->input.mouse.scroll_delta.y * row_h * 3.0f;
             if (off < 0.0f)
                 off = 0.0f;
@@ -1377,7 +1381,7 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         // loop when the chat has focus).
         if (app.scroll_cmd) {
             nk_uint sx = 0, sy = 0;
-            nk_window_get_scroll(ctx, &sx, &sy);
+            nk_group_get_scroll(ctx, "##chat", &sx, &sy);
             float off = (float)sy;
             const float page = visible > row_h * 2.0f ? visible - row_h : visible;
             switch (app.scroll_cmd) {
@@ -1397,7 +1401,7 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
             nk_group_set_scroll(ctx, "##chat", 0, (nk_uint)bottom);
         } else {
             nk_uint sx = 0, sy = 0;
-            nk_window_get_scroll(ctx, &sx, &sy);
+            nk_group_get_scroll(ctx, "##chat", &sx, &sy);
             if ((float)sy >= bottom - 4.0f)
                 app.follow_bottom = true;
         }
