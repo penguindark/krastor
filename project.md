@@ -157,9 +157,14 @@ Each tracked folder has a `development.md` describing its development in detail.
   attachments** via Ctrl+V (clipboard bitmap) and **drag & drop** (images attach,
   text files insert), sent to the LLM as OpenAI multimodal parts; Listen/auto-speak
   wired to the voice engines on worker threads, GLSL animated background, settings
-  modal, JetBrains Mono UI font. **Ctrl +/- font zoom** (pre-baked font ladder
+  modal, JetBrains Mono UI font. **Ctrl +/-/0 font zoom** (pre-baked font ladder
 12–30 px, layout rows scale with font height, size auto-saved debounced to the
-exe-folder config). Remaining: richer GLSL effects, markdown→styled
+exe-folder config). **Pluggable GLSL background effects**: `data/shaders/*.frag`
+plugins with a fixed uniform contract (mic level + 64-band spectrum history
+texture), Settings dropdown, compile-validated selection persisted to
+`gui.effect`, hot-reload on file edit; first plugin `ring_spectrogram.frag`
+draws audio-reactive cyan/magenta mesh ribbons (synthetic feed when the mic is
+closed). Remaining: markdown→styled
   rendering of LLM replies, mic selector in the GUI.
   **Next-phase design:** `spectogram_plan.md` (font scaling, shader-effect plugins,
   mic spectrogram, hands-free cycle, exe-folder config persistence).

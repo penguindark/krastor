@@ -41,6 +41,8 @@
 #include "voices.h"
 #include "ansi.h"
 #include "clipboard.h"
+#include "effects.h"
+#include "audio_analysis.h"
 
 namespace krastor {
 
@@ -53,79 +55,9 @@ constexpr int kWinH = 600;
 constexpr int kFontMin = 12, kFontMax = 30, kFontStep = 2, kFontDefault = 18;
 
 // ---------------------------------------------------------------- background
-// Fullscreen animated gradient drawn with a fragment shader before Nuklear.
-struct BgShader {
-    GLuint prog = 0;
-    GLuint vao = 0;
-    bool ok = false;
-    std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
-
-    void init()
-    {
-        const char* vs =
-            "#version 330 core\n"
-            "void main() {\n"
-            "  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n"
-            "  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
-            "}\n";
-        const char* fs =
-            "#version 330 core\n"
-            "uniform float u_time;\n"
-            "uniform vec2 u_res;\n"
-            "out vec4 frag_color;\n"
-            "void main() {\n"
-            "  vec2 uv = gl_FragCoord.xy / u_res;\n"
-            "  float v = 0.5 + 0.5 * sin(uv.x * 3.0 + u_time * 0.25)\n"
-            "                             * sin(uv.y * 2.0 - u_time * 0.18);\n"
-            "  float vig = smoothstep(1.2, 0.35, length(uv - 0.5));\n"
-            "  vec3 col = mix(vec3(0.045, 0.050, 0.075),\n"
-            "                 vec3(0.090, 0.120, 0.190), v) * (0.55 + 0.45 * vig);\n"
-            "  frag_color = vec4(col, 1.0);\n"
-            "}\n";
-        auto compile = [](GLenum type, const char* src) -> GLuint {
-            GLuint s = glCreateShader(type);
-            glShaderSource(s, 1, &src, nullptr);
-            glCompileShader(s);
-            GLint ok = 0;
-            glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-            if (!ok) {
-                char log[512];
-                glGetShaderInfoLog(s, sizeof(log), nullptr, log);
-                std::fprintf(stderr, "gui: shader compile failed: %s\n", log);
-                glDeleteShader(s);
-                return 0;
-            }
-            return s;
-        };
-        const GLuint v = compile(GL_VERTEX_SHADER, vs);
-        const GLuint f = compile(GL_FRAGMENT_SHADER, fs);
-        if (!v || !f)
-            return;
-        prog = glCreateProgram();
-        glAttachShader(prog, v);
-        glAttachShader(prog, f);
-        glLinkProgram(prog);
-        glDeleteShader(v);
-        glDeleteShader(f);
-        GLint linked = 0;
-        glGetProgramiv(prog, GL_LINK_STATUS, &linked);
-        glGenVertexArrays(1, &vao);
-        ok = linked != 0;
-    }
-
-    void draw(int w, int h) const
-    {
-        if (!ok)
-            return;
-        const float t = std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
-        glUseProgram(prog);
-        glUniform1f(glGetUniformLocation(prog, "u_time"), t);
-        glUniform2f(glGetUniformLocation(prog, "u_res"), (float)w, (float)h);
-        glBindVertexArray(vao);
-        glDrawArrays(GL_TRIANGLES, 0, 3);  // big triangle covering the screen
-        glUseProgram(0);
-    }
-};
+// The fullscreen background is drawn by the pluggable EffectEngine
+// (src/effects.h): built-in animated gradient + user .frag plugins from
+// data/shaders/, fed with the mic spectrum (src/audio_analysis.h).
 
 // ------------------------------------------------------------- app state
 struct ChatLine {
@@ -143,6 +75,9 @@ struct SettingsState {
     std::string status;
     bool open = false;
     bool dirty = false;   // LLM settings changed -> rebuild the client
+    // Background effect plugins (display names; index 0 = built-in gradient).
+    std::vector<std::string> effect_names;
+    std::string effect = "gradient";
 
     void load_from(const Config& cfg, const VoiceRegistry& voices)
     {
@@ -299,12 +234,12 @@ struct AppState {
 
 // ------------------------------------------------------------- settings modal
 bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
-                    SettingsState& s, int win_w, int win_h)
+                    SettingsState& s, int win_w, int win_h, EffectEngine& fx)
 {
     if (!s.open)
         return false;
 
-    const int mw = 520, mh = 430;
+    const int mw = 520, mh = 480;
     nk_begin(ctx, "Settings", nk_rect((win_w - mw) / 2.0f, (win_h - mh) / 2.0f, mw, mh),
              NK_WINDOW_TITLE | NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE);
 
@@ -330,6 +265,29 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         for (const auto& v : voices.voices())
             if (nk_combo_item_label(ctx, v.id.c_str(), NK_TEXT_LEFT))
                 s.voice = v.id;
+        nk_combo_end(ctx);
+    }
+
+    // Background effect plugins from data/shaders (validated = compiles).
+    nk_layout_row_dynamic(ctx, 26, 1);
+    nk_label(ctx, "Background effect", NK_LEFT);
+    nk_layout_row_dynamic(ctx, 26, 1);
+    if (nk_combo_begin_label(ctx, s.effect.c_str(), nk_vec2(480, 240))) {
+        nk_layout_row_dynamic(ctx, 24, 1);
+        for (const auto& name : s.effect_names)
+            if (nk_combo_item_label(ctx, name.c_str(), NK_TEXT_LEFT) && name != s.effect) {
+                if (fx.select(name, "data/shaders")) {
+                    s.effect = name;
+                    cfg.gui.effect = (name == "gradient") ? "" : name;
+                    try {
+                        cfg.save();  // validated: the plugin compiled
+                        s.status = "effect applied: " + name;
+                    } catch (const std::exception&) {
+                    }
+                } else {
+                    s.status = "effect failed: " + fx.error();
+                }
+            }
         nk_combo_end(ctx);
     }
 
@@ -673,8 +631,11 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         return 1;
     }
 
-    BgShader bg;
-    bg.init();
+    EffectEngine fx;
+    fx.init();
+    SpectrumAnalyzer spec;
+    std::vector<float> spec_window(SpectrumAnalyzer::kWindow, 0.0f);
+    const double t0 = glfwGetTime();
 
     static struct nk_glfw device;
     nk_glfw3_init(&device, win, NK_GLFW3_INSTALL_CALLBACKS);
@@ -725,6 +686,16 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
     AppState app(cfg, voices);
     app.settings.load_from(cfg, voices);
     app.tts.init();
+    // Effect plugin list from data/shaders + restore the persisted selection
+    // (falling back to the built-in gradient when it no longer compiles).
+    for (const auto& e : fx.scan("data/shaders"))
+        app.settings.effect_names.push_back(e.name);
+    if (!cfg.gui.effect.empty() && !fx.select(cfg.gui.effect, "data/shaders")) {
+        std::fprintf(stderr, "gui: stored effect '%s' failed: %s — using built-in\n",
+                     cfg.gui.effect.c_str(), fx.error().c_str());
+        cfg.gui.effect.clear();
+    }
+    app.settings.effect = fx.current();
     // Override the backend paste plugin so Ctrl+V can also grab clipboard images.
     g_paste_app = &app;
     device.ctx.clip.paste = krastor_paste;
@@ -814,6 +785,17 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             } catch (const std::exception&) {
             }
         }
+
+        // Spectrum feed: live mic while listening, synthetic animation
+        // otherwise; then shift one column into the history ring and check
+        // whether the active shader file changed on disk.
+        if (app.worker == AppState::Worker::Listening &&
+            app.stt.latest(spec_window.data(), spec_window.size()) == spec_window.size())
+            spec.feed(spec_window.data());
+        else
+            spec.synthetic(glfwGetTime() - t0);
+        spec.advance();
+        fx.check_reload();
 
         nk_glfw3_new_frame(&device);
         struct nk_context* ctx = &device.ctx;
@@ -924,7 +906,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         }
         nk_end(ctx);
 
-        settings_modal(ctx, cfg, voices, app.settings, w, h);
+        settings_modal(ctx, cfg, voices, app.settings, w, h, fx);
 
         // ---- render: shader background, then the UI ----
         int fb_w = 0, fb_h = 0;
@@ -932,7 +914,10 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         glViewport(0, 0, fb_w, fb_h);
         glClearColor(0.04f, 0.05f, 0.07f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-        bg.draw(fb_w, fb_h);
+        fx.draw(fb_w, fb_h, float(glfwGetTime() - t0), spec.level(),
+                spec.history(), SpectrumAnalyzer::kHistory, SpectrumAnalyzer::kBands,
+                spec.head(), app.worker == AppState::Worker::Listening,
+                app.speaking.load());
         nk_glfw3_render(&device, NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);
 
         glfwSwapBuffers(win);

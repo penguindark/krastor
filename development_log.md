@@ -343,3 +343,34 @@ The validated size is auto-saved to `bin/config.json` debounced 500 ms.
 Verified by screenshot at 18/26 px on both toolchains (live hotkey test left to
 the user: synthetic key injection does not reach the GLFW window from this
 session).
+
+---
+
+## 2026-10-26 (later) — Phase 5: pluggable GLSL effects + mic ring spectrogram
+
+**Shader plugin system** (plan step B1): new `src/effects.h/.cpp` — background
+effects are plain GLSL 330 `.frag` files in `data/shaders/` compiled at runtime
+on a shared fullscreen-triangle vertex shader. Fixed uniform contract:
+`u_resolution, u_time, u_level, u_spectrum (R8 history texture), u_spec_head,
+u_listening, u_speaking`. Display names via `// krastor-effect:` header comment.
+Settings modal gets a **Background effect** dropdown; selection is validated by
+compiling (a broken plugin never replaces the running one) and persisted to
+`gui.effect`. `check_reload()` hot-reloads the active file on change (verified
+live by editing the shader while the app ran). Built-in animated gradient kept as
+fallback plugin.
+
+**Audio analysis** (plan step B2): `src/fft.h` (header-only radix-2 FFT),
+`src/audio_analysis.h/.cpp` SpectrumAnalyzer — 512-sample window -> Hann ->
+FFT -> 64 log-spaced bands (dB-compressed, fast attack / slow release) + 128x64
+scrolling history ring uploaded as GL_R8 texture each frame. `Stt` gained a
+lock-free 16k-sample mic ring buffer (single producer in the miniaudio callback,
+release/acquire cursor) + `latest()` for the render thread. When the mic is
+closed a `synthetic(t)` feed animates the effects without touching the mic.
+
+**First plugin**: `data/shaders/ring_spectrogram.frag` — circular spectrogram
+with woven cyan/magenta mesh ribbons around a ring (reference image style),
+reacts to level/listening/speaking states. Verified by screenshot on both
+toolchains; live mic reactivity arrives with the hands-free stream (plan step C).
+
+Gotchas: `std::filesystem::last_write_time` returns `file_time_type` (not
+`system_clock::time_point`); includes must go before `namespace {` in gui.cpp.

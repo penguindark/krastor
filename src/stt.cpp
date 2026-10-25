@@ -48,6 +48,12 @@ struct Stt::Impl {
     std::atomic<float> level{0.0f};  // max |sample| of the most recent block
     std::atomic<float> peak{0.0f};   // max |sample| since the last reset
 
+    // Lock-free ring of recent mic samples for the shader spectrum feed.
+    // Single producer (mic callback), single consumer (render thread).
+    static constexpr size_t kRing = 16384;  // 1 s @ 16 kHz
+    std::vector<float> ring = std::vector<float>(kRing, 0.0f);
+    std::atomic<size_t> ring_w{0};  // monotonically increasing write cursor
+
     struct CapDev {
         ma_device_id id;
         std::string name;
@@ -119,6 +125,12 @@ struct Stt::Impl {
         self->level.store(mx);
         float cur = self->peak.load();
         while (cur < mx && !self->peak.compare_exchange_weak(cur, mx)) {}
+        // Copy into the visualization ring, then publish the new cursor so the
+        // reader never sees an index ahead of the data.
+        const size_t w = self->ring_w.load(std::memory_order_relaxed);
+        for (ma_uint32 i = 0; i < frame_count; ++i)
+            self->ring[(w + i) % Stt::Impl::kRing] = samples[i];
+        self->ring_w.store(w + frame_count, std::memory_order_release);
         std::lock_guard<std::mutex> lock(self->pcm_mutex);
         self->pcm.insert(self->pcm.end(), samples, samples + frame_count);
     }
@@ -428,6 +440,19 @@ std::string Stt::transcribe_file(const std::string& path)
     return impl_->decode(samples.data(), static_cast<int>(samples.size()));
 }
 
+size_t Stt::latest(float* dst, size_t n) const
+{
+    using ImplT = Stt::Impl;
+    n = std::min(n, ImplT::kRing);
+    const size_t w = impl_->ring_w.load(std::memory_order_acquire);
+    if (w == 0 || n == 0)
+        return 0;
+    const size_t take = std::min(n, w);
+    for (size_t i = 0; i < take; ++i)
+        dst[i] = impl_->ring[(w - take + i) % ImplT::kRing];
+    return take;
+}
+
 } // namespace krastor
 
 #else  // ------------------------------------------------------------- non-Windows
@@ -450,6 +475,7 @@ std::string Stt::list_input_devices() { return "stt: not available on this platf
 double Stt::monitor(double, int) { return -1.0; }
 std::string Stt::listen(double, int) { return ""; }
 std::string Stt::transcribe_file(const std::string&) { return ""; }
+size_t Stt::latest(float*, size_t) const { return 0; }
 
 } // namespace krastor
 

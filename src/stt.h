@@ -47,6 +47,12 @@ public:
     // Used for testing without a microphone and for future file attachments.
     std::string transcribe_file(const std::string& path);
 
+    // Copies the most recent `n` mic samples (16 kHz mono) captured while the
+    // mic was open into `dst`, newest last. Returns the number copied (0 when
+    // the mic never ran). Feeds the shader spectrum analyzer; safe to call
+    // from the render thread while any mic operation is active.
+    size_t latest(float* dst, size_t n) const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
