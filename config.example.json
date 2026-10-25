@@ -3,6 +3,7 @@
     "base_url": "https://api.openai.com/v1",
     "api_key": "",
     "model": "gpt-4o-mini",
+    "model_ref": "lmstudio/minicpm5-2b-heretic-abliterated",
     "system_prompt": "You are Krastor, a helpful voice assistant. Answer concisely; your replies may be spoken aloud.",
     "temperature": 0.7,
     "max_tokens": 1024,

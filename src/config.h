@@ -14,6 +14,10 @@ struct LlmConfig {
     std::string base_url = "https://api.openai.com/v1";
     std::string api_key;            // resolved from config or environment
     std::string model = "gpt-4o-mini";
+    // Selected entry in llm_models.json ("provider_id/model_id"). When set and
+    // found, it overrides base_url/api_key/model (and context_size when the
+    // file declares limit.context). See llm_models.h.
+    std::string model_ref;
     std::string system_prompt =
         "You are Krastor, a helpful voice assistant. Answer concisely; "
         "your replies may be spoken aloud.";

@@ -38,6 +38,7 @@
 #include "conversation.h"
 #include "gui.h"
 #include "llm_client.h"
+#include "llm_models.h"
 #include "stt.h"
 #include "tts.h"
 #include "voices.h"
@@ -150,12 +151,12 @@ struct SelRange {
 
 struct SettingsState {
     char name[128] = {0};
-    char base_url[512] = {0};
-    char model[256] = {0};
+    // Selected llm_models.json entry ("provider/model"); URL/key/context come
+    // from the file, so Settings no longer edits them directly.
+    std::string model_ref;
     char system_prompt[4096] = {0};
     float temperature = 0.7f;
     int max_tokens = 1024;
-    int context_size = 131072;
     std::string voice;
     std::string status;
     bool open = false;
@@ -169,13 +170,11 @@ struct SettingsState {
     void load_from(const Config& cfg, const VoiceRegistry& voices)
     {
         std::snprintf(name, sizeof(name), "%s", cfg.agent.name.c_str());
-        std::snprintf(base_url, sizeof(base_url), "%s", cfg.llm.base_url.c_str());
-        std::snprintf(model, sizeof(model), "%s", cfg.llm.model.c_str());
+        model_ref = cfg.llm.model_ref;
         std::snprintf(system_prompt, sizeof(system_prompt), "%s",
                       cfg.llm.system_prompt.c_str());
         temperature = static_cast<float>(cfg.llm.temperature);
         max_tokens = cfg.llm.max_tokens;
-        context_size = cfg.llm.context_size;
         effect_intensity = static_cast<float>(cfg.gui.effect_intensity);
         const auto* v = voices.current();
         voice = v ? v->id : (voices.voices().empty() ? std::string() : voices.voices()[0].id);
@@ -193,6 +192,7 @@ struct AppState {
     std::vector<ChatLine> lines;   // main thread only
     SettingsState settings;
     std::string name = "Krastor";  // agent persona (agent.name), live-editable
+    LlmModelRegistry models;       // llm_models.json (Settings model combo)
 
     // Images pasted/attached to the message being composed (sent as vision
     // attachments together with the text).
@@ -250,6 +250,8 @@ struct AppState {
         : cfg(c), voices(v), conv(c.llm.system_prompt), llm(c.llm), tts(v, c), stt(c)
     {
         name = c.agent.name;
+        // Model list for the Settings combo (URL/key/context come from this file).
+        models.load(LlmModelRegistry::default_path());
         lines.push_back({"sys", name + " ready. Type below (Enter sends, "
                                   "Shift+Enter = newline). Ctrl+V pastes text or "
                                   "an image. Settings = LLM/voice config."});
@@ -599,7 +601,8 @@ void word_range(const AppState& app, int line, int cp, int& lo, int& hi)
 
 // ------------------------------------------------------------- settings modal
 bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
-                    SettingsState& s, int win_w, int win_h, EffectEngine& fx)
+                    SettingsState& s, int win_w, int win_h, EffectEngine& fx,
+                    const LlmModelRegistry& models)
 {
     if (!s.open)
         return false;
@@ -634,15 +637,33 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     nk_layout_row_dynamic(ctx, 22, 1);
     nk_label(ctx, "LLM Engine", NK_LEFT);
     nk_layout_row_dynamic(ctx, 26, 1);
-    nk_label(ctx, "Base URL", NK_LEFT);
+    nk_label(ctx, "Model (from llm_models.json)", NK_LEFT);
     nk_layout_row_dynamic(ctx, 26, 1);
-    nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, s.base_url,
-                                   sizeof(s.base_url) - 1, nk_filter_default);
-    nk_layout_row_dynamic(ctx, 26, 1);
-    nk_label(ctx, "Model", NK_LEFT);
-    nk_layout_row_dynamic(ctx, 26, 1);
-    nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, s.model,
-                                   sizeof(s.model) - 1, nk_filter_default);
+    {
+        // The combo lists every provider/model in llm_models.json; the label is
+        // the model's display name. URL, key and context come from the file.
+        const LlmModelEntry* cur = models.find(s.model_ref);
+        if (nk_combo_begin_label(ctx,
+                cur ? cur->display.c_str()
+                    : (s.model_ref.empty() ? "(none selected)" : s.model_ref.c_str()),
+                nk_vec2(480, 240))) {
+            nk_layout_row_dynamic(ctx, 24, 1);
+            for (const auto& m : models.entries())
+                if (nk_combo_item_label(ctx,
+                        (m.display + "  -  " + m.ref).c_str(), NK_TEXT_LEFT))
+                    s.model_ref = m.ref;
+            nk_combo_end(ctx);
+        }
+        if (cur) {
+            nk_layout_row_dynamic(ctx, 18, 1);
+            nk_label_colored(ctx, cur->base_url.c_str(), NK_LEFT,
+                             nk_rgb(110, 110, 120));
+        } else if (models.entries().empty()) {
+            nk_layout_row_dynamic(ctx, 18, 1);
+            nk_label_colored(ctx, models.error().c_str(), NK_LEFT,
+                             nk_rgb(220, 180, 90));
+        }
+    }
 
     nk_layout_row_dynamic(ctx, 26, 1);
     nk_label(ctx, "TTS Voice", NK_LEFT);
@@ -719,9 +740,6 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     nk_property_float(ctx, "Temperature", 0.0f, &s.temperature, 2.0f, 0.05f, 0.01f);
     nk_layout_row_dynamic(ctx, 26, 1);
     nk_property_int(ctx, "Max tokens", 1, &s.max_tokens, 32000, 64, 1.0f);
-    nk_layout_row_dynamic(ctx, 26, 1);
-    nk_property_int(ctx, "Context tokens", 1024, &s.context_size, 1048576, 1024,
-                    1024.0f);
 
     nk_layout_row_dynamic(ctx, 22, 1);
     nk_label(ctx, "System prompt", NK_LEFT);
@@ -737,12 +755,14 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     nk_layout_row_dynamic(ctx, 30, 2);
     if (nk_button_label(ctx, "Save")) {
         cfg.agent.name = s.name;
-        cfg.llm.base_url = s.base_url;
-        cfg.llm.model = s.model;
+        cfg.llm.model_ref = s.model_ref;
+        if (!apply_model_ref(cfg.llm, models))
+            s.status = s.model_ref.empty()
+                           ? "no model selected - keeping current llm.base_url/model"
+                           : "model not found in llm_models.json";
         cfg.llm.system_prompt = s.system_prompt;
         cfg.llm.temperature = s.temperature;
         cfg.llm.max_tokens = s.max_tokens;
-        cfg.llm.context_size = s.context_size;
         cfg.tts.default_voice = s.voice;
         if (!s.voice.empty())
             voices.select(s.voice);
@@ -1773,7 +1793,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         }
         nk_end(ctx);
 
-        settings_modal(ctx, cfg, voices, app.settings, w, h, fx);
+        settings_modal(ctx, cfg, voices, app.settings, w, h, fx, app.models);
 
         // A saved name change propagates to the top bar and the window title.
         if (cfg.agent.name != app.name) {

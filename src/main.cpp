@@ -19,6 +19,7 @@
 #include "conversation.h"
 #include "gui.h"
 #include "llm_client.h"
+#include "llm_models.h"
 #include "stt.h"
 #include "tts.h"
 #include "voices.h"
@@ -128,6 +129,16 @@ int main(int argc, char** argv)
             std::cerr << "warning: config migration failed: " << e.what() << '\n';
         }
     }
+
+    // llm_models.json (opencode.jsonc format): when llm.model_ref names an
+    // entry there, its URL/key/model/context override the explicit fields.
+    krastor::LlmModelRegistry models;
+    if (!models.load(krastor::LlmModelRegistry::default_path()))
+        std::cout << "note: " << models.error()
+                  << " — using llm.base_url/model from config.json\n";
+    else if (krastor::apply_model_ref(cfg.llm, models))
+        std::cout << "model: " << cfg.llm.model_ref << " -> " << cfg.llm.base_url
+                  << "\n";
 
     krastor::VoiceRegistry voices;
     if (voices.discover(cfg.tts.models_dir)) {

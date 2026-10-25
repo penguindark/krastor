@@ -21,7 +21,10 @@ Krastor is a desktop agent for LLMs written in C++20. It:
 - Input: keyboard text, microphone speech (STT, local), file attachments via drag & drop
   and Ctrl+V (images, documents, audio — accepted types to be finalized in a design session).
 - Output: text in a terminal-style I/O panel and/or spoken audio (TTS, local).
-- LLM: remote, OpenAI-compatible v1 HTTP interface (base URL, model and key configurable).
+- LLM: remote, OpenAI-compatible v1 HTTP interface. Endpoints/models come from
+  **`llm_models.json`** (opencode.jsonc `provider` schema, LM Studio included);
+  Settings only picks the model (`llm.model_ref`); explicit `llm.base_url` /
+  `model` in config.json remain the fallback when no ref is selected.
 - STT and TTS must be **local** and good in **English and Italian**. Model selection is a
   dedicated research step (Phase 2).
 

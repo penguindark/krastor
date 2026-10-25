@@ -48,6 +48,7 @@ add_executable(krastor
     src/config.cpp
     src/conversation.cpp
     src/llm_client.cpp
+    src/llm_models.cpp
     src/voices.cpp
     src/tts.cpp
     src/stt.cpp

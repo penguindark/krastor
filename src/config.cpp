@@ -77,6 +77,7 @@ Config Config::load(const std::string& path)
             cfg.llm.base_url = j.value("base_url", cfg.llm.base_url);
             cfg.llm.api_key = j.value("api_key", cfg.llm.api_key);
             cfg.llm.model = j.value("model", cfg.llm.model);
+            cfg.llm.model_ref = j.value("model_ref", cfg.llm.model_ref);
             cfg.llm.system_prompt = j.value("system_prompt", cfg.llm.system_prompt);
             cfg.llm.temperature = j.value("temperature", cfg.llm.temperature);
             cfg.llm.max_tokens = j.value("max_tokens", cfg.llm.max_tokens);
@@ -125,6 +126,7 @@ void Config::save(const std::string& path) const
         {"base_url", llm.base_url},
         {"api_key", llm.api_key},
         {"model", llm.model},
+        {"model_ref", llm.model_ref},
         {"system_prompt", llm.system_prompt},
         {"temperature", llm.temperature},
         {"max_tokens", llm.max_tokens},

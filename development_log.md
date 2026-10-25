@@ -581,3 +581,33 @@ again (`clear_edit_focus` -> `nk_edit_unfocus`).
 - Also: input caret now 2 px wide accent blue (`edit.cursor_size` push) -
   Nuklear's default 1 px caret was nearly invisible on the dark field.
 - Both toolchains build clean; all temporary hooks removed.
+
+---
+
+## 2026-10-26 (later) - llm_models.json: opencode.jsonc-style model registry
+
+LLM endpoints/models now come from `llm_models.json` (project root, same
+`provider` schema as opencode.jsonc: `options|settings.baseURL|apiKey`,
+`models.<id>.name`, `models.<id>.limit.context|output`; `//` comments
+allowed). The Settings modal only picks a model - URL, key and context
+window come from the file.
+
+- New `src/llm_models.{h,cpp}`: `LlmModelRegistry` parses the file into
+  `provider/model` refs (accepts both `options` and `settings` spellings);
+  `apply_model_ref()` overwrites `llm.base_url/api_key/model` (and
+  `context_size` when `limit.context` is set). Lookup: exe dir, then cwd.
+- `llm.model_ref` added to config.json (persisted selection). Empty ref or
+  missing file keeps the old explicit base_url/model path working.
+- `llm_models.json` seeded with LM Studio (http://192.168.0.3:8080/v1,
+  minicpm5-2b-heretic-abliterated) + the providers from opencode.jsonc
+  (ds4, halogen, crucible).
+- Settings modal: Base URL / Model / Context-tokens fields removed, replaced
+  by one "Model (from llm_models.json)" combo showing the display name,
+  with the resolved base URL as a read-only label under it. Save applies
+  the ref and rebuilds the LLM client (dirty flag).
+- main.cpp applies the ref at startup for both CLI and GUI (prints
+  `model: <ref> -> <base_url>`).
+- Gotcha: nlohmann 3.12 `ignore_comments` defaults to **false** - jsonc
+  files need `json::parse(file, nullptr, true, true)`.
+- Verified: CLI startup resolves the lmstudio ref; screenshot of the modal
+  shows the combo + endpoint. Both toolchains build clean.

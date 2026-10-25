@@ -140,6 +140,10 @@ are git-ignored — run `tools/download_deps.py` once after cloning.
   `exe_dir()/krastor_error.log`.
 - `std::filesystem::rename` replaces an existing file on MinGW+MSVC → safe
   atomic-save primitive (write `.tmp`, rename).
+- nlohmann 3.12: `ignore_comments` defaults to **false** in `parse()` and
+  `operator>>` - parsing jsonc (`//` comments, e.g. `llm_models.json`) needs
+  the explicit `json::parse(file, nullptr, /*allow_exceptions*/true,
+  /*ignore_comments*/true)`.
 
 ## Planned layout (roadmap)
 - `gui/` — GLSL effect passes, terminal I/O panel, attachments input (Phase 5)

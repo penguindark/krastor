@@ -1,0 +1,94 @@
+{
+  // Krastor LLM model registry - same shape as opencode.jsonc's "provider"
+  // section (opencode.ai/config.json). Krastor reads only "provider":
+  //   options|settings.baseURL  -> OpenAI-compatible endpoint
+  //   options|settings.apiKey   -> auth string ("none" for local servers)
+  //   models.<id>.name          -> label shown in Settings
+  //   models.<id>.limit.context -> context window (footer usage %)
+  // The Settings modal only picks a model; URL/key/context come from here.
+  // Lookup order: llm_models.json next to krastor.exe, then the working dir.
+  "provider": {
+
+    "lmstudio": {
+      "name": "LM Studio (local)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://192.168.0.3:8080/v1",
+        "apiKey": "none"
+      },
+      "models": {
+        "minicpm5-2b-heretic-abliterated": {
+          "name": "MiniCPM5 2B Heretic (LM Studio)",
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        }
+      }
+    },
+
+    "ds4": {
+      "name": "ds4.c (local)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://192.168.0.5:8000/v1",
+        "apiKey": "dsv4-local"
+      },
+      "models": {
+        "deepseek-v4-flash": {
+          "name": "DeepSeek V4 Flash (ds4.c local)",
+          "limit": {
+            "context": 100000,
+            "output": 384000
+          }
+        }
+      }
+    },
+
+    "halogen": {
+      "name": "halogen-flash (local)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://192.168.0.5:8080/v1",
+        "apiKey": "none"
+      },
+      "models": {
+        "Qwen3.8-Flash-Next-UD-IQ4_XL-262K": {
+          "name": "Qwen3.8-Halogen-262K",
+          "limit": {
+            "context": 262144,
+            "output": 65536
+          },
+          "capabilities": {
+            "input": ["text", "image"],
+            "output": ["text"]
+          }
+        }
+      }
+    },
+
+    "crucible": {
+      "name": "Crucible",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "http://127.0.0.1:8080/v1",
+        "apiKey": "local" // Crucible non richiede auth, ma serve una stringa dummy per il client
+      },
+      "models": {
+        // Sostituisci "default" con l'ID restituito dal curl al passo 2 se diverso
+        "crucible": {
+          "name": "Crucible Strix Halo",
+          "limit": {
+            "context": 262144,
+            "output": 65536
+          },
+          "capabilities": {
+            "tools": true,
+            "input": ["text", "image"],
+            "output": ["text"]
+          }
+        }
+      }
+    }
+  }
+}
