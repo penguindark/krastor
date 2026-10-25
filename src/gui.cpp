@@ -1600,6 +1600,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                                  ? ctx->style.font->height : 18.0f;
             const float top_h = fh * 2.4f;
             const float input_h = fh * 3.7f;
+            const float btn_h = fh * 1.9f;
             const float status_h = fh * 1.2f;
             const float chip_h = fh * 1.45f;
 
@@ -1627,7 +1628,8 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             // group height is the window height minus the other rows (all
             // font-proportional) plus row spacing/padding.
             const float attach_h = app.attachments.empty() ? 0.0f : chip_h + 4.0f;
-            const float chat_h = (float)h - top_h - input_h - status_h - attach_h - 34.0f;
+            const float chat_h = (float)h - top_h - input_h - btn_h - status_h -
+                                 attach_h - 40.0f;
             chat_panel(ctx, app, chat_h > 60.0f ? chat_h : 60.0f);
 
             // Attachment chips: one per pasted image, click a chip to remove it.
@@ -1647,14 +1649,46 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                     app.attachments.erase(app.attachments.begin() + (long)remove_idx);
             }
 
-            // Input row: multiline box (Enter sends, Shift+Enter newline).
-            nk_layout_row_begin(ctx, NK_DYNAMIC, input_h, 5);
-            nk_layout_row_push(ctx, 0.44f);
+            // Input: OpenCode-style full-width box - dark field, blue accent
+            // bar on the left edge (Enter sends, Shift+Enter newline).
+            nk_layout_row_begin(ctx, NK_DYNAMIC, input_h, 1);
+            nk_layout_row_push(ctx, 1.0f);
+            // Slot rect of the next (full-width) widget: 4.13.3 has no
+            // nk_window_get_cursor, but after row_begin layout->at_y is the
+            // row's top and the first column starts at the content padding.
+            const struct nk_rect input_box = nk_rect(
+                ctx->current->bounds.x + ctx->style.window.padding.x,
+                ctx->current->layout->at_y, nk_window_get_width(ctx), input_h);
+            nk_style_push_color(ctx, &ctx->style.edit.border_color, nk_rgb(45, 50, 62));
+            nk_style_push_style_item(ctx, &ctx->style.edit.normal,
+                                     nk_style_item_color(nk_rgba(9, 11, 16, 255)));
+            nk_style_push_style_item(ctx, &ctx->style.edit.hover,
+                                     nk_style_item_color(nk_rgba(9, 11, 16, 255)));
+            nk_style_push_style_item(ctx, &ctx->style.edit.active,
+                                     nk_style_item_color(nk_rgba(12, 15, 21, 255)));
+            nk_style_push_color(ctx, &ctx->style.edit.text_normal, nk_rgb(232, 236, 242));
+            nk_style_push_color(ctx, &ctx->style.edit.cursor_normal, nk_rgb(120, 180, 255));
+            nk_style_push_color(ctx, &ctx->style.edit.cursor_text_normal,
+                                nk_rgb(120, 180, 255));
+            nk_style_push_vec2(ctx, &ctx->style.edit.padding, nk_vec2(10.0f, 6.0f));
             const nk_flags edit_state = nk_edit_string_zero_terminated(
                 ctx,
                 (nk_flags)NK_EDIT_BOX | (nk_flags)NK_EDIT_SIG_ENTER |
                     (nk_flags)NK_EDIT_CTRL_ENTER_NEWLINE,
                 app.input, sizeof(app.input) - 1, nk_filter_default);
+            // Accent bar painted over the field's left edge (after the widget,
+            // so it sits on top of its background).
+            nk_fill_rect(&ctx->current->buffer,
+                         nk_rect(input_box.x, input_box.y, 3.0f, input_box.h),
+                         0, nk_rgb(120, 180, 255));
+            nk_style_pop_vec2(ctx);
+            nk_style_pop_color(ctx);      // cursor_text_normal
+            nk_style_pop_color(ctx);      // cursor_normal
+            nk_style_pop_color(ctx);      // text_normal
+            nk_style_pop_style_item(ctx); // active
+            nk_style_pop_style_item(ctx); // hover
+            nk_style_pop_style_item(ctx); // normal
+            nk_style_pop_color(ctx);      // border_color
             // Typing focus back on the input releases the chat selection keys.
             if ((edit_state & NK_EDIT_ACTIVE) != 0)
                 app.chat_focused = false;
@@ -1663,16 +1697,20 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 app.pending_image_paste = false;
                 app.attach_clipboard_image();
             }
-            nk_layout_row_push(ctx, 0.12f);
+            nk_layout_row_end(ctx);
+
+            // Action buttons on their own row below the input box.
+            nk_layout_row_begin(ctx, NK_DYNAMIC, btn_h, 4);
+            nk_layout_row_push(ctx, 0.16f);
             const bool send_click =
                 nk_button_label(ctx, app.worker == AppState::Worker::None ? "Send" : "...");
-            nk_layout_row_push(ctx, 0.08f);
+            nk_layout_row_push(ctx, 0.10f);
             const bool img_click = nk_button_label(ctx, "Img");
-            nk_layout_row_push(ctx, 0.18f);
+            nk_layout_row_push(ctx, 0.20f);
             const bool listen_click =
                 nk_button_label(ctx, app.worker == AppState::Worker::Listening
                                         ? "Listening..." : "Listen");
-            nk_layout_row_push(ctx, 0.18f);
+            nk_layout_row_push(ctx, 0.20f);
             if (nk_button_label(ctx, app.speaking.load() ? "Speaking..." : "Test voice"))
                 app.speak_async("Ciao, la voce funziona.");
             nk_layout_row_end(ctx);

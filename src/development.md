@@ -115,6 +115,13 @@ are git-ignored — run `tools/download_deps.py` once after cloning.
   (`nk_input_is_mouse_hovering_rect`) fire for clicks/drags/wheel landing on
   the modal too. App-level windows that overlap must gate their own input on
   "modal open" (see `modal_blocks` in `chat_panel`).
+- Nuklear 4.13.3 has **no** `nk_window_get_cursor` / `nk_layout_row_bounds` -
+  to custom-draw over the next widget's slot (e.g. the input box accent bar),
+  compute it after `nk_layout_row_begin`+`push`: top = `ctx->current->layout->at_y`
+  (panel_layout advances at_y to the row top), x = `bounds.x +
+  style.window.padding.x`, width = `nk_window_get_width()`. Draw with
+  `nk_fill_rect(&ctx->current->buffer, ...)` **after** the widget call so the
+  command lands on top of its background.
 - Shader `main()` wrapper trick: prepend `#define main effect_main` + a
   `void effect_main();` prototype, append the real `main()` after
   `#undef main` — without the `#undef` the footer's `main` is renamed too and

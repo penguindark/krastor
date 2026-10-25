@@ -538,3 +538,22 @@ Nuklear's `nk_input` is global - clicks/drags/wheel over the modal also hit the
 chat group's hover rect and were processed as chat input. `chat_panel` now
 skips the wheel-scroll, click and drag-extend branches while
 `app.settings.open` (the keyboard selection path already had this gate).
+
+---
+
+## 2026-10-26 (later) - OpenCode-style chat input box
+
+The keyboard input existed but was a cramped 44%-width box sharing its row
+with the action buttons. Restyled to match the OpenCode TUI look:
+
+- The input is now a full-width dark field (`NK_EDIT_BOX` with pushed edit
+  styles: opaque near-black background, subtle border, light text, blue
+  cursor, 10x6 padding) with a 3 px blue accent bar painted over its left
+  edge via `nk_fill_rect(&ctx->current->buffer, ...)` after the widget.
+- The slot rect is computed manually (4.13.3 has no `nk_window_get_cursor`):
+  after `nk_layout_row_begin` the row top is `ctx->current->layout->at_y`,
+  the first column starts at `bounds.x + style.window.padding.x`.
+- Send / Img / Listen / Test voice moved to their own row (`btn_h`) below
+  the box; `chat_h` accounts for the extra row. Behavior unchanged:
+  Enter sends, Shift+Enter newline, Ctrl+V image paste hook intact.
+- Verified by screenshot; both toolchains build clean.
