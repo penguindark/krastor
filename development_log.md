@@ -160,3 +160,16 @@ rejection, config display. LLM calls require an API key.
 
 **Next:** Phase 4 — local STT (Parakeet/Vosk) + TTS (sherpa-onnx Piper) in C++, wired
 to the voice registry.
+
+---
+
+## 2026-10-26 — Phase 3 verified against local LM Studio
+
+Connected the CLI to LM Studio at `http://192.168.0.3:8080` (model
+`minicpm5-2b-heretic-abliterated`). Note: LM Studio's `/api/v1` is its REST API;
+the OpenAI-compatible base is `http://192.168.0.3:8080/v1` (`/v1/chat/completions`).
+Created local `config.json` (gitignored) with that base_url.
+
+Live test through `bin/krastor.exe`: Italian self-introduction, arithmetic (12x8=96),
+and multi-turn memory (recalled the user's name) all correct. Runtime voice switch
+(/voice) works mid-session. WinHTTP handles plain http:// to the LAN host fine.
