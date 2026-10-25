@@ -18,7 +18,7 @@ product. Never part of the shipped agent.
   `.venv\Scripts\python.exe tools\download_models.py [--only <name>]`
 - `parrot.py` — **the Phase 2 parrot**: microphone -> streaming STT (Vosk, word-level
   partial results shown live) -> TTS (sherpa-onnx Piper) -> speaker.
-  `.venv\Scripts\python.exe tools\parrot.py --lang it|en [--no-play] [--list-devices]`
+  `.venv\Scripts\python.exe tools\parrot.py --lang it|en [--no-play] [--small] [--list-devices]`
 - `roundtrip_test.py` — automated no-mic test: TTS -> WAV -> chunked streaming STT ->
   compare. Writes samples to `tools/out/` (git-ignored) for listening.
   `.venv\Scripts\python.exe tools\roundtrip_test.py`
@@ -27,11 +27,12 @@ product. Never part of the shipped agent.
 Stack chosen: **Vosk** streaming STT + **Piper via sherpa-onnx** TTS (see
 `../models/development.md` for the model inventory).
 
-Round-trip results (TTS voice -> Vosk small models):
-- EN: near-perfect (only case/punctuation differences).
-- IT: understandable but the *small* Italian model makes errors on some words
-  ("volpe rapida" -> "vuoi perà da"). Upgrade candidate: `vosk-model-it-0.42`
-  (~450 MB, much better accuracy, still streaming) — decision pending user listening test.
+Round-trip results (TTS voice -> Vosk):
+- EN (small model): near-perfect (only case/punctuation differences).
+- IT (small model): understandable but word errors ("volpe rapida" -> "vuoi perà da").
+- IT (big model vosk-model-it-0.22): near-perfect ("la volpe rapido... salta sopra il
+  cane pigro", "ciao sono il tuo assistente vocale locale"), RTF ~0.19 -> **chosen as
+  default Italian STT**; small model kept as `--small` fallback.
 
 ## Gotchas learned
 - sherpa-onnx **2.0.0 removed** the built-in espeak-ng frontend for Piper VITS voices

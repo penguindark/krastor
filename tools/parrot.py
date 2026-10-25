@@ -30,7 +30,8 @@ from vosk import KaldiRecognizer, Model, SetLogLevel
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SAMPLE_RATE = 16000
 
-STT_DIR = {"it": "stt-vosk-it", "en": "stt-vosk-en"}
+STT_DIR = {"it": "stt-vosk-it-large", "en": "stt-vosk-en"}
+STT_DIR_SMALL = {"it": "stt-vosk-it"}  # faster but noticeably less accurate Italian
 TTS_DIR = {"it": "tts-piper-it-it-paola", "en": "tts-piper-en-us-lessac"}
 
 
@@ -77,6 +78,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lang", choices=["it", "en"], default="it",
                         help="language of speech (selects STT + TTS voice)")
+    parser.add_argument("--small", action="store_true",
+                        help="use the small (faster, less accurate) Italian STT model")
     parser.add_argument("--no-play", action="store_true", help="do not play TTS audio")
     parser.add_argument("--list-devices", action="store_true", help="list audio devices and exit")
     args = parser.parse_args()
@@ -86,11 +89,12 @@ def main() -> None:
         return
 
     SetLogLevel(-1)
-    stt_dir = REPO_ROOT / "models" / STT_DIR[args.lang]
+    stt_name = STT_DIR_SMALL.get(args.lang, STT_DIR[args.lang]) if args.small else STT_DIR[args.lang]
+    stt_dir = REPO_ROOT / "models" / stt_name
     if not stt_dir.exists():
         sys.exit(f"STT model not found in {stt_dir}. Run tools/download_models.py first.")
 
-    print(f"Loading STT model ({STT_DIR[args.lang]}) ...")
+    print(f"Loading STT model ({stt_name}) ...")
     stt_model = Model(str(stt_dir))
     print(f"Loading TTS voice ({TTS_DIR[args.lang]}) ...")
     tts = load_tts(args.lang)

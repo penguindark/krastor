@@ -15,7 +15,8 @@ weights never enter the repository.
 
 | Folder | Role | Model | License | Notes |
 |---|---|---|---|---|
-| `stt-vosk-it/` | STT streaming | vosk-model-small-it-0.4 (~41 MB) | Apache-2.0 | word-level partials; accuracy OK, upgrade candidate: vosk-model-it-0.42 |
+| `stt-vosk-it-large/` | STT streaming | vosk-model-it-0.22 (~1.2 GB) | Apache-2.0 | **default IT**: WER 8.10 cv-test, RTF ~0.19 on dev machine |
+| `stt-vosk-it/` | STT streaming | vosk-model-small-it-0.4 (~41 MB) | Apache-2.0 | fast fallback (`--small`), noticeably worse accuracy |
 | `stt-vosk-en/` | STT streaming | vosk-model-small-en-us-0.15 (~40 MB) | Apache-2.0 | word-level partials; near-perfect in round-trip test |
 | `tts-piper-it-it-paola/` | TTS Italian | Piper it_IT paola (medium) | BSD-3 / CC-BY | via sherpa-onnx VITS |
 | `tts-piper-en-us-lessac/` | TTS English | Piper en_US lessac (medium) | BSD-3 / CC-BY | via sherpa-onnx VITS |
@@ -31,5 +32,4 @@ weights never enter the repository.
 - sherpa-onnx pinned to 1.13.8: 2.0.0 dropped the bundled espeak-ng frontend.
 
 ## Candidate upgrades (not downloaded)
-- `vosk-model-it-0.42` (~450 MB) — better Italian accuracy, same streaming API.
 - `vits-piper-it_IT-miro-high` / `-dii-high` — higher-quality Italian voices.

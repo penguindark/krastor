@@ -66,3 +66,15 @@ TTS WAV samples in `tools/out/` for the user to listen.
 
 **Next:** user listens to samples and confirms model choices; then Phase 3 (core
 agent) and Phase 4 (C++ integration of Vosk + sherpa-onnx).
+
+---
+
+## 2026-10-25 — Phase 2 addendum: Italian STT upgraded to big Vosk model
+
+Tested `vosk-model-it-0.22` (1.2 GB, the correct big Italian model — `it-0.42` does
+not exist) against the small one on the same TTS audio: small produced word errors
+("vuoi perà da"), big produced near-perfect transcripts at RTF ~0.19 (5x faster than
+real-time, streaming preserved). **Big model is now the default Italian STT**
+(`models/stt-vosk-it-large/`); small kept via `parrot.py --small`.
+
+**Next:** Phase 3 — core C++ agent (config, OpenAI-compatible HTTP client, loop).

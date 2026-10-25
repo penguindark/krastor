@@ -28,6 +28,12 @@ MODELS: dict[str, dict[str, str]] = {
         "license": "Apache-2.0 (model trained on Mozilla Common Voice)",
         "purpose": "Streaming STT, Italian (word-level partial results)",
     },
+    "stt-vosk-it-large": {
+        "url": "https://alphacephei.com/vosk/models/vosk-model-it-0.22.zip",
+        "kind": "zip",
+        "license": "Apache-2.0 (model trained on Mozilla Common Voice + MLS + MTEED)",
+        "purpose": "Streaming STT, Italian big (~1.2 GB, WER 8.10 cv-test vs 16.88 small)",
+    },
     "stt-vosk-en": {
         "url": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
         "kind": "zip",
