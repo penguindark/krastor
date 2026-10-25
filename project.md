@@ -142,6 +142,7 @@ Each tracked folder has a `development.md` describing its development in detail.
 - **Phase 4 — Local STT/TTS integration (done 2026-10-26).** sherpa-onnx C API
   (pinned 1.13.8) + miniaudio: Piper TTS with runtime voice switching, Parakeet
   multilingual STT with Silero VAD and mic capture, `/say`, `/listen`, `/transcribe`.
-- **Phase 5 — GUI (started 2026-10-26).** Foundation landed: GLFW + OpenGL 3.3 +
-  Nuklear window with a gear icon opening a settings modal (LLM URL, TTS voice,
-  params). Remaining: GLSL effect surface, terminal I/O panel, attachments input.
+- **Phase 5 — GUI (started 2026-10-26).** Chat interface live: terminal-style I/O
+  panel, text input, Listen/auto-speak wired to the voice engines on worker threads,
+  GLSL animated background, settings modal. Remaining: richer GLSL effects, JSON/MD/
+  code rendering, attachments input (drag & drop / Ctrl+V).

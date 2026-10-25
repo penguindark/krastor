@@ -253,3 +253,25 @@ Diagnosis on this machine: Realtek IS the default device but the meter shows pea
 > Microphone > let desktop apps access) or a muted/zero-gain mic; the error path
 now prints the miniaudio error code (`ma_result_to_string` does not exist in
 0.11.22). Builds on both toolchains; `/transcribe` regression still exact.
+
+---
+
+## 2026-10-26 (later) — Phase 5: GUI becomes the agent interface
+
+Rewrote `src/gui.cpp`: the window is now the actual Krastor UI.
+* Terminal-style chat panel: colored wrapped lines (you=blue, Krastor=green,
+  sys=gray) in a scrollable `nk_group` pinned to the newest line.
+* Input field + Send (Enter commits), **Listen** button (Parakeet STT on a worker
+  thread, transcription auto-sent to the LLM), **Speak ON/OFF** auto-TTS toggle,
+  Test-voice button, status line (thinking/listening/speaking/voice+mic info).
+* Gear icon + settings modal kept; Save now hot-reloads the LlmClient.
+* Threading: LLM call via `std::async` on a Conversation snapshot; STT via
+  `std::async`; TTS via detached thread with an atomic speaking flag. The render
+  loop only polls futures — never blocks.
+* First **GLSL effect**: fullscreen big-triangle fragment shader (animated dark
+  gradient + vignette, GLSL 330 core, no VBO via gl_VertexID) drawn before Nuklear;
+  window/panel backgrounds made semi-transparent so it shows through.
+
+Gotchas: this Nuklear's `nk_label_colored_wrap` has no align parameter;
+`nk_layout_row_dynamic(ctx, 0, 1)` fills remaining space. Verified: clean builds
+on both toolchains, GUI process alive with empty stderr (shader compiled).

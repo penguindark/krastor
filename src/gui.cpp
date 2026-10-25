@@ -1,4 +1,9 @@
 // Krastor — GUI implementation (GLFW + OpenGL3 + Nuklear).
+// The window is the agent's main interface: a terminal-style chat panel, a text
+// input with Send, a Listen button (Parakeet STT), an auto-speak toggle (Piper TTS)
+// and a gear icon opening the settings modal. Slow work (LLM HTTP, STT, TTS) runs
+// on worker threads so the render loop never blocks. A GLSL fragment shader draws
+// an animated background behind the UI.
 // This translation unit owns the Nuklear and GLFW-GL3 backend implementations.
 
 #include <glad/glad.h>
@@ -13,13 +18,23 @@
 #include "nuklear.h"
 #include "nuklear_glfw_gl3.h"
 
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <future>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <vector>
 
-#include "gui.h"
 #include "config.h"
+#include "conversation.h"
+#include "gui.h"
+#include "llm_client.h"
+#include "stt.h"
+#include "tts.h"
 #include "voices.h"
 
 namespace krastor {
@@ -30,7 +45,82 @@ constexpr int kWinW = 900;
 constexpr int kWinH = 600;
 constexpr const char* kConfigPath = "config.json";
 
-// Draws a simple gear icon (8 teeth + body + hole) centered in `r`.
+// ---------------------------------------------------------------- background
+// Fullscreen animated gradient drawn with a fragment shader before Nuklear.
+struct BgShader {
+    GLuint prog = 0;
+    GLuint vao = 0;
+    bool ok = false;
+    std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+
+    void init()
+    {
+        const char* vs =
+            "#version 330 core\n"
+            "void main() {\n"
+            "  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n"
+            "  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
+            "}\n";
+        const char* fs =
+            "#version 330 core\n"
+            "uniform float u_time;\n"
+            "uniform vec2 u_res;\n"
+            "out vec4 frag_color;\n"
+            "void main() {\n"
+            "  vec2 uv = gl_FragCoord.xy / u_res;\n"
+            "  float v = 0.5 + 0.5 * sin(uv.x * 3.0 + u_time * 0.25)\n"
+            "                             * sin(uv.y * 2.0 - u_time * 0.18);\n"
+            "  float vig = smoothstep(1.2, 0.35, length(uv - 0.5));\n"
+            "  vec3 col = mix(vec3(0.045, 0.050, 0.075),\n"
+            "                 vec3(0.090, 0.120, 0.190), v) * (0.55 + 0.45 * vig);\n"
+            "  frag_color = vec4(col, 1.0);\n"
+            "}\n";
+        auto compile = [](GLenum type, const char* src) -> GLuint {
+            GLuint s = glCreateShader(type);
+            glShaderSource(s, 1, &src, nullptr);
+            glCompileShader(s);
+            GLint ok = 0;
+            glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+            if (!ok) {
+                char log[512];
+                glGetShaderInfoLog(s, sizeof(log), nullptr, log);
+                std::fprintf(stderr, "gui: shader compile failed: %s\n", log);
+                glDeleteShader(s);
+                return 0;
+            }
+            return s;
+        };
+        const GLuint v = compile(GL_VERTEX_SHADER, vs);
+        const GLuint f = compile(GL_FRAGMENT_SHADER, fs);
+        if (!v || !f)
+            return;
+        prog = glCreateProgram();
+        glAttachShader(prog, v);
+        glAttachShader(prog, f);
+        glLinkProgram(prog);
+        glDeleteShader(v);
+        glDeleteShader(f);
+        GLint linked = 0;
+        glGetProgramiv(prog, GL_LINK_STATUS, &linked);
+        glGenVertexArrays(1, &vao);
+        ok = linked != 0;
+    }
+
+    void draw(int w, int h) const
+    {
+        if (!ok)
+            return;
+        const float t = std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
+        glUseProgram(prog);
+        glUniform1f(glGetUniformLocation(prog, "u_time"), t);
+        glUniform2f(glGetUniformLocation(prog, "u_res"), (float)w, (float)h);
+        glBindVertexArray(vao);
+        glDrawArrays(GL_TRIANGLES, 0, 3);  // big triangle covering the screen
+        glUseProgram(0);
+    }
+};
+
+// ------------------------------------------------------------- gear icon
 void draw_gear(struct nk_command_buffer* c, struct nk_rect r, struct nk_color col)
 {
     const float cx = r.x + r.w * 0.5f;
@@ -48,16 +138,22 @@ void draw_gear(struct nk_command_buffer* c, struct nk_rect r, struct nk_color co
                               rad * 0.52f, rad * 0.52f), nk_rgb(45, 45, 48));
 }
 
-// Editable state for the settings modal (fixed buffers for nk_edit_string).
+// ------------------------------------------------------------- app state
+struct ChatLine {
+    std::string who;   // "you" | "krastor" | "sys"
+    std::string text;
+};
+
 struct SettingsState {
     char base_url[512] = {0};
     char model[256] = {0};
     char system_prompt[4096] = {0};
     float temperature = 0.7f;
     int max_tokens = 1024;
-    std::string voice;      // currently selected voice id
-    std::string status;     // transient feedback ("Saved", errors)
+    std::string voice;
+    std::string status;
     bool open = false;
+    bool dirty = false;   // LLM settings changed -> rebuild the client
 
     void load_from(const Config& cfg, const VoiceRegistry& voices)
     {
@@ -72,7 +168,96 @@ struct SettingsState {
     }
 };
 
-// The settings modal. Returns true if it is currently open.
+struct AppState {
+    Config& cfg;
+    VoiceRegistry& voices;
+    Conversation conv;
+    LlmClient llm;
+    Tts tts;
+    Stt stt;
+
+    std::vector<ChatLine> lines;   // main thread only
+    SettingsState settings;
+
+    enum class Worker { None, Thinking, Listening } worker = Worker::None;
+    std::future<LlmReply> llm_fut;
+    std::future<std::string> stt_fut;
+    std::atomic<bool> speaking{false};
+    bool auto_speak = true;
+    char input[1024] = {0};
+
+    AppState(Config& c, VoiceRegistry& v)
+        : cfg(c), voices(v), conv(c.llm.system_prompt), llm(c.llm), tts(v, c), stt(c)
+    {
+        lines.push_back({"sys", "Krastor ready. Type below or click Listen, "
+                                "then Enter to send. Gear = settings."});
+    }
+
+    void speak_async(const std::string& text)
+    {
+        if (text.empty() || speaking.load())
+            return;
+        speaking.store(true);
+        std::thread([this, text] {
+            tts.speak(text);
+            speaking.store(false);
+        }).detach();
+    }
+
+    void send(const std::string& text)
+    {
+        if (text.empty() || worker != Worker::None)
+            return;
+        lines.push_back({"you", text});
+        conv.add_user(text);
+        worker = Worker::Thinking;
+        const LlmClient client(llm);          // snapshot: survives settings changes
+        const Conversation snapshot = conv;   // copy for the worker thread
+        llm_fut = std::async(std::launch::async, [client, snapshot] {
+            return client.complete(snapshot);
+        });
+    }
+
+    void start_listen()
+    {
+        if (worker != Worker::None)
+            return;
+        worker = Worker::Listening;
+        const int idx = cfg.stt.input_device;
+        Stt& stt_ref = stt;
+        stt_fut = std::async(std::launch::async,
+                             [&stt_ref, idx] { return stt_ref.listen(10.0, idx); });
+    }
+
+    // Polls finished worker tasks once per frame.
+    void poll()
+    {
+        if (worker == Worker::Thinking &&
+            llm_fut.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            const LlmReply reply = llm_fut.get();
+            worker = Worker::None;
+            if (reply.ok) {
+                conv.add_assistant(reply.content);
+                lines.push_back({"krastor", reply.content});
+                if (auto_speak)
+                    speak_async(reply.content);
+            } else {
+                lines.push_back({"sys", "LLM error: " + reply.error});
+            }
+        }
+        if (worker == Worker::Listening &&
+            stt_fut.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            const std::string heard = stt_fut.get();
+            worker = Worker::None;
+            if (heard.empty())
+                lines.push_back({"sys", "(nothing heard)"});
+            else
+                send(heard);
+        }
+    }
+};
+
+// ------------------------------------------------------------- settings modal
 bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
                     SettingsState& s, int win_w, int win_h)
 {
@@ -137,6 +322,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         try {
             cfg.save(kConfigPath);
             s.status = "Saved to " + std::string(kConfigPath);
+            s.dirty = true;
         } catch (const std::exception& e) {
             s.status = std::string("Save failed: ") + e.what();
         }
@@ -154,6 +340,33 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         return false;
     }
     return true;
+}
+
+// ------------------------------------------------------------- chat panel
+// Rough wrapped height for a line of text in the chat panel.
+float chat_line_height(const std::string& text)
+{
+    const int visual_rows = static_cast<int>(text.size()) / 70 + 1;
+    return 18.0f * visual_rows + 6.0f;
+}
+
+void chat_panel(struct nk_context* ctx, AppState& app)
+{
+    nk_layout_row_dynamic(ctx, 0, 1);  // fill the remaining space
+    if (nk_group_begin(ctx, "##chat", NK_WINDOW_BORDER)) {
+        for (const auto& l : app.lines) {
+            nk_layout_row_dynamic(ctx, chat_line_height(l.text), 1);
+            struct nk_color col = nk_rgb(160, 160, 160);
+            if (l.who == "you") col = nk_rgb(120, 180, 255);
+            else if (l.who == "krastor") col = nk_rgb(130, 220, 150);
+            const std::string prefix = l.who == "you" ? "> " :
+                                       l.who == "krastor" ? "Krastor: " : "! ";
+            nk_label_colored_wrap(ctx, (prefix + l.text).c_str(), col);
+        }
+        // Pin the view to the newest line.
+        nk_window_set_scroll(ctx, 0, 1000000);
+        nk_group_end(ctx);
+    }
 }
 
 } // namespace
@@ -184,6 +397,9 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         return 1;
     }
 
+    BgShader bg;
+    bg.init();
+
     static struct nk_glfw device;
     nk_glfw3_init(&device, win, NK_GLFW3_INSTALL_CALLBACKS);
     struct nk_font_atlas* atlas = nullptr;
@@ -192,45 +408,103 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
     nk_glfw3_font_stash_end(&device);
     if (font)
         nk_style_set_font(&device.ctx, &font->handle);
+    // Semi-transparent panels so the shader background shows through.
+    device.ctx.style.window.background = nk_rgba(16, 18, 24, 210);
 
-    SettingsState settings;
-    settings.load_from(cfg, voices);
+    AppState app(cfg, voices);
+    app.settings.load_from(cfg, voices);
+    app.tts.init();
 
     while (!glfwWindowShouldClose(win)) {
         int w = 0, h = 0;
         glfwGetWindowSize(win, &w, &h);
 
         glfwPollEvents();
+        app.poll();
+        if (app.settings.dirty) {
+            app.llm = LlmClient(cfg.llm);
+            app.settings.dirty = false;
+        }
+
         nk_glfw3_new_frame(&device);
         struct nk_context* ctx = &device.ctx;
 
-        // Base surface filling the window, with the gear in the top-right.
-        nk_begin(ctx, "Krastor", nk_rect(0, 0, (float)w, (float)h), NK_WINDOW_BACKGROUND);
+        // ---- main surface (transparent: the shader shows through) ----
+        nk_begin(ctx, "Krastor", nk_rect(0, 0, (float)w, (float)h), 0);
         {
-            nk_layout_row_begin(ctx, NK_DYNAMIC, 48, 3);
-            nk_layout_row_push(ctx, 0.82f);
+            // Top bar: title | speak toggle | gear
+            nk_layout_row_begin(ctx, NK_DYNAMIC, 44, 4);
+            nk_layout_row_push(ctx, 0.66f);
             nk_label(ctx, "Krastor", NK_MIDDLE_LEFT);
+            nk_layout_row_push(ctx, 0.16f);
+            if (nk_button_label(ctx, app.auto_speak ? "Speak: ON" : "Speak: OFF"))
+                app.auto_speak = !app.auto_speak;
             nk_layout_row_push(ctx, 0.08f);
             nk_spacer(ctx);
             nk_layout_row_push(ctx, 0.10f);
             const struct nk_rect gear_rect = nk_widget_bounds(ctx);
             if (nk_button_label(ctx, " "))
-                settings.open = !settings.open;
+                app.settings.open = !app.settings.open;
             draw_gear(nk_window_get_canvas(ctx), gear_rect, nk_rgb(225, 225, 225));
             nk_layout_row_end(ctx);
 
-            nk_layout_row_dynamic(ctx, 30, 1);
-            nk_label(ctx, "Click the gear (top-right) to open settings.", NK_MIDDLE_CENTER);
+            // Chat history
+            chat_panel(ctx, app);
+
+            // Input row
+            nk_layout_row_begin(ctx, NK_DYNAMIC, 34, 4);
+            nk_layout_row_push(ctx, 0.56f);
+            const nk_flags edit_state = nk_edit_string_zero_terminated(
+                ctx, NK_EDIT_FIELD, app.input, sizeof(app.input) - 1, nk_filter_default);
+            nk_layout_row_push(ctx, 0.12f);
+            const bool send_click =
+                nk_button_label(ctx, app.worker == AppState::Worker::None ? "Send" : "...");
+            nk_layout_row_push(ctx, 0.16f);
+            const bool listen_click =
+                nk_button_label(ctx, app.worker == AppState::Worker::Listening
+                                        ? "Listening..." : "Listen");
+            nk_layout_row_push(ctx, 0.16f);
+            if (nk_button_label(ctx, app.speaking.load() ? "Speaking..." : "Test voice"))
+                app.speak_async("Ciao, la voce funziona.");
+            nk_layout_row_end(ctx);
+
+            if ((send_click || (edit_state & NK_EDIT_COMMITED) != 0) &&
+                app.worker == AppState::Worker::None) {
+                app.send(app.input);
+                app.input[0] = '\0';
+            }
+            if (listen_click)
+                app.start_listen();
+
+            // Status line
+            nk_layout_row_dynamic(ctx, 22, 1);
+            std::string status_buf;
+            const char* status = "";
+            if (app.worker == AppState::Worker::Thinking) status = "thinking...";
+            else if (app.worker == AppState::Worker::Listening)
+                status = "listening... speak now (max 10 s)";
+            else if (app.speaking.load()) status = "speaking...";
+            else if (const Voice* v = voices.current()) {
+                status_buf = "voice: " + v->id + "  |  mic: " +
+                             (cfg.stt.input_device < 0 ? std::string("default")
+                                                       : std::to_string(cfg.stt.input_device)) +
+                             "  (CLI /devices, /mic)";
+                status = status_buf.c_str();
+            }
+            if (*status)
+                nk_label(ctx, status, NK_MIDDLE_LEFT);
         }
         nk_end(ctx);
 
-        settings_modal(ctx, cfg, voices, settings, w, h);
+        settings_modal(ctx, cfg, voices, app.settings, w, h);
 
+        // ---- render: shader background, then the UI ----
         int fb_w = 0, fb_h = 0;
         glfwGetFramebufferSize(win, &fb_w, &fb_h);
         glViewport(0, 0, fb_w, fb_h);
-        glClearColor(0.10f, 0.10f, 0.12f, 1.0f);
+        glClearColor(0.04f, 0.05f, 0.07f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
+        bg.draw(fb_w, fb_h);
         nk_glfw3_render(&device, NK_ANTI_ALIASING_ON, 4096, 4096 * 3);
 
         glfwSwapBuffers(win);
