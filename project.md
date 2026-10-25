@@ -140,5 +140,6 @@ Each tracked folder has a `development.md` describing its development in detail.
 - **Phase 3 — Core agent (done 2026-10-26).** Config loader, OpenAI-compatible HTTP
   client (WinHTTP/libcurl), conversation loop, CLI with runtime TTS voice selection.
 - **Phase 4 — Local STT/TTS integration** in C++ (mic capture + playback pipeline).
-- **Phase 5 — GUI.** GLFW + glad + Nuklear game-loop window, GLSL effects, terminal I/O
-  panel with JSON/MD/code rendering, attachments input (design session first).
+- **Phase 5 — GUI (started 2026-10-26).** Foundation landed: GLFW + OpenGL 3.3 +
+  Nuklear window with a gear icon opening a settings modal (LLM URL, TTS voice,
+  params). Remaining: GLSL effect surface, terminal I/O panel, attachments input.

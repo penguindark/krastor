@@ -57,4 +57,27 @@ Config Config::load(const std::string& path)
     return cfg;
 }
 
+void Config::save(const std::string& path) const
+{
+    nlohmann::json root;
+    root["llm"] = {
+        {"base_url", llm.base_url},
+        {"api_key", llm.api_key},
+        {"model", llm.model},
+        {"system_prompt", llm.system_prompt},
+        {"temperature", llm.temperature},
+        {"max_tokens", llm.max_tokens},
+    };
+    root["tts"] = {
+        {"models_dir", tts.models_dir},
+        {"default_voice", tts.default_voice},
+        {"speed", tts.speed},
+    };
+
+    std::ofstream file(path, std::ios::trunc);
+    if (!file)
+        throw std::runtime_error("Cannot write config to " + path);
+    file << root.dump(2) << '\n';
+}
+
 } // namespace krastor

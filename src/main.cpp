@@ -14,6 +14,7 @@
 
 #include "config.h"
 #include "conversation.h"
+#include "gui.h"
 #include "llm_client.h"
 #include "voices.h"
 
@@ -61,7 +62,14 @@ int main(int argc, char** argv)
     SetConsoleOutputCP(CP_UTF8);
 #endif
 
-    const std::string config_path = (argc > 1) ? argv[1] : "config.json";
+    // Args: [--gui] [config.json]
+    std::string config_path = "config.json";
+    bool use_gui = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--gui") use_gui = true;
+        else config_path = a;
+    }
     std::cout << "Krastor v0.3.0 (Phase 3 core agent)\n";
 
     krastor::Config cfg = [&] {
@@ -79,6 +87,10 @@ int main(int argc, char** argv)
             std::cerr << "warning: default_voice '" << cfg.tts.default_voice
                       << "' not found, using first discovered voice\n";
     }
+
+    if (use_gui)
+        return krastor::run_gui(cfg, voices);
+
     print_voice(voices);
 
     if (cfg.llm.api_key.empty())

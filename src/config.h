@@ -33,6 +33,10 @@ struct Config {
     // malformed JSON throws std::runtime_error. The api key falls back to the
     // KRASTOR_API_KEY then OPENAI_API_KEY environment variables when empty.
     static Config load(const std::string& path);
+
+    // Writes the current settings to `path` as JSON (same schema as load()).
+    // Used by the GUI settings modal. Throws std::runtime_error on write failure.
+    void save(const std::string& path) const;
 };
 
 } // namespace krastor

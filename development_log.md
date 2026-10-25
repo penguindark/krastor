@@ -173,3 +173,31 @@ Created local `config.json` (gitignored) with that base_url.
 Live test through `bin/krastor.exe`: Italian self-introduction, arithmetic (12x8=96),
 and multi-turn memory (recalled the user's name) all correct. Runtime voice switch
 (/voice) works mid-session. WinHTTP handles plain http:// to the LAN host fine.
+
+---
+
+## 2026-10-26 — Phase 5 start: GUI foundation + gear/settings modal
+
+User requested a gear icon opening a settings modal (LLM URL, TTS voice, other
+params). This bootstraps the Phase 5 graphics foundation.
+
+**Vendored into libs/**: GLFW 3.4 (full source, built via add_subdirectory so it
+works on MinGW + MSVC), glad (OpenGL 3.3 core, generated with the pip glad tool),
+Nuklear 4.13 (nuklear.h + glfw_opengl3 backend). nlohmann/json already present.
+
+**New code**: `src/gui.h/.cpp` — GLFW window (GL 3.3 core), glad load, Nuklear init
+with default font baked at 18px. A gear icon (drawn with nk_fill_circle +
+nk_stroke_line) sits top-right; clicking toggles a **Settings modal** editing: LLM
+base URL, model, TTS voice (combo from VoiceRegistry), temperature, max tokens,
+system prompt. Save writes `config.json` (new `Config::save()`) and applies the
+voice via `VoiceRegistry::select()`. Launched with `krastor --gui`; CLI unchanged.
+
+**Build**: CMake now enables C, builds glfw, compiles glad.c + gui.cpp, links opengl32
+(Windows) / OpenGL::GL (Linux). Verified: clean builds on mingw-debug + msvc-2026-debug;
+GUI window opens and render loop stays alive; CLI regression OK.
+
+**Nuklear API notes** (master differs from older docs): text field is
+`nk_edit_string_zero_terminated`; alignment enums are combined (`NK_MIDDLE_LEFT`);
+close check is `nk_window_is_closed`. glad CLI uses `--api gl=3.3 --profile core`.
+
+**Next**: GLSL effect surface behind the UI, terminal I/O panel, then Phase 4 audio.
