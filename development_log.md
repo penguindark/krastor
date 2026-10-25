@@ -317,3 +317,29 @@ used to verify the render. Both toolchains (mingw-debug, msvc-2026-debug) build 
 **Gotchas**: `nk_text_width` is not public in Nuklear 4.13.3 (use the font
 callback); `nk_glfw3_render` buffer args are bytes; comment ending with backslash
 swallows the next line; `NK_EDIT_BOX | NK_EDIT_SIG_ENTER` needs `nk_flags` casts.
+
+---
+
+## 2026-10-26 (later) — spectogram plan + config persistence + Ctrl +/- font zoom
+
+**Plan**: `spectogram_plan.md` (repo root, referenced from `project.md` §4.3/§8)
+specifies the next Phase 5 features: font zoom, pluggable GLSL background effects
+(mic ring-spectrogram as first plugin), continuous hands-free cycle
+(mic -> STT -> LLM -> text -> TTS), and exe-folder config persistence.
+
+**Config persistence (plan step D-core)**: `Config::exe_dir()/runtime_path()/default_path()`
+— the runtime config now lives **next to the executable** (`bin/config.json`);
+a legacy working-directory `config.json` is still loaded and migrated on first
+launch. `save()` is atomic (write `.tmp` + `std::filesystem::rename`). New
+config sections `gui` (font_size, effect) and `agent` (continuous,
+ignore_while_speaking) added to schema + example.
+
+**Font zoom (plan step A)**: JetBrains Mono baked at 12–30 px (step 2) into the
+atlas at startup; **Ctrl +/−** (main + numpad) and **Ctrl+0** (reset) edge-detected
+in the render loop swap `nk_style_set_font` (in Nuklear 4.13.3 this rescales
+every widget — style sub-structs have no own fonts). All fixed row heights
+(top bar, chat, input, chips, status) are now proportional to the font height.
+The validated size is auto-saved to `bin/config.json` debounced 500 ms.
+Verified by screenshot at 18/26 px on both toolchains (live hotkey test left to
+the user: synthetic key injection does not reach the GLFW window from this
+session).

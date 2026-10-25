@@ -1,6 +1,8 @@
 // Krastor — application configuration.
-// Loads settings from a JSON file (config.json by default) with environment
-// variable fallback for the API key. See config.example.json for the schema.
+// Loads settings from a JSON file with environment variable fallback for the API
+// key. The runtime config lives next to the executable (exe_dir()/config.json);
+// a legacy config.json in the working directory is still read as a fallback and
+// migrated on first save. See config.example.json for the schema.
 
 #pragma once
 
@@ -31,19 +33,44 @@ struct SttConfig {
     int input_device = -1;
 };
 
+struct GuiConfig {
+    int font_size = 18;             // px, Ctrl +/- steps within [12, 30]
+    std::string effect;             // shader effect name ("" = built-in gradient)
+};
+
+struct AgentConfig {
+    bool continuous = false;            // hands-free mic -> STT -> LLM -> TTS loop
+    bool ignore_while_speaking = true;  // drop mic segments while thinking/speaking
+};
+
 struct Config {
     LlmConfig llm;
     TtsConfig tts;
     SttConfig stt;
+    GuiConfig gui;
+    AgentConfig agent;
+
+    // Directory containing the running executable ("." when undetectable).
+    static std::string exe_dir();
+
+    // Canonical runtime config path: <exe_dir>/config.json.
+    static std::string runtime_path();
+
+    // Path to load from: the runtime path when it exists, else a "config.json"
+    // in the working directory (legacy location, migrated on first save).
+    static std::string default_path();
 
     // Loads config from `path`. Missing file is not an error (defaults apply);
     // malformed JSON throws std::runtime_error. The api key falls back to the
     // KRASTOR_API_KEY then OPENAI_API_KEY environment variables when empty.
     static Config load(const std::string& path);
 
-    // Writes the current settings to `path` as JSON (same schema as load()).
-    // Used by the GUI settings modal. Throws std::runtime_error on write failure.
+    // Writes the current settings as JSON (same schema as load()). Used by the
+    // GUI settings modal and by the auto-save on every validated change.
+    // Atomic: serialized to `<path>.tmp` then renamed over the target, so a
+    // crash can never leave a half-written file. Throws on write failure.
     void save(const std::string& path) const;
+    void save() const { save(runtime_path()); }
 };
 
 } // namespace krastor

@@ -79,6 +79,11 @@ through type-specific highlighters into the same renderer.
 Game-loop window: continuous frame loop, GLSL shader background ("living surface"),
 UI toolkit drawn on top each frame.
 
+> Detailed design for the next Phase 5 features — Ctrl +/− font scaling, pluggable
+> GLSL background effects (mic spectrogram as first plugin), the continuous
+> hands-free cycle (mic → STT → LLM → text → TTS) and exe-folder config persistence —
+> is specified in **`spectogram_plan.md`** (repo root).
+
 Minimal library stack (all vendored in `libs/`, MIT/zlib, compile with MinGW + MSVC,
 Windows + Linux):
 
@@ -152,5 +157,9 @@ Each tracked folder has a `development.md` describing its development in detail.
   attachments** via Ctrl+V (clipboard bitmap) and **drag & drop** (images attach,
   text files insert), sent to the LLM as OpenAI multimodal parts; Listen/auto-speak
   wired to the voice engines on worker threads, GLSL animated background, settings
-  modal, JetBrains Mono UI font. Remaining: richer GLSL effects, markdown→styled
+  modal, JetBrains Mono UI font. **Ctrl +/- font zoom** (pre-baked font ladder
+12–30 px, layout rows scale with font height, size auto-saved debounced to the
+exe-folder config). Remaining: richer GLSL effects, markdown→styled
   rendering of LLM replies, mic selector in the GUI.
+  **Next-phase design:** `spectogram_plan.md` (font scaling, shader-effect plugins,
+  mic spectrogram, hands-free cycle, exe-folder config persistence).

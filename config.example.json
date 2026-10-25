@@ -14,5 +14,13 @@
   },
   "stt": {
     "input_device": -1
+  },
+  "gui": {
+    "font_size": 18,
+    "effect": ""
+  },
+  "agent": {
+    "continuous": false,
+    "ignore_while_speaking": true
   }
 }

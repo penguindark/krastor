@@ -1,11 +1,20 @@
 #include "config.h"
 
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
 
 #include <nlohmann/json.hpp>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace krastor {
 
@@ -18,6 +27,37 @@ std::string env(const char* name)
 }
 
 } // namespace
+
+std::string Config::exe_dir()
+{
+#ifdef _WIN32
+    char buf[MAX_PATH * 4];
+    const DWORD n = GetModuleFileNameA(nullptr, buf, DWORD(sizeof(buf)) - 1);
+    std::string p = (n > 0 && n < sizeof(buf)) ? std::string(buf, n) : std::string();
+#else
+    char buf[4096];
+    const ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    std::string p = (n > 0) ? std::string(buf, static_cast<size_t>(n)) : std::string();
+#endif
+    const size_t pos = p.find_last_of("/\\");
+    return pos == std::string::npos ? std::string(".") : p.substr(0, pos);
+}
+
+std::string Config::runtime_path()
+{
+    return exe_dir() + "/config.json";
+}
+
+std::string Config::default_path()
+{
+    std::error_code ec;
+    if (std::filesystem::exists(runtime_path(), ec))
+        return runtime_path();
+    std::ifstream legacy("config.json");
+    if (legacy)
+        return "config.json";  // legacy location; migrated to exe dir on first save
+    return runtime_path();      // will be created next to the exe on first save
+}
 
 Config Config::load(const std::string& path)
 {
@@ -51,6 +91,17 @@ Config Config::load(const std::string& path)
             const auto& j = root["stt"];
             cfg.stt.input_device = j.value("input_device", cfg.stt.input_device);
         }
+        if (root.contains("gui")) {
+            const auto& j = root["gui"];
+            cfg.gui.font_size = j.value("font_size", cfg.gui.font_size);
+            cfg.gui.effect = j.value("effect", cfg.gui.effect);
+        }
+        if (root.contains("agent")) {
+            const auto& j = root["agent"];
+            cfg.agent.continuous = j.value("continuous", cfg.agent.continuous);
+            cfg.agent.ignore_while_speaking =
+                j.value("ignore_while_speaking", cfg.agent.ignore_while_speaking);
+        }
     }
 
     if (cfg.llm.api_key.empty()) {
@@ -80,11 +131,30 @@ void Config::save(const std::string& path) const
     root["stt"] = {
         {"input_device", stt.input_device},
     };
+    root["gui"] = {
+        {"font_size", gui.font_size},
+        {"effect", gui.effect},
+    };
+    root["agent"] = {
+        {"continuous", agent.continuous},
+        {"ignore_while_speaking", agent.ignore_while_speaking},
+    };
 
-    std::ofstream file(path, std::ios::trunc);
-    if (!file)
-        throw std::runtime_error("Cannot write config to " + path);
-    file << root.dump(2) << '\n';
+    // Atomic write: serialize to a temp file, then rename over the target
+    // (std::filesystem::rename replaces an existing file on both toolchains).
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream file(tmp, std::ios::trunc);
+        if (!file)
+            throw std::runtime_error("Cannot write config to " + path);
+        file << root.dump(2) << '\n';
+    }
+    std::error_code ec;
+    std::filesystem::rename(tmp, path, ec);
+    if (ec) {
+        std::filesystem::remove(tmp);
+        throw std::runtime_error("Cannot write config to " + path + ": " + ec.message());
+    }
 }
 
 } // namespace krastor

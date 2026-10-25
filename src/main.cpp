@@ -72,13 +72,15 @@ int main(int argc, char** argv)
 #endif
 
     // Args: [--gui] [config.json]
-    std::string config_path = "config.json";
     bool use_gui = false;
+    std::string config_path;  // empty -> default (exe dir, legacy CWD fallback)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--gui") use_gui = true;
         else config_path = a;
     }
+    if (config_path.empty())
+        config_path = krastor::Config::default_path();
     std::cout << "Krastor v0.4.0 (Phase 4 voice I/O)\n";
 
     krastor::Config cfg = [&] {
@@ -89,6 +91,15 @@ int main(int argc, char** argv)
             ::exit(1);
         }
     }();
+    // Migrate a legacy working-directory config to the canonical location next
+    // to the executable so future auto-saves have a complete file to update.
+    if (config_path == "config.json") {
+        try {
+            cfg.save();
+        } catch (const std::exception& e) {
+            std::cerr << "warning: config migration failed: " << e.what() << '\n';
+        }
+    }
 
     krastor::VoiceRegistry voices;
     if (voices.discover(cfg.tts.models_dir)) {

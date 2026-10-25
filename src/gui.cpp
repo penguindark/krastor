@@ -48,7 +48,9 @@ namespace {
 
 constexpr int kWinW = 900;
 constexpr int kWinH = 600;
-constexpr const char* kConfigPath = "config.json";
+// Font zoom ladder (Ctrl +/-): sizes baked into the atlas at startup, since
+// Nuklear glyphs are static and there is no dynamic font scaling.
+constexpr int kFontMin = 12, kFontMax = 30, kFontStep = 2, kFontDefault = 18;
 
 // ---------------------------------------------------------------- background
 // Fullscreen animated gradient drawn with a fragment shader before Nuklear.
@@ -358,8 +360,8 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         if (!s.voice.empty())
             voices.select(s.voice);
         try {
-            cfg.save(kConfigPath);
-            s.status = "Saved to " + std::string(kConfigPath);
+            cfg.save();  // atomic write next to the executable
+            s.status = "Saved to " + Config::runtime_path();
             s.dirty = true;
         } catch (const std::exception& e) {
             s.status = std::string("Save failed: ") + e.what();
@@ -679,23 +681,41 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
     struct nk_font_atlas* atlas = nullptr;
     nk_glfw3_font_stash_begin(&device, &atlas);
     // Monospace font with box-drawing/extended glyphs for terminal-style output;
-    // fall back to the built-in font when the file is missing.
-    struct nk_font* font = nullptr;
+    // fall back to the built-in font when the file is missing. Bake a ladder of
+    // sizes so Ctrl +/- can swap the style font at runtime.
+    std::vector<char> font_buf;  // must outlive the stash (atlas borrows it)
     {
         std::ifstream f("data/fonts/jetbrains-mono.ttf", std::ios::binary);
-        if (f) {
-            std::vector<char> buf((std::istreambuf_iterator<char>(f)),
-                                  std::istreambuf_iterator<char>());
-            if (!buf.empty())
-                font = nk_font_atlas_add_from_memory(atlas, buf.data(), buf.size(),
-                                                     18, nullptr);
-        }
+        if (f)
+            font_buf.assign((std::istreambuf_iterator<char>(f)),
+                            std::istreambuf_iterator<char>());
     }
-    if (!font)
-        font = nk_font_atlas_add_default(atlas, 18, nullptr);
+    std::vector<struct nk_font*> fonts;  // index i -> kFontMin + i*kFontStep px
+    for (int px = kFontMin; px <= kFontMax; px += kFontStep) {
+        struct nk_font* fn = font_buf.empty()
+            ? nk_font_atlas_add_default(atlas, (float)px, nullptr)
+            : nk_font_atlas_add_from_memory(atlas, font_buf.data(), font_buf.size(),
+                                            (float)px, nullptr);
+        if (fn)
+            fonts.push_back(fn);
+    }
     nk_glfw3_font_stash_end(&device);
-    if (font)
-        nk_style_set_font(&device.ctx, &font->handle);
+    font_buf.clear();
+    font_buf.shrink_to_fit();
+
+    // Font zoom state: style.font drives every widget (4.13.3 has no per-widget
+    // fonts), so swapping it rescales the whole UI.
+    auto font_index_for = [&](int px) {
+        int i = (px - kFontMin + kFontStep / 2) / kFontStep;
+        if (i < 0) i = 0;
+        if (!fonts.empty() && i >= (int)fonts.size()) i = (int)fonts.size() - 1;
+        return i;
+    };
+    int font_px = cfg.gui.font_size;
+    if (!fonts.empty())
+        nk_style_set_font(&device.ctx, &fonts[font_index_for(font_px)]->handle);
+    bool prev_plus = false, prev_minus = false, prev_zero = false;
+    double font_save_due = 0.0;  // debounce timestamp for auto-save
     // Semi-transparent panels so the shader background shows through.
     // NOTE: the window body is painted from style.window.fixed_background;
     // style.window.background only colors dynamic panels (groups, popups).
@@ -759,14 +779,59 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             }
         }
 
+        // ---- Ctrl +/-/0 font zoom (edge-detected; debounced auto-save) ----
+        if (!fonts.empty()) {
+            const bool ctrl = glfwGetKey(win, GLFW_KEY_LEFT_CONTROL) ||
+                              glfwGetKey(win, GLFW_KEY_RIGHT_CONTROL);
+            const bool plus = ctrl && (glfwGetKey(win, GLFW_KEY_EQUAL) ||
+                                       glfwGetKey(win, GLFW_KEY_KP_ADD));
+            const bool minus = ctrl && (glfwGetKey(win, GLFW_KEY_MINUS) ||
+                                        glfwGetKey(win, GLFW_KEY_KP_SUBTRACT));
+            const bool zero = ctrl && glfwGetKey(win, GLFW_KEY_0);
+            int new_px = font_px;
+            if (plus && !prev_plus)
+                new_px += kFontStep;
+            else if (minus && !prev_minus)
+                new_px -= kFontStep;
+            else if (zero && !prev_zero)
+                new_px = kFontDefault;
+            prev_plus = plus;
+            prev_minus = minus;
+            prev_zero = zero;
+            if (new_px != font_px) {
+                font_px = new_px < kFontMin ? kFontMin
+                        : new_px > kFontMax ? kFontMax
+                                            : new_px;
+                nk_style_set_font(&device.ctx, &fonts[font_index_for(font_px)]->handle);
+                cfg.gui.font_size = font_px;
+                font_save_due = glfwGetTime() + 0.5;  // debounce the write
+            }
+        }
+        if (font_save_due > 0.0 && glfwGetTime() >= font_save_due) {
+            font_save_due = 0.0;
+            try {
+                cfg.save();  // validated: the new size was applied without error
+            } catch (const std::exception&) {
+            }
+        }
+
         nk_glfw3_new_frame(&device);
         struct nk_context* ctx = &device.ctx;
 
         // ---- main surface (transparent: the shader shows through) ----
         nk_begin(ctx, "Krastor", nk_rect(0, 0, (float)w, (float)h), 0);
         {
+            // All fixed row heights scale with the font so the layout follows
+            // the Ctrl +/- zoom.
+            const float fh = ctx->style.font && ctx->style.font->height > 0.0f
+                                 ? ctx->style.font->height : 18.0f;
+            const float top_h = fh * 2.4f;
+            const float input_h = fh * 3.7f;
+            const float status_h = fh * 1.2f;
+            const float chip_h = fh * 1.45f;
+
             // Top bar: title | speak toggle | settings
-            nk_layout_row_begin(ctx, NK_DYNAMIC, 44, 3);
+            nk_layout_row_begin(ctx, NK_DYNAMIC, top_h, 3);
             nk_layout_row_push(ctx, 0.62f);
             nk_label(ctx, "Krastor", NK_MIDDLE_LEFT);
             nk_layout_row_push(ctx, 0.18f);
@@ -778,22 +843,21 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             nk_layout_row_end(ctx);
 
             // Chat history: this Nuklear has no "fill remaining" row, so the
-            // group height is the window height minus the other fixed rows
-            // (top bar 44 + input 66 + status 22 + attachment row) plus
-            // row spacing/padding.
-            const float attach_h = app.attachments.empty() ? 0.0f : 30.0f;
-            const float chat_h = (float)h - 44.0f - 66.0f - 22.0f - attach_h - 34.0f;
+            // group height is the window height minus the other rows (all
+            // font-proportional) plus row spacing/padding.
+            const float attach_h = app.attachments.empty() ? 0.0f : chip_h + 4.0f;
+            const float chat_h = (float)h - top_h - input_h - status_h - attach_h - 34.0f;
             chat_panel(ctx, app, chat_h > 60.0f ? chat_h : 60.0f);
 
             // Attachment chips: one per pasted image, click a chip to remove it.
             if (!app.attachments.empty()) {
-                nk_layout_row_begin(ctx, NK_STATIC, 26, (int)app.attachments.size());
+                nk_layout_row_begin(ctx, NK_STATIC, chip_h, (int)app.attachments.size());
                 size_t remove_idx = SIZE_MAX;
                 for (size_t i = 0; i < app.attachments.size(); ++i) {
                     char chip[64];
                     std::snprintf(chip, sizeof(chip), "[x] %dx%d",
                                   app.attachments[i].width, app.attachments[i].height);
-                    nk_layout_row_push(ctx, 118.0f);
+                    nk_layout_row_push(ctx, fh * 6.5f);
                     if (nk_button_label(ctx, chip))
                         remove_idx = i;
                 }
@@ -803,7 +867,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             }
 
             // Input row: multiline box (Enter sends, Shift+Enter newline).
-            nk_layout_row_begin(ctx, NK_DYNAMIC, 66, 5);
+            nk_layout_row_begin(ctx, NK_DYNAMIC, input_h, 5);
             nk_layout_row_push(ctx, 0.44f);
             const nk_flags edit_state = nk_edit_string_zero_terminated(
                 ctx,
@@ -841,7 +905,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 app.start_listen();
 
             // Status line
-            nk_layout_row_dynamic(ctx, 22, 1);
+            nk_layout_row_dynamic(ctx, status_h, 1);
             std::string status_buf;
             const char* status = "";
             if (app.worker == AppState::Worker::Thinking) status = "thinking...";
