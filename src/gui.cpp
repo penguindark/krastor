@@ -609,8 +609,21 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     // fixed_background is fully transparent so the shader shows through.
     nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
                              nk_style_item_color(nk_rgba(16, 18, 24, 235)));
-    nk_begin(ctx, "Settings", nk_rect((win_w - mw) / 2.0f, (win_h - mh) / 2.0f, mw, mh),
-             NK_WINDOW_TITLE | NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE);
+    // NOTE: the title-bar X button in Nuklear 4.13.3 only sets NK_WINDOW_HIDDEN
+    // (never NK_WINDOW_CLOSED), so nk_window_is_closed() can't detect it. When
+    // the window is hidden, nk_begin() returns 0 with win->layout == 0 and any
+    // widget call afterwards trips NK_ASSERT(ctx->current->layout). Detect the
+    // X click here instead: treat "begin failed" as closed, un-hide the window
+    // so the gear button can open it again next time.
+    if (!nk_begin(ctx, "Settings", nk_rect((win_w - mw) / 2.0f, (win_h - mh) / 2.0f, mw, mh),
+                  NK_WINDOW_TITLE | NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE)) {
+        nk_end(ctx);
+        nk_window_show(ctx, "Settings", NK_SHOWN);
+        nk_style_pop_style_item(ctx);
+        s.open = false;
+        s.status.clear();
+        return false;
+    }
 
     nk_layout_row_dynamic(ctx, 26, 1);
     nk_label(ctx, "Agent name", NK_LEFT);
@@ -746,14 +759,8 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         s.status.clear();
     }
 
-    const bool closed_by_x = nk_window_is_closed(ctx, "Settings") != 0;
     nk_end(ctx);
     nk_style_pop_style_item(ctx);
-    if (closed_by_x) {
-        s.open = false;
-        s.status.clear();
-        return false;
-    }
     return true;
 }
 

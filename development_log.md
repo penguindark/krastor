@@ -508,3 +508,27 @@ The last step of `chat_ux_plan.md` — the chat panel is now selectable:
   highlight across two styled lines) and, with posted WM_KEYDOWN messages,
   Ctrl+A + Ctrl+C put the full ANSI-stripped document (2720 chars, no ESC
   bytes) on the clipboard. Both toolchains build clean.
+
+---
+
+## 2026-10-26 (later) - fix: crash when closing Settings with the X button
+
+Closing the Settings modal via its title-bar X button aborted the process
+(MinGW: `Assertion failed: ctx->current->layout`; MSVC: "abort() has been
+called", no `krastor_error.log` - so not a C++ exception).
+
+- Root cause: in Nuklear 4.13.3 the X button handler only sets
+  `NK_WINDOW_HIDDEN` on the panel (synced to the window at panel end), never
+  `NK_WINDOW_CLOSED`. Our `nk_window_is_closed()` check therefore never fired,
+  `SettingsState::open` stayed true, and the next frame's `nk_begin("Settings")`
+  returned 0 with `win->layout == 0`; the first widget call then tripped
+  `NK_ASSERT(ctx->current->layout)` in `nk_row_layout` (nuklear.h:22370).
+- Reproduced headlessly with a temporary UITEST hook that called
+  `nk_window_show(ctx, "Settings", NK_HIDDEN)` (identical flag effect to the
+  X click) - process died with the same assert, confirming the chain.
+- Fix in `settings_modal`: check the `nk_begin()` return value; on 0 (hidden),
+  `nk_end`, `nk_window_show(..., NK_SHOWN)` to un-hide so the gear button can
+  reopen it, pop the pushed style item, set `s.open = false` and return. The
+  dead `nk_window_is_closed()` path was removed.
+- Verified headlessly: hide -> close -> reopen -> hide cycles ran repeatedly
+  with the app surviving; both toolchains build clean. Repro hooks removed.

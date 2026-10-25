@@ -96,10 +96,20 @@ are git-ignored — run `tools/download_deps.py` once after cloning.
   rescales every widget. `nk_font_atlas_add_from_memory` **borrows** the buffer
   until `nk_font_stash_end` (keep it alive until then).
 - Nuklear draws `style.window.fixed_background` for **every fixed window**
-  (no flag needed) — a translucent main window must set its alpha to 0, and
+  (no flag needed) - a translucent main window must set its alpha to 0, and
   popups/modals need their own pushed background. Dynamic windows (groups,
   combos) use `style.window.background` (an `nk_color`, push with
   `nk_style_push_color`, not `push_style_item`).
+- Nuklear 4.13.3 title-bar **X button sets `NK_WINDOW_HIDDEN`, never
+  `NK_WINDOW_CLOSED`** (nuklear.h close-button handler), so
+  `nk_window_is_closed()` never fires for it. If app state then keeps calling
+  `nk_begin()` on the hidden window, it returns 0 with `win->layout == 0` and
+  the next widget call trips `NK_ASSERT(ctx->current->layout)`
+  (e.g. `nk_row_layout`, nuklear.h:22370) - abort, no C++ exception, so the
+  `set_terminate` logger stays silent. Correct closable-window pattern:
+  `if (!nk_begin(...)) { nk_end(ctx); nk_window_show(ctx, name, NK_SHOWN);
+  ...treat as closed...; }` - the `NK_SHOWN` un-hide lets the window be
+  reopened later (and lets the GC free it meanwhile).
 - Shader `main()` wrapper trick: prepend `#define main effect_main` + a
   `void effect_main();` prototype, append the real `main()` after
   `#undef main` — without the `#undef` the footer's `main` is renamed too and
