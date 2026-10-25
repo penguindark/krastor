@@ -98,6 +98,56 @@ std::string fmt_thousands(long long v)
     return neg ? "-" + out : out;
 }
 
+// ---- UTF-8 codepoint helpers (selection maps on codepoints, not bytes, so
+// Italian accents and emoji stay one position each) ----
+int cp_len(unsigned char c)
+{
+    return c < 0x80 ? 1 : c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : 2;
+}
+int cp_count(const std::string& s)
+{
+    int n = 0;
+    for (size_t i = 0; i < s.size(); i += cp_len(static_cast<unsigned char>(s[i])))
+        ++n;
+    return n;
+}
+// Byte offset of codepoint `cp` (clamped to the string end).
+size_t cp_to_byte(const std::string& s, int cp)
+{
+    size_t i = 0;
+    int n = 0;
+    while (i < s.size() && n < cp) {
+        i += cp_len(static_cast<unsigned char>(s[i]));
+        ++n;
+    }
+    return i;
+}
+bool is_word_char(unsigned char c)
+{
+    return c >= 0x80 || std::isalnum(c) != 0 || c == '_';
+}
+
+// ---- Chat selection machinery (chat_ux_plan Step 4) ----
+// The chat is custom-drawn, so selection is implemented on top of the layout
+// pass: every frame the wrap in draw_chat_line records a hit-map (pixel rect +
+// codepoint range per drawn token) and the mouse/keyboard map into it. The
+// virtual document is the ANSI-stripped text of all chat lines joined by '\n';
+// prefixes ("> ", "Krastor: ", "! ") and stats sub-lines are not selectable.
+struct ChatSeg {
+    float x0, x1;      // pixel span of the token
+    int line;          // source ChatLine index
+    int cp0, cp1;      // codepoint range within that line's plain text
+};
+struct ChatHitLine {
+    float y, h;        // pixel span (window coordinates, scroll applied)
+    int line;
+    std::vector<ChatSeg> segs;
+};
+// Resolved selection bounds in (line, cp) space, lo <= hi.
+struct SelRange {
+    int lo_line, lo_cp, hi_line, hi_cp;
+};
+
 struct SettingsState {
     char name[128] = {0};
     char base_url[512] = {0};
@@ -178,6 +228,23 @@ struct AppState {
     // Multiline chat input (Enter sends, Shift+Enter inserts a newline).
     // Large buffer so pasted code/long prompts are never silently truncated.
     char input[16384] = {0};
+
+    // ---- Chat text selection (chat_ux_plan Step 4) ----
+    // Virtual document: ANSI-stripped text of every chat line joined by '\n'.
+    // Selection is stored as codepoint offsets into that document; the hit-map
+    // (chat_hits) is rebuilt by chat_panel every frame.
+    std::vector<std::string> doc_lines;
+    std::vector<int> doc_start;   // codepoint offset where each line begins
+    int doc_len = 0;
+    std::vector<ChatHitLine> chat_hits;
+    int sel_anchor = -1, sel_caret = -1;  // -1 = no selection
+    bool chat_focused = false;    // click in the chat routes selection keys
+    bool sel_dragging = false, sel_moved = false;
+    double last_click_t = 0.0;    // for double/triple click detection
+    int last_click_x = 0, last_click_y = 0, click_count = 0;
+    int scroll_cmd = 0;  // 1=PageUp 2=PageDown 3=Home 4=End, consumed by chat_panel
+    bool clear_edit_focus = false;  // chat click: drop the input box's edit focus
+    bool uitest_sel_done = false;  // one-shot selection seed for screenshot tests
 
     AppState(Config& c, VoiceRegistry& v)
         : cfg(c), voices(v), conv(c.llm.system_prompt), llm(c.llm), tts(v, c), stt(c)
@@ -436,6 +503,100 @@ struct AppState {
     }
 };
 
+// ------------------------------------------------------------- chat document
+// Rebuild the virtual selection document: every chat line with ANSI escapes
+// stripped (exactly what the renderer draws), joined by '\n' in the offsets.
+void rebuild_chat_doc(AppState& app)
+{
+    app.doc_lines.clear();
+    app.doc_start.clear();
+    app.doc_len = 0;
+    for (const auto& l : app.lines) {
+        app.doc_start.push_back(app.doc_len);
+        std::string plain;
+        for (const auto& r : ansi_parse(l.text, 0, 0, 0))
+            plain += r.text;
+        app.doc_len += cp_count(plain);
+        app.doc_lines.push_back(std::move(plain));
+        app.doc_len += 1;  // the joining '\n' (trimmed after the last line)
+    }
+    if (app.doc_len > 0)
+        --app.doc_len;
+}
+
+// Resolve a document offset to (line, codepoint within that line).
+void doc_resolve(const AppState& app, int off, int& line, int& cp)
+{
+    line = static_cast<int>(app.doc_lines.size()) - 1;
+    for (int i = 0; i < static_cast<int>(app.doc_lines.size()); ++i)
+        if (app.doc_start[i] > off) { line = i - 1; break; }
+    if (line < 0)
+        line = 0;
+    cp = off - app.doc_start[line];
+    const int len = cp_count(app.doc_lines[line]);
+    cp = cp < 0 ? 0 : cp > len ? len : cp;
+}
+
+// Map a pixel position (window coordinates) to (line, cp) via the hit-map.
+bool chat_hit_test(const AppState& app, float x, float y, int& line, int& cp)
+{
+    for (const auto& hl : app.chat_hits) {
+        if (y < hl.y || y >= hl.y + hl.h)
+            continue;
+        line = hl.line;
+        if (hl.segs.empty()) { cp = 0; return true; }
+        if (x <= hl.segs.front().x0) { cp = hl.segs.front().cp0; return true; }
+        for (const auto& s : hl.segs) {
+            if (x < s.x1) {
+                const float t = s.x1 > s.x0 ? (x - s.x0) / (s.x1 - s.x0) : 0.0f;
+                const int c = s.cp0 + (int)std::lround(t * (s.cp1 - s.cp0));
+                cp = c < s.cp0 ? s.cp0 : c > s.cp1 ? s.cp1 : c;
+                return true;
+            }
+        }
+        cp = hl.segs.back().cp1;
+        return true;
+    }
+    return false;
+}
+
+// Extract document range [lo, hi) as plain text (raw UTF-8 preserved).
+std::string chat_extract(const AppState& app, int lo, int hi)
+{
+    std::string out;
+    for (size_t i = 0; i < app.doc_lines.size(); ++i) {
+        const int ls = app.doc_start[i];
+        const int le = ls + cp_count(app.doc_lines[i]);
+        const int a = lo > ls ? lo : ls;
+        const int b = hi < le ? hi : le;
+        if (a < b) {
+            const size_t b0 = cp_to_byte(app.doc_lines[i], a - ls);
+            const size_t b1 = cp_to_byte(app.doc_lines[i], b - ls);
+            out.append(app.doc_lines[i], b0, b1 - b0);
+        }
+        if (i + 1 < app.doc_lines.size() && lo <= le && le < hi)
+            out += '\n';  // the joining newline sits at offset le
+    }
+    return out;
+}
+
+// Word bounds (codepoints) around `cp` within one document line.
+void word_range(const AppState& app, int line, int cp, int& lo, int& hi)
+{
+    const std::string& s = app.doc_lines[line];
+    std::vector<char> word;
+    for (size_t i = 0; i < s.size(); i += cp_len(static_cast<unsigned char>(s[i])))
+        word.push_back(is_word_char(static_cast<unsigned char>(s[i])) ? 1 : 0);
+    const int n = static_cast<int>(word.size());
+    const int c = cp < n ? cp : n - 1;
+    if (n == 0 || c < 0 || !word[c]) { lo = hi = cp; return; }
+    int a = c, b = c;
+    while (a > 0 && word[a - 1]) --a;
+    while (b < n && word[b]) ++b;
+    lo = a;
+    hi = b;
+}
+
 // ------------------------------------------------------------- settings modal
 bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
                     SettingsState& s, int win_w, int win_h, EffectEngine& fx)
@@ -606,19 +767,27 @@ float text_w_px(const struct nk_user_font* f, const char* s, int n)
 
 // One layout token (a word or a run of spaces) carrying its ANSI style.
 // Newlines are represented by a token with force_break = true.
+// cp_begin is the token's first codepoint within the body text (-1 for the
+// role prefix and other non-selectable tokens).
 struct Word {
     std::string text;
     struct nk_color fg;
     struct nk_color bg;   // a == 0 -> no background
     bool force_break;
+    int cp_begin = -1;
 };
 
 // Splits styled runs into space/word/newline tokens, preserving indentation
 // (runs of spaces are kept as their own tokens so code blocks stay aligned).
+// runs[0] is the role prefix (not selectable); the remaining runs carry the
+// body's codepoint numbering used for the selection hit-map.
 std::vector<Word> tokenize_runs(const std::vector<AnsiRun>& runs)
 {
     std::vector<Word> toks;
+    bool first_run = true;
     for (const auto& r : runs) {
+        const bool prefix_run = first_run;
+        first_run = false;
         struct nk_color fg = nk_rgba(r.r, r.g, r.b, 255);
         if (r.bold) {  // no bold font face: brighten instead
             fg.r = static_cast<nk_byte>(fg.r > 195 ? 255 : fg.r + 60);
@@ -628,22 +797,28 @@ std::vector<Word> tokenize_runs(const std::vector<AnsiRun>& runs)
         const struct nk_color bg =
             r.has_bg ? nk_rgba(r.br, r.bg, r.bb, 255) : nk_rgba(0, 0, 0, 0);
         size_t i = 0;
+        int lcp = 0;  // codepoints consumed within this run
         while (i < r.text.size()) {
             const char ch = r.text[i];
             if (ch == '\n') {
-                toks.push_back({"", fg, bg, true});
+                toks.push_back({"", fg, bg, true, prefix_run ? -1 : lcp});
                 ++i;
+                ++lcp;
             } else if (ch == ' ') {
                 size_t j = i;
                 while (j < r.text.size() && r.text[j] == ' ')
                     ++j;
-                toks.push_back({r.text.substr(i, j - i), fg, bg, false});
+                toks.push_back({r.text.substr(i, j - i), fg, bg, false,
+                                prefix_run ? -1 : lcp});
+                lcp += static_cast<int>(j - i);
                 i = j;
             } else {
                 size_t j = i;
                 while (j < r.text.size() && r.text[j] != ' ' && r.text[j] != '\n')
                     ++j;
-                toks.push_back({r.text.substr(i, j - i), fg, bg, false});
+                toks.push_back({r.text.substr(i, j - i), fg, bg, false,
+                                prefix_run ? -1 : lcp});
+                lcp += cp_count(r.text.substr(i, j - i));
                 i = j;
             }
         }
@@ -652,12 +827,16 @@ std::vector<Word> tokenize_runs(const std::vector<AnsiRun>& runs)
 }
 
 // Splits a single word wider than max_w into UTF-8-safe chunks that fit.
-std::vector<std::string> split_wide(const std::string& w, float max_w,
-                                    const struct nk_user_font* f)
+// Returns (chunk, codepoint offset of the chunk within the original word).
+std::vector<std::pair<std::string, int>> split_wide(const std::string& w,
+                                                   float max_w,
+                                                   const struct nk_user_font* f)
 {
-    std::vector<std::string> out;
+    std::vector<std::pair<std::string, int>> out;
     size_t i = 0;
+    int cp_off = 0;
     while (i < w.size()) {
+        const int start_cp = cp_off;
         size_t j = i;
         float x = 0.0f;
         while (j < w.size()) {
@@ -670,8 +849,9 @@ std::vector<std::string> split_wide(const std::string& w, float max_w,
                 break;
             x += cw;
             j = k;
+            ++cp_off;
         }
-        out.push_back(w.substr(i, j - i));
+        out.push_back({w.substr(i, j - i), start_cp});
         i = j;
     }
     return out;
@@ -679,9 +859,12 @@ std::vector<std::string> split_wide(const std::string& w, float max_w,
 
 // Draws one chat message (prefix + ANSI-styled body) word-wrapped at text_w,
 // with diff-style full-line backgrounds. Returns the pixel height consumed.
+// When src_line >= 0, every drawn body token is recorded into `hits` for the
+// selection hit-map, and the selection `sel` (if any) paints a highlight.
 float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
                      const std::string& body, struct nk_color default_color,
-                     float text_w)
+                     float text_w, int src_line,
+                     std::vector<ChatHitLine>* hits, const SelRange* sel)
 {
     const struct nk_user_font* f = ctx->style.font;
     const float row_h = f && f->height > 0.0f ? f->height : 18.0f;
@@ -706,8 +889,9 @@ float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
             continue;
         }
         bool first = true;
-        for (auto& chunk : split_wide(w.text, text_w, f)) {
-            Word t{std::move(chunk), w.fg, w.bg, false};
+        for (auto& pr : split_wide(w.text, text_w, f)) {
+            Word t{std::move(pr.first), w.fg, w.bg, false,
+                   w.cp_begin < 0 ? -1 : w.cp_begin + pr.second};
             if (!first) t.force_break = true;  // chunk continues on next line
             toks.push_back(std::move(t));
             first = false;
@@ -764,16 +948,48 @@ float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
             uniform = false;
         if (uniform)
             nk_fill_rect(canvas, nk_rect(area.x, y, text_w, row_h), 0, bg);
+        ChatHitLine hit_line;
+        hit_line.y = y;
+        hit_line.h = row_h;
+        hit_line.line = src_line;
         float tx = area.x;
         for (const auto& w : ln) {
             const float ww = text_w_px(f, w.text.data(), (int)w.text.size());
+            const int ncp = w.cp_begin >= 0 ? cp_count(w.text) : 0;
             if (!uniform && w.bg.a)
                 nk_fill_rect(canvas, nk_rect(tx, y, ww, row_h), 0, w.bg);
+            // Selection highlight: translucent accent behind the selected
+            // portion of this token (monospace: cp->x is linear).
+            if (sel && src_line >= 0 && ncp > 0) {
+                const int a = w.cp_begin, b = w.cp_begin + ncp;
+                const bool after_lo = src_line > sel->lo_line ||
+                                      (src_line == sel->lo_line && b > sel->lo_cp);
+                const bool before_hi = src_line < sel->hi_line ||
+                                       (src_line == sel->hi_line && a < sel->hi_cp);
+                if (after_lo && before_hi) {
+                    const int ha = src_line == sel->lo_line && sel->lo_cp > a
+                                       ? sel->lo_cp : a;
+                    const int hb = src_line == sel->hi_line && sel->hi_cp < b
+                                       ? sel->hi_cp : b;
+                    if (hb > ha) {
+                        const float px = ww / ncp;
+                        nk_fill_rect(canvas,
+                                     nk_rect(tx + (ha - a) * px, y,
+                                             (hb - ha) * px, row_h),
+                                     0, nk_rgba(60, 110, 200, 115));
+                    }
+                }
+            }
             nk_draw_text(canvas, nk_rect(tx, y, ww + 2.0f, row_h),
                          w.text.data(), (int)w.text.size(), f,
                          nk_rgba(0, 0, 0, 0), w.fg);
+            if (hits && src_line >= 0 && ncp > 0)
+                hit_line.segs.push_back({tx, tx + ww, src_line, w.cp_begin,
+                                         w.cp_begin + ncp});
             tx += ww;
         }
+        if (hits && src_line >= 0)
+            hits->push_back(std::move(hit_line));
         y += row_h;
     }
     return total_h;
@@ -820,19 +1036,110 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
             ctx->input.mouse.scroll_delta.y = 0.0f;  // consumed
         }
 
+        // ---- selection: mouse (uses the hit-map built during last frame) ----
+        struct nk_input* in = &ctx->input;
+        const bool over = nk_input_is_mouse_hovering_rect(in, gb);
+        struct nk_mouse_button* L = &in->mouse.buttons[NK_BUTTON_LEFT];
+        if (L->clicked && over) {
+            app.chat_focused = true;
+            // Release the text-edit focus (next frame) so keyboard goes to the
+            // selection keys instead of moving the invisible edit caret.
+            app.clear_edit_focus = true;
+            int line = 0, cp = 0;
+            const bool hit =
+                chat_hit_test(app, in->mouse.pos.x, in->mouse.pos.y, line, cp);
+            const double now = glfwGetTime();
+            const bool again =
+                now - app.last_click_t < 0.4 &&
+                std::fabs(in->mouse.pos.x - app.last_click_x) < 8.0 &&
+                std::fabs(in->mouse.pos.y - app.last_click_y) < 8.0;
+            app.click_count = again ? app.click_count + 1 : 1;
+            app.last_click_t = now;
+            app.last_click_x = (int)in->mouse.pos.x;
+            app.last_click_y = (int)in->mouse.pos.y;
+            if (hit) {
+                const int off = app.doc_start[line] + cp;
+                if (app.click_count >= 3) {  // triple-click: whole source line
+                    app.sel_anchor = app.doc_start[line];
+                    app.sel_caret = app.doc_start[line] +
+                                    cp_count(app.doc_lines[line]);
+                } else if (app.click_count == 2) {  // double-click: word
+                    int wl = 0, wr = 0;
+                    word_range(app, line, cp, wl, wr);
+                    app.sel_anchor = app.doc_start[line] + wl;
+                    app.sel_caret = app.doc_start[line] + wr;
+                } else {
+                    app.sel_anchor = app.sel_caret = off;
+                }
+                app.sel_dragging = true;
+                app.sel_moved = false;
+            } else {
+                app.sel_anchor = app.sel_caret = -1;
+                app.sel_dragging = false;
+            }
+        } else if (L->down && app.sel_dragging && app.sel_anchor >= 0) {
+            int line = 0, cp = 0;
+            if (chat_hit_test(app, in->mouse.pos.x, in->mouse.pos.y, line, cp)) {
+                const int off = app.doc_start[line] + cp;
+                if (off != app.sel_caret) {
+                    app.sel_caret = off;
+                    app.sel_moved = true;
+                    app.follow_bottom = false;  // auto-pin pauses while selecting
+                }
+            }
+        } else if (!L->down && app.sel_dragging) {
+            app.sel_dragging = false;
+            // A plain click (no drag, not part of a multi-click) clears.
+            if (!app.sel_moved && app.click_count == 1)
+                app.sel_anchor = app.sel_caret = -1;
+        }
+
+        // Rebuild the virtual document and resolve the selection bounds; the
+        // hit-map (chat_hits) is refilled by draw_chat_line below.
+        rebuild_chat_doc(app);
+        if (std::getenv("KRASTOR_UITEST") && !app.uitest_sel_done &&
+            app.doc_lines.size() > 2) {
+            // Seed a selection across the first styled lines and scroll to the
+            // top so the highlight is visible in a screenshot.
+            app.uitest_sel_done = true;
+            app.sel_anchor = app.doc_start[1];
+            app.sel_caret = app.doc_start[2] + 20;
+            app.chat_focused = true;  // so posted Ctrl+A/Ctrl+C hotkeys apply
+            app.follow_bottom = false;
+            app.scroll_cmd = 3;  // Home
+        }
+        app.chat_hits.clear();
+        SelRange sel{};
+        bool has_sel = false;
+        if (app.sel_anchor >= 0 && app.sel_caret >= 0 &&
+            app.sel_anchor != app.sel_caret) {
+            const int lo = app.sel_anchor < app.sel_caret ? app.sel_anchor
+                                                         : app.sel_caret;
+            const int hi = app.sel_anchor < app.sel_caret ? app.sel_caret
+                                                         : app.sel_anchor;
+            doc_resolve(app, lo, sel.lo_line, sel.lo_cp);
+            doc_resolve(app, hi, sel.hi_line, sel.hi_cp);
+            has_sel = true;
+        }
+
         float content_h = 0.0f;
+        int src = 0;
         for (const auto& l : app.lines) {
             const std::string prefix = l.who == "you" ? "> " :
                                        l.who == "krastor" ? app.name + ": " : "! ";
             struct nk_color col = nk_rgb(160, 160, 160);
             if (l.who == "you") col = nk_rgb(120, 180, 255);
             else if (l.who == "krastor") col = nk_rgb(130, 220, 150);
-            content_h += draw_chat_line(ctx, prefix, l.text, col, text_w) + spacing;
+            content_h += draw_chat_line(ctx, prefix, l.text, col, text_w, src,
+                                        &app.chat_hits, has_sel ? &sel : nullptr) +
+                         spacing;
             // Dim stats sub-line under the reply (model - time - tok/s).
             if (!l.meta.empty())
                 content_h += draw_chat_line(ctx, "  \xC2\xB7 ", l.meta,
-                                             nk_rgb(110, 110, 120), text_w) +
+                                             nk_rgb(110, 110, 120), text_w,
+                                             -1, nullptr, nullptr) +
                              spacing;
+            ++src;
         }
         // Follow-bottom pinning: keep the newest line in view while following.
         // The group keeps its own persistent scroll offset (nk_window_set_scroll
@@ -842,6 +1149,26 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         // view where the user left it; reaching the bottom re-enables follow.
         const float visible = height - 2.0f * ctx->style.window.padding.y - 8.0f;
         const float bottom = content_h > visible ? content_h - visible : 0.0f;
+        // Keyboard scroll commands (PageUp/PageDown/Home/End, set by the main
+        // loop when the chat has focus).
+        if (app.scroll_cmd) {
+            nk_uint sx = 0, sy = 0;
+            nk_window_get_scroll(ctx, &sx, &sy);
+            float off = (float)sy;
+            const float page = visible > row_h * 2.0f ? visible - row_h : visible;
+            switch (app.scroll_cmd) {
+                case 1: off -= page; break;
+                case 2: off += page; break;
+                case 3: off = 0.0f; break;
+                case 4: off = bottom; app.follow_bottom = true; break;
+            }
+            app.scroll_cmd = 0;
+            if (!app.follow_bottom) {
+                if (off < 0.0f) off = 0.0f;
+                if (off > bottom) off = bottom;
+                nk_group_set_scroll(ctx, "##chat", 0, (nk_uint)off);
+            }
+        }
         if (app.follow_bottom) {
             nk_group_set_scroll(ctx, "##chat", 0, (nk_uint)bottom);
         } else {
@@ -1110,6 +1437,127 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             }
         }
 
+        // ---- chat selection & scroll hotkeys (only while the chat has focus,
+        // i.e. after clicking in it; edge-detected like the font zoom) ----
+        if (app.chat_focused && !app.settings.open && app.doc_len > 0) {
+            struct KeyState {
+                bool l, r, u, d, home, end, pgup, pgdn, a, c, esc;
+            };
+            static KeyState kprev{};
+            const bool shift = glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) ||
+                               glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT);
+            const bool ctrl = glfwGetKey(win, GLFW_KEY_LEFT_CONTROL) ||
+                              glfwGetKey(win, GLFW_KEY_RIGHT_CONTROL);
+            auto kd = [&](int key) { return glfwGetKey(win, key) != 0; };
+            auto pressed = [](bool now, bool prev) { return now && !prev; };
+            KeyState kn{};
+            kn.l = kd(GLFW_KEY_LEFT); kn.r = kd(GLFW_KEY_RIGHT);
+            kn.u = kd(GLFW_KEY_UP); kn.d = kd(GLFW_KEY_DOWN);
+            kn.home = kd(GLFW_KEY_HOME); kn.end = kd(GLFW_KEY_END);
+            kn.pgup = kd(GLFW_KEY_PAGE_UP); kn.pgdn = kd(GLFW_KEY_PAGE_DOWN);
+            kn.a = ctrl && kd(GLFW_KEY_A);
+            kn.c = ctrl && kd(GLFW_KEY_C);
+            kn.esc = kd(GLFW_KEY_ESCAPE);
+
+            auto clamp_doc = [&](int v) {
+                return v < 0 ? 0 : v > app.doc_len ? app.doc_len : v;
+            };
+            auto start_sel = [&]() {
+                if (app.sel_anchor < 0)
+                    app.sel_anchor = app.sel_caret = app.doc_len;
+            };
+
+            if (shift && pressed(kn.l, kprev.l)) {
+                start_sel();
+                app.sel_caret = clamp_doc(app.sel_caret - 1);
+            }
+            if (shift && pressed(kn.r, kprev.r)) {
+                start_sel();
+                app.sel_caret = clamp_doc(app.sel_caret + 1);
+            }
+            if (shift && (pressed(kn.home, kprev.home) ||
+                          pressed(kn.end, kprev.end))) {
+                start_sel();
+                int line = 0, cp = 0;
+                doc_resolve(app, app.sel_caret, line, cp);
+                app.sel_caret = pressed(kn.home, kprev.home)
+                                    ? app.doc_start[line]
+                                    : app.doc_start[line] +
+                                          cp_count(app.doc_lines[line]);
+            }
+            if (shift && (pressed(kn.u, kprev.u) || pressed(kn.d, kprev.d))) {
+                start_sel();
+                const bool up = pressed(kn.u, kprev.u);
+                int line = 0, cp = 0;
+                doc_resolve(app, app.sel_caret, line, cp);
+                // Move one visual line: the hit-map holds every visual line of
+                // every chat line (off-screen ones included, they are laid out
+                // and clipped), in document order.
+                int idx = -1;
+                for (int i = 0; i < (int)app.chat_hits.size(); ++i) {
+                    const auto& hl = app.chat_hits[i];
+                    if (hl.line != line)
+                        continue;
+                    if (hl.segs.empty() ||
+                        (cp >= hl.segs.front().cp0 && cp <= hl.segs.back().cp1)) {
+                        idx = i;
+                        break;
+                    }
+                }
+                const int tgt = idx + (up ? -1 : 1);
+                if (idx >= 0 && tgt >= 0 && tgt < (int)app.chat_hits.size()) {
+                    const auto& cur = app.chat_hits[idx];
+                    const auto& tl = app.chat_hits[tgt];
+                    const int cur_base = cur.segs.empty() ? 0 : cur.segs.front().cp0;
+                    const int span = tl.segs.empty() ? 0
+                                                    : tl.segs.back().cp1 -
+                                                          tl.segs.front().cp0;
+                    const int off = cp - cur_base;
+                    app.sel_caret = app.doc_start[tl.line] +
+                                    (off < span ? off : span);
+                } else {
+                    const int len = cp_count(app.doc_lines[line]);
+                    app.sel_caret = up ? app.doc_start[line]
+                                       : app.doc_start[line] + len;
+                }
+            }
+            if (pressed(kn.a, kprev.a)) {
+                app.sel_anchor = 0;
+                app.sel_caret = app.doc_len;
+            }
+            if (pressed(kn.c, kprev.c) && app.sel_anchor >= 0 &&
+                app.sel_caret >= 0 && app.sel_anchor != app.sel_caret) {
+                const int lo = app.sel_anchor < app.sel_caret ? app.sel_anchor
+                                                             : app.sel_caret;
+                const int hi = app.sel_anchor < app.sel_caret ? app.sel_caret
+                                                             : app.sel_anchor;
+                const std::string txt = chat_extract(app, lo, hi);
+                if (!txt.empty())
+                    glfwSetClipboardString(win, txt.c_str());  // raw UTF-8
+            }
+            if (pressed(kn.esc, kprev.esc)) {
+                app.sel_anchor = app.sel_caret = -1;
+                app.chat_focused = false;
+            }
+            if (!shift) {  // plain scroll keys (Shift+Home/End select instead)
+                if (pressed(kn.pgup, kprev.pgup)) {
+                    app.follow_bottom = false;
+                    app.scroll_cmd = 1;
+                }
+                if (pressed(kn.pgdn, kprev.pgdn)) {
+                    app.follow_bottom = false;
+                    app.scroll_cmd = 2;
+                }
+                if (pressed(kn.home, kprev.home)) {
+                    app.follow_bottom = false;
+                    app.scroll_cmd = 3;
+                }
+                if (pressed(kn.end, kprev.end))
+                    app.scroll_cmd = 4;
+            }
+            kprev = kn;
+        }
+
         // Spectrum feed: live mic while listening, synthetic animation
         // otherwise; then shift one column into the history ring and check
         // whether the active shader file changed on disk.
@@ -1127,6 +1575,12 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         // ---- main surface (transparent: the shader shows through) ----
         nk_begin(ctx, "Krastor", nk_rect(0, 0, (float)w, (float)h), 0);
         {
+            // A chat click requested keyboard focus: drop the input box's edit
+            // focus (the edit lives in this window, so unfocus must run here).
+            if (app.clear_edit_focus) {
+                nk_edit_unfocus(ctx);
+                app.clear_edit_focus = false;
+            }
             // All fixed row heights scale with the font so the layout follows
             // the Ctrl +/- zoom.
             const float fh = ctx->style.font && ctx->style.font->height > 0.0f
@@ -1188,6 +1642,9 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 (nk_flags)NK_EDIT_BOX | (nk_flags)NK_EDIT_SIG_ENTER |
                     (nk_flags)NK_EDIT_CTRL_ENTER_NEWLINE,
                 app.input, sizeof(app.input) - 1, nk_filter_default);
+            // Typing focus back on the input releases the chat selection keys.
+            if ((edit_state & NK_EDIT_ACTIVE) != 0)
+                app.chat_focused = false;
             // A clipboard image was "pasted" while this field was focused.
             if (app.pending_image_paste) {
                 app.pending_image_paste = false;

@@ -1,5 +1,8 @@
 # Chat UX Plan — response stats, context footer, window size, scrolling, selection & copy
 
+**Status: fully implemented** (4 commits, Steps 1-4; verified per the
+Verification section, live mouse/keyboard feel pending user test).
+
 Detailed design for the next Phase 5 increment. Four features, in commit order:
 
 1. **Per-response LLM stats + footer context usage**

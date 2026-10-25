@@ -482,3 +482,29 @@ Implemented `chat_ux_plan.md` Step 1 (plan file committed with this change):
   the window. Screenshot after 3 up-notches shows the view scrolled to the top
   with the pin released. UITEST seed now adds 40 filler lines so the panel is
   scrollable.
+
+---
+
+## 2026-10-26 (later) — chat text selection & copy (chat_ux_plan Step 4)
+
+The last step of `chat_ux_plan.md` — the chat panel is now selectable:
+
+- `Word` layout tokens carry `cp_begin` (codepoint offset in the body, -1
+  for the role prefix); `tokenize_runs`/`split_wide` propagate it through
+  wrapping and wide-word splitting, and `draw_chat_line` records a per-frame
+  hit-map (`ChatHitLine`/`ChatSeg`: pixel rect + cp range per token) plus
+  paints the translucent accent-blue highlight behind selected runs.
+- Virtual document = ANSI-stripped line texts joined by '\n' (rebuilt per
+  frame); selection = codepoint offsets (UTF-8-safe for accents/emoji).
+- Mouse: click focuses the chat (edit focus released via `nk_edit_unfocus`
+  next frame), drag extends, plain click clears, double-click selects the word,
+  triple-click the whole source line. Keyboard (chat focused, edge-detected):
+  Shift+Left/Right/Up/Down/Home/End, Ctrl+A, Ctrl+C (raw UTF-8 to the
+  clipboard, ANSI stripped), Esc clears; PageUp/PageDown/Home/End scroll.
+- Input box audit: Nuklear's native mouse-select/Shift+arrows/Ctrl+C-X-V are
+  intact — the backend sets `clip.copy` separately and only `clip.paste`
+  is overridden by the image-paste hook.
+- Verified headlessly: UITEST seeds a selection (screenshot shows the
+  highlight across two styled lines) and, with posted WM_KEYDOWN messages,
+  Ctrl+A + Ctrl+C put the full ANSI-stripped document (2720 chars, no ESC
+  bytes) on the clipboard. Both toolchains build clean.
