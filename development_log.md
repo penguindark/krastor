@@ -806,3 +806,21 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   test voice 🎵, stop ❌. Each shows a tooltip (tiny popup window) on
   hover; send/listen dim while the worker is busy; text fallback labels when the emoji atlas is missing.
 - Enter-to-send, attach/stop/send/listen/voice actions unchanged, just relocated. Both toolchains clean.
+
+## 2026-10-26 (later) - FIX: floating action buttons now actually receive clicks
+
+- The cluster added above was drawn in a separate borderless Nuklear window
+  begun after the full-size main window. In 4.13.3 only the topmost window
+  gets input (every other window is forced to NK_WINDOW_ROM), and the main
+  window always overlaps the child - so the fab clicks never registered and
+  the main window widgets were read-only. The ❌ Stop button therefore never
+  silenced the TTS.
+- Rewritten without extra windows: the five buttons are drawn directly into
+  the main window's command buffer at absolute rects via the internal
+  nk_do_button_image / nk_do_button_text (NK_LIB, available because gui.cpp
+  defines NK_IMPLEMENTATION). Tooltip is a manually drawn rounded bubble in
+  the same buffer. The chat selection handler ignores clicks inside the
+  strip (AppState::fab_rect guard).
+- Verified end-to-end by temporarily injecting a synthetic mouse click into
+  ctx->input on the Send slot: with the input cleared the send fired; the
+  injection code was removed afterwards. Both toolchains clean.
