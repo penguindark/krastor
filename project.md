@@ -84,11 +84,6 @@ ANSI-stripped raw UTF-8 clipboard).
 Game-loop window: continuous frame loop, GLSL shader background ("living surface"),
 UI toolkit drawn on top each frame.
 
-> Detailed design for the next Phase 5 features — Ctrl +/− font scaling, pluggable
-> GLSL background effects (mic spectrogram as first plugin), the continuous
-> hands-free cycle (mic → STT → LLM → text → TTS) and exe-folder config persistence —
-> is specified in **`spectogram_plan.md`** (repo root).
-
 Minimal library stack (all vendored in `libs/`, MIT/zlib, compile with MinGW + MSVC,
 Windows + Linux):
 
@@ -177,6 +172,4 @@ complete): per-response stats sub-line + context-usage footer (`llm.context_size
 window-size persistence, wheel/keyboard scrolling with follow-bottom, chat text
 selection & UTF-8 copy (mouse + Shift+arrows). Remaining: markdown→styled
   rendering of LLM replies, mic selector in the GUI.
-  **Past design docs:** `spectogram_plan.md` (font scaling, shader-effect plugins,
-  mic spectrogram, hands-free cycle, exe-folder config persistence) and
-  **`chat_ux_plan.md`** (the chat UX increment above).
+  **Past design doc:** **`chat_ux_plan.md`** (the chat UX increment above).
