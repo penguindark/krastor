@@ -466,3 +466,19 @@ Implemented `chat_ux_plan.md` Step 1 (plan file committed with this change):
   resize from the last 500 ms before a clean exit.
 - Verified end-to-end: config-seeded size restored at startup; Win32-resizing
   the window updated the config after the debounce; clean WM_CLOSE exit works.
+
+---
+
+## 2026-10-26 — chat wheel scrolling with follow-bottom (chat_ux_plan Step 3)
+
+- `AppState::follow_bottom` replaces the per-frame force-pin: while following,
+  the chat group is pinned to the newest line as before; a mouse wheel notch over
+  the chat releases the pin and scrolls manually (3 text lines/notch, the Nuklear
+  scroll delta is consumed so its native 10%-of-height step does not stack).
+- Scrolling back down to within 4 px of the computed bottom re-enables follow.
+- Wheel injection verified headlessly: `PostMessage(WM_MOUSEWHEEL)` reaches
+  GLFW's window proc (the minimize test proved message delivery); the UITEST hook
+  bypasses the hover gate because the harness cannot move the real cursor over
+  the window. Screenshot after 3 up-notches shows the view scrolled to the top
+  with the pin released. UITEST seed now adds 40 filler lines so the panel is
+  scrollable.

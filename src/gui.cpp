@@ -159,6 +159,8 @@ struct AppState {
     std::atomic<bool> speaking{false};
     bool auto_speak = true;
     int last_prompt_tokens = 0;  // context occupancy = last request's prompt size
+    bool follow_bottom = true;   // chat auto-scrolls to newest unless the user
+                                 // scrolled back up (wheel/keys clear the flag)
 
     // ---- Hands-free pipeline (mic -> STT -> chat -> LLM -> TTS) ----
     // The Stt feeder thread pushes closed VAD segments into `utterances`; a
@@ -199,6 +201,14 @@ struct AppState {
             lines.push_back({"krastor",
                 E + "[48;2;80;20;20m-  full-width red diff line" + E + "[0m"});
             attach_clipboard_image();
+            // Filler so the panel is scrollable (wheel/keyboard scroll tests).
+            for (int i = 1; i <= 40; ++i) {
+                char buf[80];
+                std::snprintf(buf, sizeof(buf),
+                              "filler line %d - the quick brown fox jumps over "
+                              "the lazy dog", i);
+                lines.push_back({"sys", buf});
+            }
             // Auto-send one short message so the response stats line and the
             // context footer are visible in a screenshot without typing.
             auto_speak = false;  // keep the screenshot test silent
@@ -785,6 +795,31 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         // border and the vertical scrollbar.
         const float text_w = nk_window_get_width(ctx) -
                              ctx->style.window.scrollbar_size.x - 20.0f;
+        const float row_h = ctx->style.font && ctx->style.font->height > 0.0f
+                                ? ctx->style.font->height : 18.0f;
+
+        // Mouse wheel over the chat: leave follow-bottom mode and scroll
+        // manually (3 text lines per notch). The delta is consumed so
+        // Nuklear's own 10%-of-height step does not stack on top of it.
+        struct nk_rect gb = nk_window_get_bounds(ctx);
+        gb.w -= ctx->style.window.scrollbar_size.x;  // exclude the scrollbar
+        // UITEST bypasses the hover gate: the agent harness cannot move the
+        // real cursor over the window (posted WM_MOUSEMOVE is overridden by
+        // live input), so wheel injection would never scroll otherwise.
+        const bool uitest_hover =
+            std::getenv("KRASTOR_UITEST") != nullptr ||
+            nk_input_is_mouse_hovering_rect(&ctx->input, gb);
+        if (ctx->input.mouse.scroll_delta.y != 0.0f && uitest_hover) {
+            app.follow_bottom = false;
+            nk_uint sx = 0, sy = 0;
+            nk_window_get_scroll(ctx, &sx, &sy);
+            float off = (float)sy - ctx->input.mouse.scroll_delta.y * row_h * 3.0f;
+            if (off < 0.0f)
+                off = 0.0f;
+            nk_group_set_scroll(ctx, "##chat", 0, (nk_uint)off);
+            ctx->input.mouse.scroll_delta.y = 0.0f;  // consumed
+        }
+
         float content_h = 0.0f;
         for (const auto& l : app.lines) {
             const std::string prefix = l.who == "you" ? "> " :
@@ -799,13 +834,22 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                                              nk_rgb(110, 110, 120), text_w) +
                              spacing;
         }
-        // Pin the view to the newest line. The group keeps its own persistent
-        // scroll offset (nk_window_set_scroll would scroll the outer window).
-        // Compute the bottom offset explicitly instead of relying on Nuklear's
-        // clamp, which stops running once the scrollbar auto-hides.
+        // Follow-bottom pinning: keep the newest line in view while following.
+        // The group keeps its own persistent scroll offset (nk_window_set_scroll
+        // would scroll the outer window). The bottom offset is computed
+        // explicitly instead of relying on Nuklear's clamp, which stops running
+        // once the scrollbar auto-hides. Scrolling up with the wheel leaves the
+        // view where the user left it; reaching the bottom re-enables follow.
         const float visible = height - 2.0f * ctx->style.window.padding.y - 8.0f;
         const float bottom = content_h > visible ? content_h - visible : 0.0f;
-        nk_group_set_scroll(ctx, "##chat", 0, (nk_uint)bottom);
+        if (app.follow_bottom) {
+            nk_group_set_scroll(ctx, "##chat", 0, (nk_uint)bottom);
+        } else {
+            nk_uint sx = 0, sy = 0;
+            nk_window_get_scroll(ctx, &sx, &sy);
+            if ((float)sy >= bottom - 4.0f)
+                app.follow_bottom = true;
+        }
         nk_group_end(ctx);
         nk_layout_row_end(ctx);
     }
