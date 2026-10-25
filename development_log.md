@@ -674,3 +674,21 @@ Step 1 (this commit):
   selection document).
 - Verified: UITEST seeds an expanded Thought block; screenshot matches the
   opencode layout. Both toolchains clean.
+
+## 2026-10-26 (later) - Output formatting Step 4: color emoji
+
+- `tools/gen_emoji_atlas.py` (Pillow): renders ~400 curated emoji from Noto
+  Color Emoji CBDT (source .ttf git-ignored, download URL in the docstring)
+  into `data/fonts/emoji_atlas.png` (1024x1664, 64 px cells) + manifest json
+  (committed). License recorded in data/LICENSES.md.
+- `src/emoji.{h,cpp}`: EmojiAtlas loads the sheet into one GL_RGBA texture
+  (stb_image - implementation already lived in clipboard.cpp, so no new lib)
+  + codepoint->region map. Nuklear 4.13.3 `nk_image` uses pixel `region[]`,
+  not UV floats.
+- Chat renderer: `draw_token_mixed` splits tokens into text runs
+  (nk_draw_text) and emoji quads (nk_draw_image, square advance = line
+  height); the glfw backend binds textures per command so batches interleave.
+  U+FE0F stripped (was rendering as "?").
+- Bonus (from the plan): font atlas now bakes Latin-1/punctuation/box-drawing.
+- Verified: UITEST emoji line renders all in color (zoomed screenshot);
+  both toolchains clean.

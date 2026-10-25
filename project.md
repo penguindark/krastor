@@ -174,8 +174,8 @@ and **effect brightness** in Settings. **Chat UX increment** (`chat_ux_plan.md`,
 complete): per-response stats sub-line + context-usage footer (`llm.context_size`),
 window-size persistence, wheel/keyboard scrolling with follow-bottom, chat text
 selection & UTF-8 copy (mouse + Shift+arrows). **Output formatting plugins**
-(`output_format_plan.md`): Markdown -> ANSI formatter (`src/md_format`) styles
-LLM replies (headings, bold/italic, inline code, lists, quotes, tables, code
-blocks); syntax highlighting, Thought blocks and color emoji are next steps of
-the same plan. Remaining: mic selector in the GUI.
+(`output_format_plan.md`, complete): Markdown -> ANSI formatter styles LLM
+replies (headings, bold/italic, inline code, lists, quotes, tables), data-driven
+syntax highlighting (`data/languages/*.json`), collapsible "Thought" blocks for
+model reasoning, and full-color emoji via a Noto sprite atlas.
   **Past design doc:** **`chat_ux_plan.md`** (the chat UX increment above).

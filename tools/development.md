@@ -29,9 +29,13 @@ product. Never part of the shipped agent.
 - `bench_stt.py` — benchmark multilingual STT candidates (Whisper small vs Parakeet
   TDT v3) on the round-trip WAVs: accuracy + RTF.
   `.venv\Scripts\python.exe tools\bench_stt.py`
-- `bench_gpu.py` — CPU vs CUDA benchmark (faster-whisper): small int8 CPU/CUDA and
+- `bench_gpu.py` - CPU vs CUDA benchmark (faster-whisper): small int8 CPU/CUDA and
   large-v3-turbo CUDA. Needs `tools/requirements-gpu.txt` installed.
   `.venv\Scripts\python.exe tools\bench_gpu.py`
+- `gen_emoji_atlas.py` - renders the curated emoji set from Noto Color Emoji
+  (CBDT, git-ignored source font; download URL in the docstring) into
+  `data/fonts/emoji_atlas.png` + `emoji_atlas.json` (committed). Needs Pillow.
+  `.venv\Scripts\python.exe tools\gen_emoji_atlas.py`
 
 ## Current state (Phase 2, 2026-10-25)
 Stack chosen: **Vosk** streaming STT + **Piper via sherpa-onnx** TTS (see

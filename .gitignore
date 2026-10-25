@@ -44,3 +44,7 @@ config.json
 .vscode/
 Thumbs.db
 Desktop.ini
+
+# Emoji atlas source font (downloaded, see tools/gen_emoji_atlas.py); the
+# generated emoji_atlas.png/json ARE committed.
+data/fonts/NotoColorEmoji.ttf

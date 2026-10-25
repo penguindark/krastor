@@ -52,6 +52,7 @@ add_executable(krastor
     src/md_format.cpp
     src/formatters.cpp
     src/highlight.cpp
+    src/emoji.cpp
     src/voices.cpp
     src/tts.cpp
     src/stt.cpp
