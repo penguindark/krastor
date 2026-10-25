@@ -235,3 +235,21 @@ LM Studio). Gotchas: v2.0.0 `data_dir` deprecation; miniaudio master API churn;
 `(vad, samples, n)` without sample rate.
 
 **Next**: Phase 5 — GLSL effect surface, terminal I/O panel, wire TTS/STT into the GUI.
+
+---
+
+## 2026-10-26 (later) — Microphone selection + input diagnostics
+
+User reported `/listen` hearing nothing on their Realtek mic. Added input-device
+selection to the app: `/devices` lists capture devices with indices (via
+`ma_context_enumerate_devices`), `/mic [sec] [idx]` shows a live level meter +
+peak (diagnoses wrong-device vs muted vs privacy-blocked), `/listen [sec] [idx]`
+takes an explicit device index, and `stt.input_device` in `config.json`
+persists the choice (-1 = system default). `Stt::Impl` now owns a persistent
+`ma_context` and reopens the device when the index changes.
+
+Diagnosis on this machine: Realtek IS the default device but the meter shows peak
+0.0002 (silence) — typical of Windows privacy block (Settings > Privacy & security
+> Microphone > let desktop apps access) or a muted/zero-gain mic; the error path
+now prints the miniaudio error code (`ma_result_to_string` does not exist in
+0.11.22). Builds on both toolchains; `/transcribe` regression still exact.

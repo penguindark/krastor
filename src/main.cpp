@@ -5,6 +5,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 #ifdef _WIN32
@@ -32,6 +33,8 @@ void print_help()
         "  /say <text>        speak the text with the current TTS voice\n"
         "  /listen [sec]      record the microphone and transcribe one utterance\n"
         "                     (Parakeet EN+IT auto-detect; default 20 s max)\n"
+        "  /devices           list capture (microphone) devices with their index\n"
+        "  /mic [sec] [idx]   live microphone level meter (diagnose no-signal)\n"
         "  /transcribe <file> transcribe an audio file (wav/mp3/flac)\n"
         "  /reset             clear the conversation (keeps system prompt)\n"
         "  /config            show the active LLM configuration\n"
@@ -119,16 +122,33 @@ int main(int argc, char** argv)
         if (line.empty())
             continue;
 
+        if (line == "/devices") {
+            std::cout << krastor::Stt::list_input_devices();
+            continue;
+        }
+        if (line.rfind("/mic", 0) == 0) {
+            int sec = 5, idx = cfg.stt.input_device;
+            std::istringstream iss(line.substr(4));
+            if (!(iss >> sec) || sec <= 0) sec = 5;
+            iss >> idx;  // optional second argument
+            const double peak = stt.monitor(sec, idx);
+            if (peak >= 0.0)
+                std::cout << (peak < 0.01
+                                  ? "[mic] NO SIGNAL — wrong device, muted mic, or "
+                                    "Windows blocks desktop-app mic access "
+                                    "(Settings > Privacy & security > Microphone)\n"
+                                  : peak < 0.05
+                                        ? "[mic] very quiet — raise the mic volume/gain\n"
+                                        : "[mic] signal OK — this device hears you\n");
+            continue;
+        }
         if (line.rfind("/listen", 0) == 0) {
-            double max_s = 20.0;
-            std::string arg = line.size() > 7 ? line.substr(7) : "";
-            arg.erase(0, arg.find_first_not_of(" \t"));
-            if (!arg.empty()) {
-                max_s = std::atof(arg.c_str());
-                if (max_s <= 0.0) max_s = 20.0;
-            }
-            std::cout << "[stt] listening... (speak now, up to " << max_s << "s)\n";
-            const std::string heard = stt.listen(max_s);
+            int sec = 20, idx = cfg.stt.input_device;
+            std::istringstream iss(line.substr(7));
+            if (!(iss >> sec) || sec <= 0) sec = 20;
+            iss >> idx;  // optional second argument
+            std::cout << "[stt] listening... (speak now, up to " << sec << "s)\n";
+            const std::string heard = stt.listen(sec, idx);
             if (heard.empty()) { std::cout << "[stt] nothing heard\n"; continue; }
             std::cout << "[stt] " << heard << "\n\n";
             line = heard;  // fall through: the transcription goes to the LLM

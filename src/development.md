@@ -9,14 +9,14 @@ executables are emitted to `../bin`, intermediates to `../obj`.
 ## Current state (Phase 4, 2026-10-26) — local voice I/O in C++
 | Module | Responsibility |
 |---|---|
-| `main.cpp` | CLI REPL: commands (`/help /voices /voice <id> /say <text> /listen [sec] /transcribe <file> /reset /config /exit`), everything else goes to the LLM |
+| `main.cpp` | CLI REPL: commands (`/help /voices /voice <id> /say <text> /listen [sec] [idx] /devices /mic [sec] [idx] /transcribe <file> /reset /config /exit`), everything else goes to the LLM |
 | `config.h/.cpp` | JSON config (`config.json`, see `config.example.json`); API key fallback `KRASTOR_API_KEY` -> `OPENAI_API_KEY`; `save()` used by the GUI |
 | `conversation.h/.cpp` | message list (system + history), reset semantics |
 | `llm_client.h/.cpp` | OpenAI-compatible `POST {base_url}/chat/completions`, JSON via nlohmann |
 | `http_client.h` + `http_client_winhttp.cpp` / `http_client_curl.cpp` | minimal HTTPS POST: **WinHTTP on Windows** (OS TLS, identical on MinGW+MSVC), **libcurl on Linux** |
 | `voices.h/.cpp` | TTS voice registry: discovers `models/tts-piper-*`, **runtime voice switching** (`select()` callable at any time; `tts.cpp` reads `current()`) |
 | `tts.h/.cpp` | **TTS engine**: Piper via sherpa-onnx C API (`SherpaOnnxOfflineTts`, espeak-ng `data_dir`), model (re)loaded lazily when the selected voice changes; playback via miniaudio (float PCM wrapped in an in-memory WAV header); `speak()` blocks until playback ends; works silently when no output device exists |
-| `stt.h/.cpp` | **STT engine**: NVIDIA Parakeet TDT 0.6B v3 int8 (`nemo_transducer`) + Silero VAD via sherpa-onnx C API, mic capture via miniaudio (16 kHz mono float). `listen()` returns the first VAD-closed utterance (~0.5 s after speech ends); `transcribe_file()` decodes wav/mp3/flac to 16 kHz mono for headless tests. EN+IT auto-detected, punctuation + capitalization included |
+| `stt.h/.cpp` | **STT engine**: NVIDIA Parakeet TDT 0.6B v3 int8 (`nemo_transducer`) + Silero VAD via sherpa-onnx C API, mic capture via miniaudio (16 kHz mono float). `listen()` returns the first VAD-closed utterance (~0.5 s after speech ends); `transcribe_file()` decodes wav/mp3/flac to 16 kHz mono for headless tests; `list_input_devices()` + explicit `device_index` selection (`stt.input_device` in config, -1 = system default); `monitor()` prints a live level meter to diagnose muted/blocked/wrong mics. EN+IT auto-detected, punctuation + capitalization included |
 | `gui.h/.cpp` | **GUI foundation (Phase 5 start)**: GLFW window + OpenGL 3.3 + Nuklear. A **gear icon** (top-right, drawn with Nuklear canvas primitives) opens a **settings modal** to edit LLM base URL, model, TTS voice (combo), temperature, max tokens, system prompt; Save writes `config.json` and applies the voice. Launched with `krastor --gui`. |
 
 Verified (both `mingw-debug` and `msvc-2026-debug`): `/say` speaks IT+EN through the

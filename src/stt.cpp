@@ -3,7 +3,9 @@
 
 #include "stt.h"
 
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -34,12 +36,29 @@ struct Stt::Impl {
     const SherpaOnnxVoiceActivityDetector* vad = nullptr;
 
     // Microphone capture state.
+    ma_context ctx{};
+    bool ctx_ok = false;
     ma_device mic{};
     bool mic_ok = false;
+    int open_index = -2;  // device index currently opened (-1 = system default)
     std::mutex pcm_mutex;
     std::vector<float> pcm;
 
-    explicit Impl(const Config& c) : cfg(c) {}
+    // Live input levels (for the /mic meter).
+    std::atomic<float> level{0.0f};  // max |sample| of the most recent block
+    std::atomic<float> peak{0.0f};   // max |sample| since the last reset
+
+    struct CapDev {
+        ma_device_id id;
+        std::string name;
+        bool is_default;
+    };
+
+    explicit Impl(const Config& c) : cfg(c)
+    {
+        ctx_ok = (ma_context_init(nullptr, 0, nullptr, &ctx) == MA_SUCCESS);
+    }
+
     ~Impl()
     {
         if (mic_ok)
@@ -48,6 +67,41 @@ struct Stt::Impl {
             SherpaOnnxDestroyVoiceActivityDetector(vad);
         if (recognizer)
             SherpaOnnxDestroyOfflineRecognizer(recognizer);
+        if (ctx_ok)
+            ma_context_uninit(&ctx);
+    }
+
+    static ma_bool32 enum_cb(ma_context*, ma_device_type type,
+                             const ma_device_info* info, void* ud)
+    {
+        if (type == ma_device_type_capture) {
+            auto* out = static_cast<std::vector<CapDev>*>(ud);
+            out->push_back({info->id, info->name, info->isDefault == MA_TRUE});
+        }
+        return MA_TRUE;
+    }
+
+    // All capture devices in enumeration order (index = position in this list).
+    static std::vector<CapDev> enumerate()
+    {
+        std::vector<CapDev> out;
+        ma_context c{};
+        if (ma_context_init(nullptr, 0, nullptr, &c) != MA_SUCCESS)
+            return out;
+        ma_context_enumerate_devices(&c, enum_cb, &out);
+        ma_context_uninit(&c);
+        return out;
+    }
+
+    std::string mic_name() const
+    {
+        const auto devs = enumerate();
+        if (open_index >= 0 && open_index < static_cast<int>(devs.size()))
+            return devs[open_index].name;
+        for (const auto& d : devs)
+            if (d.is_default)
+                return d.name;
+        return "(system default)";
     }
 
     static void mic_callback(ma_device* device, void* output, const void* input,
@@ -57,8 +111,62 @@ struct Stt::Impl {
         (void)output;
         auto* self = static_cast<Impl*>(device->pUserData);
         const auto* samples = static_cast<const float*>(input);
+        float mx = 0.0f;
+        for (ma_uint32 i = 0; i < frame_count; ++i) {
+            const float a = std::fabs(samples[i]);
+            if (a > mx) mx = a;
+        }
+        self->level.store(mx);
+        float cur = self->peak.load();
+        while (cur < mx && !self->peak.compare_exchange_weak(cur, mx)) {}
         std::lock_guard<std::mutex> lock(self->pcm_mutex);
         self->pcm.insert(self->pcm.end(), samples, samples + frame_count);
+    }
+
+    // Opens (or switches to) the capture device and starts it.
+    // device_index < 0 = system default microphone.
+    bool open_mic(int device_index)
+    {
+        if (mic_ok && open_index != device_index) {
+            ma_device_uninit(&mic);
+            mic_ok = false;
+        }
+        if (!mic_ok) {
+            ma_device_config dc = ma_device_config_init(ma_device_type_capture);
+            dc.capture.format = ma_format_f32;
+            dc.capture.channels = 1;
+            dc.sampleRate = kSampleRate;
+            dc.dataCallback = mic_callback;
+            dc.pUserData = this;
+            if (device_index >= 0) {
+                const auto devs = enumerate();
+                if (device_index >= static_cast<int>(devs.size())) {
+                    std::fprintf(stderr,
+                                 "stt: no capture device with index %d (see /devices)\n",
+                                 device_index);
+                    return false;
+                }
+                dc.capture.pDeviceID = &devs[device_index].id;
+            }
+            const ma_result r = ma_device_init(ctx_ok ? &ctx : nullptr, &dc, &mic);
+            if (r != MA_SUCCESS) {
+                std::fprintf(stderr,
+                             "stt: cannot open microphone (miniaudio error %d) — run /devices\n",
+                             static_cast<int>(r));
+                return false;
+            }
+            mic_ok = true;
+            open_index = device_index;
+            {
+                std::lock_guard<std::mutex> lock(pcm_mutex);
+                pcm.clear();
+            }
+        }
+        if (ma_device_start(&mic) != MA_SUCCESS) {
+            std::fprintf(stderr, "stt: cannot start microphone capture\n");
+            return false;
+        }
+        return true;
     }
 
     // Runs the recognizer on one PCM block and returns the text.
@@ -195,10 +303,59 @@ bool Stt::ensure_loaded()
     return true;
 }
 
-std::string Stt::listen(double max_seconds)
+std::string Stt::list_input_devices()
 {
-    if (!ensure_loaded() || !impl_->open_mic())
+    const auto devs = Impl::enumerate();
+    if (devs.empty())
+        return "no capture devices found\n";
+    std::string out = "capture devices:\n";
+    for (size_t i = 0; i < devs.size(); ++i) {
+        out += "  " + std::to_string(i) + "  " + devs[i].name;
+        if (devs[i].is_default)
+            out += "  [default]";
+        out += '\n';
+    }
+    out += "Select one with: /listen <sec> <index>  or set stt.input_device in config.json\n";
+    return out;
+}
+
+double Stt::monitor(double seconds, int device_index)
+{
+    if (!impl_->open_mic(device_index))
+        return -1.0;
+    std::printf("[mic] input: %s — speak or clap for %.0fs\n",
+                impl_->mic_name().c_str(), seconds);
+    impl_->level.store(0.0f);
+    impl_->peak.store(0.0f);
+
+    constexpr int kBar = 30;
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(static_cast<int>(seconds * 1000));
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        const float lvl = impl_->level.load();
+        float scaled = lvl * 4.0f;  // amplify so normal speech fills the bar
+        if (scaled > 1.0f)
+            scaled = 1.0f;
+        const int filled = static_cast<int>(scaled * kBar);
+        std::printf("\r[mic] [");
+        for (int i = 0; i < kBar; ++i)
+            std::printf("%s", i < filled ? "#" : ".");
+        std::printf("] %.3f   ", lvl);
+        std::fflush(stdout);
+    }
+    const double peak = impl_->peak.load();
+    ma_device_stop(&impl_->mic);
+    std::printf("\r[mic] peak level: %.4f%s\n", peak,
+                peak < 0.01 ? "  <- NO SIGNAL" : "");
+    return peak;
+}
+
+std::string Stt::listen(double max_seconds, int device_index)
+{
+    if (!ensure_loaded() || !impl_->open_mic(device_index))
         return "";
+    std::printf("[stt] input: %s\n", impl_->mic_name().c_str());
 
     SherpaOnnxVoiceActivityDetectorClear(impl_->vad);
     {
@@ -289,7 +446,9 @@ bool Stt::ensure_loaded()
     return false;
 }
 
-std::string Stt::listen(double) { return ""; }
+std::string Stt::list_input_devices() { return "stt: not available on this platform\n"; }
+double Stt::monitor(double, int) { return -1.0; }
+std::string Stt::listen(double, int) { return ""; }
 std::string Stt::transcribe_file(const std::string&) { return ""; }
 
 } // namespace krastor

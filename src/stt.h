@@ -28,10 +28,20 @@ public:
     // Returns false when unsupported or models are missing.
     bool ensure_loaded();
 
+    // Enumerates capture devices, one per line: "0  Microphone (Realtek Audio)  [default]".
+    // The index is what `device_index` refers to in listen()/monitor().
+    static std::string list_input_devices();
+
+    // Records from the selected/default mic for `seconds` while printing a live
+    // level meter, and returns the peak level in [0, 1]. A peak near 0 means the
+    // device receives no signal (wrong device, muted, or Windows privacy block).
+    double monitor(double seconds = 5.0, int device_index = -1);
+
     // Records from the default microphone and returns the transcription of the
     // first complete utterance (ends ~0.5 s after speech stops). Returns an
     // empty string when nothing was heard within `max_seconds`.
-    std::string listen(double max_seconds = 20.0);
+    // device_index < 0 selects the system default microphone.
+    std::string listen(double max_seconds = 20.0, int device_index = -1);
 
     // Transcribes a WAV/MP3/FLAC file (decoded + resampled to 16 kHz mono).
     // Used for testing without a microphone and for future file attachments.

@@ -25,9 +25,16 @@ struct TtsConfig {
     double speed = 1.0;
 };
 
+struct SttConfig {
+    // Index into the capture-device list shown by the CLI `/devices` command.
+    // -1 = system default microphone.
+    int input_device = -1;
+};
+
 struct Config {
     LlmConfig llm;
     TtsConfig tts;
+    SttConfig stt;
 
     // Loads config from `path`. Missing file is not an error (defaults apply);
     // malformed JSON throws std::runtime_error. The api key falls back to the

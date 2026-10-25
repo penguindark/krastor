@@ -47,6 +47,10 @@ Config Config::load(const std::string& path)
             cfg.tts.default_voice = j.value("default_voice", cfg.tts.default_voice);
             cfg.tts.speed = j.value("speed", cfg.tts.speed);
         }
+        if (root.contains("stt")) {
+            const auto& j = root["stt"];
+            cfg.stt.input_device = j.value("input_device", cfg.stt.input_device);
+        }
     }
 
     if (cfg.llm.api_key.empty()) {
@@ -72,6 +76,9 @@ void Config::save(const std::string& path) const
         {"models_dir", tts.models_dir},
         {"default_voice", tts.default_voice},
         {"speed", tts.speed},
+    };
+    root["stt"] = {
+        {"input_device", stt.input_device},
     };
 
     std::ofstream file(path, std::ios::trunc);

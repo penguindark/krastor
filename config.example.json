@@ -11,5 +11,8 @@
     "models_dir": "models",
     "default_voice": "it-it-paola",
     "speed": 1.0
+  },
+  "stt": {
+    "input_device": -1
   }
 }
