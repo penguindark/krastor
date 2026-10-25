@@ -69,6 +69,11 @@ struct ChatLine {
     std::string who;   // "you" | "krastor" | "sys"
     std::string text;
     std::string meta;  // optional dim stats sub-line (assistant replies)
+    // Reasoning ("Thought") block shown above the reply, opencode-style:
+    // a clickable "+ Thought · 5.4s" header toggles the dim body.
+    std::string thinking;    // raw reasoning text ("" = no block)
+    std::string think_meta;  // duration suffix, e.g. "5.4s"
+    bool thought_open = false;
     ChatLine() = default;
     ChatLine(std::string w, std::string t, std::string m = {})
         : who(std::move(w)), text(std::move(t)), meta(std::move(m)) {}
@@ -249,6 +254,9 @@ struct AppState {
     int scroll_cmd = 0;  // 1=PageUp 2=PageDown 3=Home 4=End, consumed by chat_panel
     bool clear_edit_focus = false;  // chat click: drop the input box's edit focus
     bool uitest_sel_done = false;  // one-shot selection seed for screenshot tests
+    // Clickable "Thought" header rects recorded during the last frame:
+    // (ChatLine index, header rect in window coords). Clicking one toggles.
+    std::vector<std::pair<int, struct nk_rect>> thought_rects;
 
     AppState(Config& c, VoiceRegistry& v)
         : cfg(c), voices(v), conv(c.llm.system_prompt), llm(c.llm), tts(v, c), stt(c),
@@ -304,6 +312,15 @@ struct AppState {
                 "|---|---|\n"
                 "| 1 | two |\n"
                 "```python\nprint('hello')  # code block\n```")});
+            // Collapsible Thought block sample (output_format_plan.md Step 3).
+            {
+                ChatLine tl{"krastor", fmt.format("Answer after **thinking**."), ""};
+                tl.thinking = "Let me consider the options...\n"
+                              "Weighing trade-offs: step 1, step 2.";
+                tl.think_meta = "5.4s";
+                tl.thought_open = true;
+                lines.push_back(std::move(tl));
+            }
             // Auto-send one short message so the response stats line and the
             // context footer are visible in a screenshot without typing.
             auto_speak = false;  // keep the screenshot test silent
@@ -471,6 +488,10 @@ struct AppState {
             if (reply.ok) {
                 conv.add_assistant(reply.content);
                 ChatLine line{"krastor", fmt.format(reply.content), ""};
+                if (!reply.reasoning.empty()) {
+                    line.thinking = reply.reasoning;
+                    line.think_meta = fmt_elapsed(reply.elapsed_ms);
+                }
                 // Stats sub-line: "model - time - tok/s" ("~" when the server
                 // omitted usage and the token counts are estimated).
                 const double secs =
@@ -1104,6 +1125,22 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         struct nk_mouse_button* L = &in->mouse.buttons[NK_BUTTON_LEFT];
         if (L->clicked && over && !modal_blocks) {
             app.chat_focused = true;
+            // A click on a "Thought" header toggles that block and is not a
+            // selection click.
+            bool toggled = false;
+            for (const auto& tr : app.thought_rects) {
+                const struct nk_rect& r = tr.second;
+                if (in->mouse.pos.x >= r.x && in->mouse.pos.x < r.x + r.w &&
+                    in->mouse.pos.y >= r.y && in->mouse.pos.y < r.y + r.h) {
+                    app.lines[tr.first].thought_open =
+                        !app.lines[tr.first].thought_open;
+                    toggled = true;
+                    break;
+                }
+            }
+            if (toggled) {
+                app.sel_dragging = false;
+            } else {
             // Release the text-edit focus (next frame) so keyboard goes to the
             // selection keys instead of moving the invisible edit caret.
             app.clear_edit_focus = true;
@@ -1138,6 +1175,7 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
             } else {
                 app.sel_anchor = app.sel_caret = -1;
                 app.sel_dragging = false;
+            }
             }
         } else if (L->down && app.sel_dragging && !modal_blocks &&
                    app.sel_anchor >= 0) {
@@ -1187,12 +1225,29 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
 
         float content_h = 0.0f;
         int src = 0;
+        app.thought_rects.clear();
         for (const auto& l : app.lines) {
             const std::string prefix = l.who == "you" ? "> " :
                                        l.who == "krastor" ? app.name + ": " : "! ";
             struct nk_color col = nk_rgb(160, 160, 160);
             if (l.who == "you") col = nk_rgb(120, 180, 255);
             else if (l.who == "krastor") col = nk_rgb(130, 220, 150);
+            // Collapsible reasoning block (opencode-style "Thought · Ns").
+            if (!l.thinking.empty()) {
+                std::string head = std::string(l.thought_open ? "- " : "+ ") +
+                                   "Thought";
+                if (!l.think_meta.empty())
+                    head += " \xC2\xB7 " + l.think_meta;
+                content_h += draw_chat_line(ctx, "", head, nk_rgb(230, 150, 60),
+                                            text_w, -1, nullptr, nullptr) +
+                             spacing;
+                app.thought_rects.push_back({src, nk_widget_bounds(ctx)});
+                if (l.thought_open)
+                    content_h += draw_chat_line(
+                        ctx, "  \xE2\x94\x82 ", l.thinking, nk_rgb(150, 150, 160),
+                        text_w, -1, nullptr, nullptr) +
+                                 spacing;
+            }
             content_h += draw_chat_line(ctx, prefix, l.text, col, text_w, src,
                                         &app.chat_hits, has_sel ? &sel : nullptr) +
                          spacing;

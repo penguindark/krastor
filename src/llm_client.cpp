@@ -5,6 +5,42 @@
 #include "http_client.h"
 
 namespace krastor {
+namespace {
+
+// Moves inline ... /<thought>...</thought> blocks from
+// content into `reasoning` (some reasoning models inline their thinking).
+void extract_inline_thinking(std::string& content, std::string& reasoning)
+{
+    static const char* opens[] = {"", "<thought>"};
+    static const char* closes[] = {"", "</thought>"};
+    for (int t = 0; t < 2; ++t) {
+        size_t pos = 0;
+        while (true) {
+            const size_t a = content.find(opens[t], pos);
+            if (a == std::string::npos)
+                break;
+            const size_t b = content.find(closes[t], a + std::string(opens[t]).size());
+            if (b == std::string::npos)
+                break;  // unterminated: leave as-is
+            std::string inner = content.substr(a + std::string(opens[t]).size(),
+                                               b - a - std::string(opens[t]).size());
+            if (!reasoning.empty())
+                reasoning += "\n";
+            reasoning += inner;
+            content.erase(a, b + std::string(closes[t]).size() - a);
+            pos = a;
+        }
+    }
+    // Trim whitespace-only leftovers.
+    auto trim = [](std::string& s) {
+        size_t a = s.find_first_not_of(" \t\r\n");
+        size_t b = s.find_last_not_of(" \t\r\n");
+        s = a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
+    };
+    trim(content);
+}
+
+} // namespace
 
 LlmClient::LlmClient(LlmConfig config) : config_(std::move(config)) {}
 
@@ -60,8 +96,17 @@ LlmReply LlmClient::complete(const Conversation& conversation) const
 
     try {
         const auto json = nlohmann::json::parse(res.body);
-        reply.content = json.at("choices").at(0).at("message").at("content")
-                            .get<std::string>();
+        const auto& msg = json.at("choices").at(0).at("message");
+        reply.content = msg.value("content", std::string());
+        // Reasoning models expose their thinking through the DeepSeek-style
+        // reasoning_content field (LM Studio, vLLM, ...) or a reasoning field;
+        // some others inline it into content between  /<thought> tags.
+        if (msg.contains("reasoning_content") &&
+            msg["reasoning_content"].is_string())
+            reply.reasoning = msg["reasoning_content"].get<std::string>();
+        else if (msg.contains("reasoning") && msg["reasoning"].is_string())
+            reply.reasoning = msg["reasoning"].get<std::string>();
+        extract_inline_thinking(reply.content, reply.reasoning);
         reply.model = json.value("model", config_.model);
         // OpenAI usage block; some servers omit it or report zeros.
         if (json.contains("usage") && json["usage"].is_object()) {

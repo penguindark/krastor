@@ -659,3 +659,18 @@ Step 1 (this commit):
   keeps the block unhighlighted.
 - Verified: UITEST python block renders print=yellow, 'hello'=green,
   comment=gray on the block background. Both toolchains clean.
+
+## 2026-10-26 (later) - Output formatting Step 3: collapsible Thought blocks
+
+- `llm_client`: `LlmReply::reasoning` filled from the DeepSeek-style
+  `reasoning_content` field (LM Studio/vLLM) or `reasoning`; fallback
+  extracts inline `` / `<thought>` blocks from content.
+- `ChatLine` gains `thinking` / `think_meta` / `thought_open`; the chat
+  draws an orange "+ Thought . 5.4s" header (opencode-style) whose click
+  rect is recorded per frame (`thought_rects`) and toggles the block
+  before any selection logic runs. Body = dim text behind a `|` bar,
+  collapsed by default; TTS + conversation history never see reasoning.
+- Known limit (v1): the thought body is not selectable (drawn outside the
+  selection document).
+- Verified: UITEST seeds an expanded Thought block; screenshot matches the
+  opencode layout. Both toolchains clean.
