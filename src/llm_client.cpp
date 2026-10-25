@@ -7,27 +7,31 @@
 namespace krastor {
 namespace {
 
-// Moves inline ... /<thought>...</thought> blocks from
-// content into `reasoning` (some reasoning models inline their thinking).
+// Moves inline  / <thinking>..</thinking> / <thought>..</thought>
+// blocks from content into `reasoning` (some reasoning models inline their
+// thinking instead of exposing a reasoning_content field). Empty delimiters
+// are skipped: find("") always succeeds without advancing, which would spin
+// forever (this exact bug hung complete() after the reply arrived).
 void extract_inline_thinking(std::string& content, std::string& reasoning)
 {
-    static const char* opens[] = {"", "<thought>"};
-    static const char* closes[] = {"", "</thought>"};
-    for (int t = 0; t < 2; ++t) {
+    static const char* tags[] = {"think", "thinking", "thought"};
+    for (const char* tag : tags) {
+        const std::string open = std::string("<") + tag + ">";
+        const std::string close = std::string("</") + tag + ">";
         size_t pos = 0;
         while (true) {
-            const size_t a = content.find(opens[t], pos);
+            const size_t a = content.find(open, pos);
             if (a == std::string::npos)
                 break;
-            const size_t b = content.find(closes[t], a + std::string(opens[t]).size());
+            const size_t b = content.find(close, a + open.size());
             if (b == std::string::npos)
                 break;  // unterminated: leave as-is
-            std::string inner = content.substr(a + std::string(opens[t]).size(),
-                                               b - a - std::string(opens[t]).size());
+            std::string inner =
+                content.substr(a + open.size(), b - a - open.size());
             if (!reasoning.empty())
                 reasoning += "\n";
             reasoning += inner;
-            content.erase(a, b + std::string(closes[t]).size() - a);
+            content.erase(a, b + close.size() - a);
             pos = a;
         }
     }
@@ -106,7 +110,7 @@ LlmReply LlmClient::complete(const Conversation& conversation,
         reply.content = msg.value("content", std::string());
         // Reasoning models expose their thinking through the DeepSeek-style
         // reasoning_content field (LM Studio, vLLM, ...) or a reasoning field;
-        // some others inline it into content between  /<thought> tags.
+        // some others inline it into content between think/thought tags.
         if (msg.contains("reasoning_content") &&
             msg["reasoning_content"].is_string())
             reply.reasoning = msg["reasoning_content"].get<std::string>();

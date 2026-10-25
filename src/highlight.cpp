@@ -209,13 +209,15 @@ bool Highlighter::load_dir(const std::string& dir)
             continue;
         LangDef d;
         d.name = j.value("name", e.path().stem().string());
+        // Empty delimiters would make the scanner spin without advancing, so
+        // only non-empty ones are accepted.
         if (j.contains("strings") && j["strings"].is_array())
             for (const auto& s : j["strings"])
-                if (s.is_string())
+                if (s.is_string() && !s.get<std::string>().empty())
                     d.strings.push_back(s.get<std::string>());
         if (j.contains("triples") && j["triples"].is_array())
             for (const auto& s : j["triples"])
-                if (s.is_string())
+                if (s.is_string() && !s.get<std::string>().empty())
                     d.triples.push_back(s.get<std::string>());
         d.line_comment = j.value("line_comment", std::string());
         if (j.contains("block_comment") && j["block_comment"].is_array() &&

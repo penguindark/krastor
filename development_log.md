@@ -713,3 +713,24 @@ Step 1 (this commit):
 - Verified: standalone test against a TCP listener that accepts but never
   responds -> https_post returned 0 ms after cancel() with error
   "cancelled". Screenshot shows the new button row. Both toolchains clean.
+
+## 2026-10-26 (later) - FIX: LLM reply hang (infinite loop in extract_inline_thinking)
+
+Symptom: the request reached LM Studio and the model answered, but the app
+stayed on "thinking..." forever (CLI hung identically, so the bug was in the
+shared path, not the GUI).
+
+Root cause: `extract_inline_thinking` (Step 3) had an EMPTY string as its
+first open/close tag pair (the special-token text was lost when the file was
+written). `content.find("")` always succeeds at `pos` without advancing, the
+`erase` removed zero chars and `pos` never moved -> infinite loop inside
+`complete()` right after the HTTP response arrived.
+
+- Rewrote the function over well-formed tags only: `<think>`, `<thinking>`,
+  `<thought>` (open/close built from the tag name, so an empty delimiter is
+  impossible by construction).
+- Hardened the same bug class in `highlight.cpp`: empty `strings`/`triples`
+  entries in a language pack would spin the scanner the same way; they are
+  now skipped at load time.
+- Verified: CLI round-trip against LM Studio returns the reply and exits;
+  both toolchains clean.
