@@ -92,9 +92,14 @@ are git-ignored — run `tools/download_deps.py` once after cloning.
   `biHeight < 0`; rows padded to 4 bytes. Re-encode to PNG with stb for the
   OpenAI `image_url` data URL.
 - Nuklear 4.13.3: `nk_style_set_font` sets `style.font` and resets the min row
-  height — in this version widget styles have **no** own font fields, so one call
+  height - in this version widget styles have **no** own font fields, so one call
   rescales every widget. `nk_font_atlas_add_from_memory` **borrows** the buffer
   until `nk_font_stash_end` (keep it alive until then).
+- Nuklear 4.13.3: a `nk_group` is a **panel inside the parent window, not a
+  window** - `nk_window_get_bounds()` inside a group returns the *parent
+  window's* rect (made every chat hover test true for clicks anywhere, which
+  unfocused the input edit on every click). The group's own rect is
+  `ctx->current->layout->bounds`.
 - Nuklear draws `style.window.fixed_background` for **every fixed window**
   (no flag needed) - a translucent main window must set its alpha to 0, and
   popups/modals need their own pushed background. Dynamic windows (groups,

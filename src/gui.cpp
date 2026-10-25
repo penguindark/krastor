@@ -1028,7 +1028,11 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         // Mouse wheel over the chat: leave follow-bottom mode and scroll
         // manually (3 text lines per notch). The delta is consumed so
         // Nuklear's own 10%-of-height step does not stack on top of it.
-        struct nk_rect gb = nk_window_get_bounds(ctx);
+        // Groups in 4.13.3 are panels inside the parent window, NOT separate
+        // windows: nk_window_get_bounds() would return the MAIN window's rect
+        // (making every click anywhere look "over the chat"). The group's own
+        // rect is the panel bounds.
+        struct nk_rect gb = ctx->current->layout->bounds;
         gb.w -= ctx->style.window.scrollbar_size.x;  // exclude the scrollbar
         // UITEST bypasses the hover gate: the agent harness cannot move the
         // real cursor over the window (posted WM_MOUSEMOVE is overridden by
@@ -1671,6 +1675,9 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             nk_style_push_color(ctx, &ctx->style.edit.cursor_text_normal,
                                 nk_rgb(120, 180, 255));
             nk_style_push_vec2(ctx, &ctx->style.edit.padding, nk_vec2(10.0f, 6.0f));
+            // Visible caret: 2 px wide accent-blue bar (Nuklear's default is a
+            // 1 px line that is nearly invisible on the dark field).
+            nk_style_push_float(ctx, &ctx->style.edit.cursor_size, 2.0f);
             const nk_flags edit_state = nk_edit_string_zero_terminated(
                 ctx,
                 (nk_flags)NK_EDIT_BOX | (nk_flags)NK_EDIT_SIG_ENTER |
@@ -1681,6 +1688,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             nk_fill_rect(&ctx->current->buffer,
                          nk_rect(input_box.x, input_box.y, 3.0f, input_box.h),
                          0, nk_rgb(120, 180, 255));
+            nk_style_pop_float(ctx);       // cursor_size
             nk_style_pop_vec2(ctx);
             nk_style_pop_color(ctx);      // cursor_text_normal
             nk_style_pop_color(ctx);      // cursor_normal

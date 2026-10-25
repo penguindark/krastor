@@ -557,3 +557,27 @@ with the action buttons. Restyled to match the OpenCode TUI look:
   the box; `chat_h` accounts for the extra row. Behavior unchanged:
   Enter sends, Shift+Enter newline, Ctrl+V image paste hook intact.
 - Verified by screenshot; both toolchains build clean.
+
+---
+
+## 2026-10-26 (later) - fix: input box dropped keystrokes (chat hover rect was the whole window)
+
+Typing in the input box barely registered keys: clicking the box activated
+the edit for exactly one frame, then our own chat-click handler unfocused it
+again (`clear_edit_focus` -> `nk_edit_unfocus`).
+
+- Root cause: in Nuklear 4.13.3 `nk_group_begin` does NOT create a window -
+  a group is a panel inside the parent window. `nk_window_get_bounds()`
+  inside the chat group therefore returned the MAIN window rect (0,0,w,h),
+  so the chat hover check `over` was true for clicks anywhere - input box,
+  buttons, top bar. Every input-box click also counted as a chat click.
+- Reproduced headlessly with a temporary hook synthesizing `nk_input_button`
+  at the box center + posted WM_CHAR: stderr showed the edit activating
+  (es=5) then deactivating next frame (es=2), chars lost. After the fix the
+  edit stays active (es=1) and all chars land.
+- Fix: `gb = ctx->current->layout->bounds` (the group panel's own rect).
+  This also makes the wheel-hover gate and the selection click/drag gate
+  actually match the visible chat area.
+- Also: input caret now 2 px wide accent blue (`edit.cursor_size` push) -
+  Nuklear's default 1 px caret was nearly invisible on the dark field.
+- Both toolchains build clean; all temporary hooks removed.
