@@ -17,9 +17,12 @@ Read this first. It is the entry point for any AI agent or developer working on 
 5. Never commit models, binaries, build outputs or `.venv` (see `.gitignore`).
    Each model lives in its own `models/<role>-<name>/` subfolder with a README
    (source, license, files).
-6. Every tracked folder has a `development.md` — keep it updated when you change that
-   folder's content.
-7. Append to `development_log.md` at the end of each session.
+6. Every tracked folder has a `development.md` — **every commit must update the
+   `development.md` of every folder it touches** (src, libs, data, tools, scripts...).
+7. Keep `project.md` and `development_log.md` updated with every commit that changes
+   features, architecture, requirements or tooling: append a dated entry to
+   `development_log.md` and reflect the change in `project.md`. Do not batch doc
+   updates to the end of a session.
 
 ## Index of folder-level development docs
 - `src/development.md` — C++ sources

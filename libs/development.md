@@ -15,6 +15,8 @@ must compile with MinGW GCC and MSVC on Windows and GCC on Linux).
 | glad (OpenGL 3.3 core) | MIT | generated 2 files | `glad/` (`include/glad/glad.h`, `src/glad.c`) |
 | Nuklear 4.13 | zlib | 1 header + glfw_gl3 backend | `nuklear/nuklear.h`, `nuklear/nuklear_glfw_gl3.h` |
 | miniaudio 0.11.22 | public domain (unlicense) | 1 header + `miniaudio_impl.c` | `miniaudio.h` — speaker playback + mic capture |
+| stb_image_write 1.16 | public domain / MIT | 1 header | `stb_image_write.h` — PNG encode (clipboard/dropped images → base64 data URLs) |
+| stb_image 2.30 | public domain / MIT | 1 header | `stb_image.h` — image decode (drag & drop file attachments) |
 | sherpa-onnx 1.13.8 (C API) | Apache-2.0 | prebuilt win-x64 shared: header committed, `*.dll`/import lib git-ignored | `sherpa-onnx/` — fetch binaries with `tools/download_deps.py` |
 
 sherpa-onnx notes:

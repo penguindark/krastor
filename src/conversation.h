@@ -10,6 +10,9 @@ namespace krastor {
 struct Message {
     std::string role;     // "system" | "user" | "assistant"
     std::string content;
+    // Base64-encoded PNG images attached to this message (vision input).
+    // When non-empty, content is sent as an OpenAI-style multimodal parts array.
+    std::vector<std::string> images;
 };
 
 class Conversation {
@@ -17,6 +20,7 @@ public:
     explicit Conversation(std::string system_prompt);
 
     void add_user(const std::string& text);
+    void add_user(const std::string& text, std::vector<std::string> images);
     void add_assistant(const std::string& text);
 
     // Clears the history but keeps the system prompt.

@@ -19,8 +19,22 @@ LlmReply LlmClient::complete(const Conversation& conversation) const
     url += "/chat/completions";
 
     nlohmann::json messages = nlohmann::json::array();
-    for (const auto& m : conversation.messages())
-        messages.push_back({{"role", m.role}, {"content", m.content}});
+    for (const auto& m : conversation.messages()) {
+        if (m.images.empty()) {
+            messages.push_back({{"role", m.role}, {"content", m.content}});
+            continue;
+        }
+        // OpenAI-style multimodal content: text part + one image_url part per
+        // attachment (base64 data URL). Required by vision-capable models.
+        nlohmann::json parts = nlohmann::json::array();
+        if (!m.content.empty())
+            parts.push_back({{"type", "text"}, {"text", m.content}});
+        for (const auto& img : m.images)
+            parts.push_back({{"type", "image_url"},
+                             {"image_url",
+                              {{"url", "data:image/png;base64," + img}}}});
+        messages.push_back({{"role", m.role}, {"content", parts}});
+    }
 
     nlohmann::json body = {
         {"model", config_.model},

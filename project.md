@@ -56,20 +56,24 @@ Krastor is a desktop agent for LLMs written in C++20. It:
 ```
 
 ### 4.1 Terminal-style I/O panel
-The main chat surface is a scrollable, monospaced, terminal-style text view. An
-**output renderer** inspects each LLM response and routes content blocks by type:
-- plain text -> terminal stream;
-- ```json``` -> validated (nlohmann/json) + syntax-highlighted;
-- ```python``` / ```cpp``` / other code -> code block with per-language coloring + copy;
-- Markdown -> styled rendering via md4c (headings, lists, links);
-- registry is extensible for future output types.
+The main chat surface is a scrollable, monospaced (JetBrains Mono), terminal-style
+text view. Messages are parsed by `src/ansi.h` (ANSI/SGR: 16/256/truecolor fg+bg,
+bold; other escapes stripped) and drawn as styled runs with `nk_draw_text`:
+- diff-style full-line backgrounds when a whole visual line shares one bg color;
+- inline per-token backgrounds otherwise;
+- indentation-preserving word wrap with UTF-8-safe hard breaks.
+Planned extensions: route LLM content blocks (```json```, code fences, Markdown)
+through type-specific highlighters into the same renderer.
 
-### 4.2 Attachments (input)
-- Drag & drop of files via GLFW drop callback (Windows + Linux).
-- Ctrl+V: text via GLFW clipboard; image/file clipboard on Windows via shell clipboard
-  API (Linux equivalent TBD).
-- Input box + attachment list (icon, name, type) sent alongside the message.
-- Which file types are accepted is decided in a future design session.
+### 4.2 Attachments (input) — implemented
+- **Drag & drop** of files via GLFW drop callback: images (png/jpg/bmp/gif/tga)
+  become attachments; text files (.txt/.md/.log/source) are inserted into the
+  input field; anything else is refused with a status line.
+- **Ctrl+V** in the input field: text via GLFW clipboard; when the clipboard holds
+  no text but a bitmap (Win32 `CF_DIB` → PNG), it is attached as an image.
+  The **Img** button attaches the clipboard image explicitly.
+- Attachment chips above the input (size shown, click to remove); sent to the LLM
+  as base64 PNG data URLs in OpenAI multimodal `content` parts.
 
 ### 4.3 GUI (Phase 5, design locked, built later)
 Game-loop window: continuous frame loop, GLSL shader background ("living surface"),
@@ -143,6 +147,10 @@ Each tracked folder has a `development.md` describing its development in detail.
   (pinned 1.13.8) + miniaudio: Piper TTS with runtime voice switching, Parakeet
   multilingual STT with Silero VAD and mic capture, `/say`, `/listen`, `/transcribe`.
 - **Phase 5 — GUI (started 2026-10-26).** Chat interface live: terminal-style I/O
-  panel, text input, Listen/auto-speak wired to the voice engines on worker threads,
-  GLSL animated background, settings modal. Remaining: richer GLSL effects, JSON/MD/
-  code rendering, attachments input (drag & drop / Ctrl+V).
+  panel with ANSI/SGR styled rendering (colors, bold, diff-style line backgrounds),
+  multiline input (Enter sends, Shift+Enter newline), cut/copy/paste, **image
+  attachments** via Ctrl+V (clipboard bitmap) and **drag & drop** (images attach,
+  text files insert), sent to the LLM as OpenAI multimodal parts; Listen/auto-speak
+  wired to the voice engines on worker threads, GLSL animated background, settings
+  modal, JetBrains Mono UI font. Remaining: richer GLSL effects, markdown→styled
+  rendering of LLM replies, mic selector in the GUI.

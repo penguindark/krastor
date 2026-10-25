@@ -275,3 +275,45 @@ Rewrote `src/gui.cpp`: the window is now the actual Krastor UI.
 Gotchas: this Nuklear's `nk_label_colored_wrap` has no align parameter;
 `nk_layout_row_dynamic(ctx, 0, 1)` fills remaining space. Verified: clean builds
 on both toolchains, GUI process alive with empty stderr (shader compiled).
+
+---
+
+## 2026-10-26 (later) — Phase 5: terminal-style renderer, clipboard images, drag & drop
+
+**Terminal-style chat renderer** (`src/gui.cpp`): replaced plain `nk_label` lines
+with a custom styled-run renderer. New header-only `src/ansi.h` parses ANSI/SGR
+sequences (16/256/truecolor fg+bg, bold; strips cursor/OSC junk) into styled runs;
+the renderer tokenizes (words + preserved space runs for indentation), word-waps at
+measured pixel widths (UTF-8-safe hard breaks for overlong words) and draws each
+token with `nk_draw_text` at absolute coords (`nk_widget_bounds` +
+`nk_window_get_canvas`). Diff-style full-line backgrounds when a whole visual line
+shares one bg color, per-token backgrounds otherwise. Verified by screenshot: colors,
+bold, inline + full-line backgrounds, box-drawing glyphs all render.
+
+**UI font**: JetBrains Mono (OFL) vendored at `data/fonts/jetbrains-mono.ttf`
+(license recorded in `data/LICENSES.md`), loaded via
+`nk_font_atlas_add_from_memory` (`..._from_file` needs `NK_INCLUDE_STANDARD_IO`)
+with built-in-font fallback.
+
+**Input**: multiline `NK_EDIT_BOX | NK_EDIT_SIG_ENTER | NK_EDIT_CTRL_ENTER_NEWLINE`
+(Enter sends, Shift+Enter newline), 16 KB buffer for long pastes. Cut/copy/paste work
+through the glfw backend clipboard; we override `ctx.clip.paste` so Ctrl+V with no
+clipboard text falls back to image attachment.
+
+**Image attachments -> LLM**: `src/clipboard.h/.cpp` reads Win32 `CF_DIB` ->
+RGBA -> PNG (stb_image_write, vendored), `base64_encode`; `Conversation::Message`
+gained `images` (base64 PNGs) and `add_user(text, images)`; `llm_client` sends
+multimodal `content` part arrays (`text` + `image_url` data URLs). Attachment
+chips above the input (click removes), **Img** button attaches the clipboard image.
+
+**Drag & drop**: `glfwSetDropCallback` queues paths (mutex), consumed per frame:
+image files (stb_image, vendored) become attachments, text files (.txt/.md/.log/
+source exts) are inserted into the input field, others refused with a status line.
+
+**Self-verification**: added `KRASTOR_UITEST=1` env hook seeding styled test lines +
+clipboard image; screenshot pipeline (PowerShell CopyFromScreen, DPI-aware coords)
+used to verify the render. Both toolchains (mingw-debug, msvc-2026-debug) build clean.
+
+**Gotchas**: `nk_text_width` is not public in Nuklear 4.13.3 (use the font
+callback); `nk_glfw3_render` buffer args are bytes; comment ending with backslash
+swallows the next line; `NK_EDIT_BOX | NK_EDIT_SIG_ENTER` needs `nk_flags` casts.
