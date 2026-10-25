@@ -1,4 +1,4 @@
-// Krastor — Markdown -> ANSI/SGR formatter (output_format_plan.md Step 1).
+// Krastor — Markdown -> ANSI/SGR formatter.
 // Converts a raw Markdown reply (LLM output) into a string carrying the ANSI
 // escapes ansi.h already understands (bold, dim, truecolor fg/bg), so the
 // existing chat renderer draws headings, lists, quotes, inline code, links,

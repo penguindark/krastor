@@ -19,7 +19,7 @@ struct LlmReply {
     std::string reasoning;    // model thinking text (reasoning_content /
                               //  tags), "" when the model does not reason
     std::string error;        // human-readable failure reason when not ok
-    // Usage stats (chat_ux_plan.md Step 1). Servers that follow the OpenAI
+    // Usage stats. Servers that follow the OpenAI
     // schema report them in the `usage` block; otherwise they are estimated
     // from character counts and tokens_estimated is set.
     std::string model;        // model reported by the server (fallback: config)

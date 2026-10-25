@@ -136,7 +136,7 @@ bool is_word_char(unsigned char c)
     return c >= 0x80 || std::isalnum(c) != 0 || c == '_';
 }
 
-// ---- Chat selection machinery (chat_ux_plan Step 4) ----
+// ---- Chat selection machinery ----
 // The chat is custom-drawn, so selection is implemented on top of the layout
 // pass: every frame the wrap in draw_chat_line records a hit-map (pixel rect +
 // codepoint range per drawn token) and the mouse/keyboard map into it. The
@@ -241,7 +241,7 @@ struct AppState {
     // Large buffer so pasted code/long prompts are never silently truncated.
     char input[16384] = {0};
 
-    // ---- Chat text selection (chat_ux_plan Step 4) ----
+    // ---- Chat text selection ----
     // Virtual document: ANSI-stripped text of every chat line joined by '\n'.
     // Selection is stored as codepoint offsets into that document; the hit-map
     // (chat_hits) is rebuilt by chat_panel every frame.
@@ -302,7 +302,7 @@ struct AppState {
                               "the lazy dog", i);
                 lines.push_back({"sys", buf});
             }
-            // Markdown formatter sample (output_format_plan.md Step 1), placed
+            // Markdown formatter sample, placed
             // after the filler so it is visible in a bottom-pinned screenshot.
             lines.push_back({"krastor", fmt.format(
                 "# Heading one\n"
@@ -317,7 +317,7 @@ struct AppState {
                 "|---|---|\n"
                 "| 1 | two |\n"
                 "```python\nprint('hello')  # code block\n```")});
-            // Collapsible Thought block sample (output_format_plan.md Step 3).
+            // Collapsible Thought block sample.
             {
                 ChatLine tl{"krastor", fmt.format("Answer after **thinking**."), ""};
                 tl.thinking = "Let me consider the options...\n"
@@ -326,7 +326,7 @@ struct AppState {
                 tl.thought_open = true;
                 lines.push_back(std::move(tl));
             }
-            // Color emoji sample (output_format_plan.md Step 4).
+            // Color emoji sample.
             lines.push_back({"krastor",
                 "Emoji: 😀🚀✅❤️🔥🐛✨🎉👍🤔 color test!"});
             // Auto-send one short message so the response stats line and the

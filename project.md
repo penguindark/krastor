@@ -65,9 +65,10 @@ bold; other escapes stripped) and drawn as styled runs with `nk_draw_text`:
 - diff-style full-line backgrounds when a whole visual line shares one bg color;
 - inline per-token backgrounds otherwise;
 - indentation-preserving word wrap with UTF-8-safe hard breaks.
-Planned extensions: route LLM content blocks (```json```, code fences, Markdown)
-through type-specific highlighters into the same renderer.
-Implemented per **`chat_ux_plan.md`**: per-response stats sub-line (`model - time -
+LLM replies are styled by the output formatting plugins (`src/formatters.h`:
+Markdown, syntax highlighting, Thought blocks, color emoji) before reaching this
+renderer.
+Implemented: per-response stats sub-line (`model - time -
 tok/s`) + context-usage footer (`llm.context_size`), window-size persistence,
 mouse-wheel/keyboard chat scrolling with follow-bottom, and chat text selection &
 copy (mouse drag, double-click word, triple-click line, Shift+arrows, Ctrl+A/C,
@@ -170,14 +171,13 @@ draws audio-reactive cyan/magenta mesh ribbons (synthetic animation when the mic
 is closed). **Hands-free continuous cycle**: mic → VAD → STT → LLM → text → TTS
 with echo guard and `agent.continuous` auto-start; **barge-in** (speak over the
 TTS to cut it short when the ignore-guard is off). **Configurable agent name**
-and **effect brightness** in Settings. **Chat UX increment** (`chat_ux_plan.md`,
-complete): per-response stats sub-line + context-usage footer (`llm.context_size`),
+and **effect brightness** in Settings. **Chat UX increment**:
+per-response stats sub-line + context-usage footer (`llm.context_size`),
 window-size persistence, wheel/keyboard scrolling with follow-bottom, chat text
-selection & UTF-8 copy (mouse + Shift+arrows). **Output formatting plugins**
-(`output_format_plan.md`, complete): Markdown -> ANSI formatter styles LLM
+selection & UTF-8 copy (mouse + Shift+arrows). **Output formatting plugins**:
+Markdown -> ANSI formatter styles LLM
 replies (headings, bold/italic, inline code, lists, quotes, tables), data-driven
 syntax highlighting (`data/languages/*.json`), collapsible "Thought" blocks for
 model reasoning, and full-color emoji via a Noto sprite atlas. **Stop button**
 aborts an in-flight LLM request instantly (cross-thread WinHTTP handle close /
 curl progress abort) and cuts TTS playback mid-utterance.
-  **Past design doc:** **`chat_ux_plan.md`** (the chat UX increment above).

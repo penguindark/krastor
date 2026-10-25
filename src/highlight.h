@@ -1,5 +1,5 @@
 // Krastor — data-driven syntax highlighting for fenced code blocks
-// (output_format_plan.md Step 2). Language definitions are JSON "plugins"
+// Language definitions are JSON "plugins"
 // in data/languages/*.json (same philosophy as the GLSL shader plugins):
 //
 //   { "name": "Python", "aliases": ["py"],

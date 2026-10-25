@@ -3,7 +3,6 @@
 // (src/ansi.h), so every output plugin is a pure text transform that emits
 // those escapes. This class owns the plugin chain; only the *displayed* text
 // is formatted — conversation history and TTS always use the raw reply.
-// See output_format_plan.md.
 
 #pragma once
 
