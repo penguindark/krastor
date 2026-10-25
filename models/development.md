@@ -11,19 +11,26 @@ weights never enter the repository.
 - Each model subfolder contains a generated `README.md` recording: source URL,
   license, file list, intended use. Downloaded via `../tools/download_models.py`.
 
-## Inventory (Phase 2, 2026-10-25)
+## Inventory (pruned 2026-10-26 — currently on disk)
 
 | Folder | Role | Model | License | Notes |
 |---|---|---|---|---|
-| `stt-vosk-it-large/` | STT streaming | vosk-model-it-0.22 (~1.2 GB) | Apache-2.0 | **default IT**: WER 8.10 cv-test, RTF ~0.19 on dev machine |
-| `stt-vosk-it/` | STT streaming | vosk-model-small-it-0.4 (~41 MB) | Apache-2.0 | fast fallback (`--small`), noticeably worse accuracy |
-| `stt-vosk-en/` | STT streaming | vosk-model-small-en-us-0.15 (~40 MB) | Apache-2.0 | word-level partials; near-perfect in round-trip test |
+| `stt-parakeet-multilingual/` | STT multilingual | NVIDIA Parakeet TDT 0.6B v3 int8 (~650 MB) | CC-BY-4.0 | **chosen single EN+IT model**: auto-detect, punctuation+capitalization, RTF ~0.15 |
+| `stt-vosk-it-large/` | STT streaming | vosk-model-it-0.22 (~1.2 GB) | Apache-2.0 | word-level live partials (live A/B test vs Parakeet pending) |
+| `stt-vosk-en/` | STT streaming | vosk-model-small-en-us-0.15 (~40 MB) | Apache-2.0 | word-level partials (live A/B test vs Parakeet pending) |
 | `tts-piper-it-it-paola/` | TTS Italian | Piper it_IT paola (medium) | BSD-3 / CC-BY | via sherpa-onnx VITS |
 | `tts-piper-en-us-lessac/` | TTS English | Piper en_US lessac (medium) | BSD-3 / CC-BY | via sherpa-onnx VITS |
-| `stt-whisper-small/` | STT multilingual | sherpa-onnx-whisper-small (~640 MB int8) | BSD-3/MIT | 99 langs auto-detect; RTF ~0.6 CPU; IT accuracy weak |
-| `stt-parakeet-multilingual/` | STT multilingual | NVIDIA Parakeet TDT 0.6B v3 int8 (~650 MB) | CC-BY-4.0 | **25 langs incl EN+IT auto-detect, punctuation+capitalization, RTF ~0.15** — best single-model candidate |
-| `vad-silero/` | VAD | silero_vad.onnx (~2 MB) | BSD-3 | segments mic audio for Parakeet/Whisper near-live mode |
+| `vad-silero/` | VAD | silero_vad.onnx (~2 MB) | BSD-3 | segments mic audio for Parakeet near-live mode |
 | `espeak-ng-data/` | TTS frontend | espeak-ng data (shared G2P) | GPL-3 | required by Piper voices on sherpa-onnx 1.x |
+
+## Pruned from disk (test results kept in this file + development_log.md;
+re-download anytime with `tools/download_models.py --only <name>`)
+
+| Folder | Model | Why pruned | Result on record |
+|---|---|---|---|
+| `stt-whisper-small/` | Whisper small int8 | benchmark only; Italian weak | RTF 0.6 CPU / 0.13 CUDA; IT garbled ("su pezcan epiglio") |
+| `hf-cache/` | faster-whisper cache (small, large-v3-turbo) | GPU benchmark artifacts | large-v3-turbo CUDA: perfect IT at RTF 0.32 — documented GPU upgrade path |
+| `stt-vosk-it/` | vosk-model-small-it-0.4 | superseded by `stt-vosk-it-large` | word errors ("vuoi perà da"); `parrot.py --small` needs re-download |
 
 ## Hardware acceleration (dev machine, checked 2026-10-26)
 i7-11800H (8C/16T), 64 GB RAM, **RTX 3080 Laptop (CUDA available)**. All chosen

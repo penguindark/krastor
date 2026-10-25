@@ -120,3 +120,14 @@ C++ note: CUDA excludes MinGW; GPU path would be MSVC-only — keep CPU default 
 design the STT interface provider-agnostic.
 
 **Next:** user live test -> confirm STT strategy -> Phase 3.
+
+---
+
+## 2026-10-26 — Pruned unused models from disk
+
+Removed (all re-downloadable via `tools/download_models.py`, results kept in
+`models/development.md`): `stt-whisper-small` (1.3 GB, benchmark only, weak IT),
+`hf-cache` (2.0 GB, faster-whisper benchmark cache), `stt-vosk-it` small (54 MB,
+superseded by big model). Kept: Parakeet (chosen STT), Silero VAD, both Piper
+voices, espeak-ng-data, Vosk big-it + small-en (pending live A/B test).
+Freed ~3.3 GB.
