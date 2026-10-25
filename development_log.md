@@ -38,3 +38,31 @@ Format: `## YYYY-MM-DD — title` (see `AGENT.md` for rules).
 - Verified build with `mingw-debug` and `msvc-2026-debug` presets -> `bin/krastor.exe`.
 
 **Next:** Phase 2 — research and prototype local STT/TTS models (EN+IT) in `tools/`.
+
+---
+
+## 2026-10-25 — Phase 2: STT/TTS research and Python parrot prototype
+
+**Research (web):** sherpa-onnx streaming zipformer has no Italian model; Kokoro
+(sherpa-onnx port) is zh+en only. Chosen stack: **Vosk** for streaming STT (true
+word-level partials for IT and EN, Apache-2.0, C API for later C++ use) and
+**Piper voices via sherpa-onnx** for TTS (native it_IT + en_US voices, C++ API).
+
+**Models downloaded** (via new `tools/download_models.py`, each with generated README):
+`stt-vosk-it` (small-it-0.4), `stt-vosk-en` (small-en-us-0.15),
+`tts-piper-it-it-paola` (medium), `tts-piper-en-us-lessac` (medium), `espeak-ng-data`.
+
+**Scripts added:** `tools/download_models.py`, `tools/parrot.py` (mic -> streaming STT
+with live partials -> TTS -> speaker), `tools/roundtrip_test.py` (automated TTS->STT
+check, no mic), `tools/requirements.txt`.
+
+**Results:** round-trip EN near-perfect; IT understandable but small model makes some
+word errors — upgrade candidate `vosk-model-it-0.42` pending user listening test.
+TTS WAV samples in `tools/out/` for the user to listen.
+
+**Gotchas:** Vosk 0.3.45 silently ignores float32 PCM (feed int16); sherpa-onnx
+2.0.0 removed the bundled espeak-ng frontend for Piper VITS voices (pinned
+`sherpa-onnx==1.13.8`).
+
+**Next:** user listens to samples and confirms model choices; then Phase 3 (core
+agent) and Phase 4 (C++ integration of Vosk + sherpa-onnx).

@@ -24,6 +24,9 @@ CMakeUserPresets.json
 __pycache__/
 *.pyc
 
+# Prototype outputs (generated WAVs, samples)
+tools/out/
+
 # AI models — never committed (see project.md section 6).
 # Keep the folder's development.md tracked as documentation exception.
 models/*

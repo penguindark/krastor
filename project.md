@@ -135,8 +135,8 @@ Each tracked folder has a `development.md` describing its development in detail.
 
 - **Phase 1 — Initialization (done 2026-10-25).** Folders, docs, git, dual-toolchain
   CMake build, python venv, models policy. Hello-world builds with MinGW + MSVC 2026.
-- **Phase 2 — Model research.** Evaluate local STT/TTS (EN+IT) with Python prototypes in
-  `tools/` and `.venv`; download chosen models into `models/`.
+- **Phase 2 — Model research (done 2026-10-25).** Stack chosen: Vosk streaming STT +
+  Piper/sherpa-onnx TTS (EN+IT). Python parrot prototype validates the pipeline.
 - **Phase 3 — Core agent (C++).** Config loader, OpenAI-compatible HTTP client,
   conversation loop, CLI text I/O.
 - **Phase 4 — Local STT/TTS integration** in C++ (mic capture + playback pipeline).
