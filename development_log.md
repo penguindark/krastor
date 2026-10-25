@@ -734,3 +734,22 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   now skipped at load time.
 - Verified: CLI round-trip against LM Studio returns the reply and exits;
   both toolchains clean.
+
+## 2026-10-26 (later) - Code-block aesthetics + settings modal spacing
+
+- Code blocks render as one continuous rectangle now:
+  - interior blank lines carried no colored token, so the renderer painted
+    no background and the shader showed through as a gap - `append_block_bg`
+    now emits one space so the full-line background stays continuous;
+  - the fence language label gets the block background too, becoming a dim
+    full-width header bar attached to the block.
+  - UITEST seeds the exact python script from the bug report (interior
+    blank line) as a regression sample; pixel-probed screenshots confirm
+    continuous (24,26,33) coverage.
+- Settings modal: window `spacing.y` pushed 4->8 px inside the modal
+  (label rows slimmed 26->18 px to compensate), so field groups no longer
+  collide; content still fits the 620 px modal without a scrollbar
+  (10 px was tested and overflowed).
+- Language packs already cover the requested set via aliases: bash (sh/
+  shell/zsh), python (py/python3), javascript (js/ts/typescript),
+  cpp (c/c++/cc/cxx). Both toolchains clean.

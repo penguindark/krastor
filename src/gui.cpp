@@ -315,8 +315,11 @@ struct AppState {
                 "---\n"
                 "| Col A | Col B |\n"
                 "|---|---|\n"
-                "| 1 | two |\n"
-                "```python\nprint('hello')  # code block\n```")});
+                "| 1 | two |")});
+            // Code-block sample with an interior blank line (background
+            // continuity regression for append_block_bg).
+            lines.push_back({"krastor", fmt.format(
+                "```python\ndef count_primes(count):\n    primes = []\n    num = 2\n    while len(primes) < count:\n        # Controllo se il numero e primo\n        is_prime = True\n        for p in primes:\n            if p * p > num:\n                break\n        if is_prime:\n            primes.append(num)\n        num += 1\n    return primes\n\nprimi100 = count_primes(100)\nprint(\"I primi 100 numeri sono:\")\nfor i, p in enumerate(primi100, 1):\n    print(f\"{i}: {p}\")\n```")});
             // Collapsible Thought block sample.
             {
                 ChatLine tl{"krastor", fmt.format("Answer after **thinking**."), ""};
@@ -700,15 +703,19 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         return false;
     }
 
-    nk_layout_row_dynamic(ctx, 26, 1);
+    // Vertical breathing room between the fields (the default 4 px makes the
+    // label/input pairs and the property rows visually collide).
+    nk_style_push_vec2(ctx, &ctx->style.window.spacing, nk_vec2(4.0f, 8.0f));
+
+    nk_layout_row_dynamic(ctx, 18, 1);
     nk_label(ctx, "Agent name", NK_LEFT);
     nk_layout_row_dynamic(ctx, 26, 1);
     nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, s.name,
                                    sizeof(s.name) - 1, nk_filter_default);
 
-    nk_layout_row_dynamic(ctx, 22, 1);
+    nk_layout_row_dynamic(ctx, 16, 1);
     nk_label(ctx, "LLM Engine", NK_LEFT);
-    nk_layout_row_dynamic(ctx, 26, 1);
+    nk_layout_row_dynamic(ctx, 18, 1);
     nk_label(ctx, "Model (from llm_models.json)", NK_LEFT);
     nk_layout_row_dynamic(ctx, 26, 1);
     {
@@ -737,7 +744,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         }
     }
 
-    nk_layout_row_dynamic(ctx, 26, 1);
+    nk_layout_row_dynamic(ctx, 18, 1);
     nk_label(ctx, "TTS Voice", NK_LEFT);
     nk_layout_row_dynamic(ctx, 26, 1);
     if (nk_combo_begin_label(ctx, s.voice.empty() ? "(none)" : s.voice.c_str(),
@@ -750,7 +757,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     }
 
     // Background effect plugins from data/shaders (validated = compiles).
-    nk_layout_row_dynamic(ctx, 26, 1);
+    nk_layout_row_dynamic(ctx, 18, 1);
     nk_label(ctx, "Background effect", NK_LEFT);
     nk_layout_row_dynamic(ctx, 26, 1);
     if (nk_combo_begin_label(ctx, s.effect.c_str(), nk_vec2(480, 240))) {
@@ -813,7 +820,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     nk_layout_row_dynamic(ctx, 26, 1);
     nk_property_int(ctx, "Max tokens", 1, &s.max_tokens, 32000, 64, 1.0f);
 
-    nk_layout_row_dynamic(ctx, 22, 1);
+    nk_layout_row_dynamic(ctx, 18, 1);
     nk_label(ctx, "System prompt", NK_LEFT);
     nk_layout_row_dynamic(ctx, 52, 1);
     nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, s.system_prompt,
@@ -851,6 +858,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         s.status.clear();
     }
 
+    nk_style_pop_vec2(ctx);
     nk_end(ctx);
     nk_style_pop_style_item(ctx);
     return true;

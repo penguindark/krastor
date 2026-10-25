@@ -308,8 +308,13 @@ void append_block_bg(std::vector<std::string>& out, const std::string& code)
     size_t start = 0;
     while (start <= code.size()) {
         const size_t nl = code.find('\n', start);
-        const std::string line =
+        std::string line =
             code.substr(start, nl == std::string::npos ? std::string::npos : nl - start);
+        // An empty line would carry no colored token, so the renderer paints no
+        // background and the block shows a transparent gap: keep one space so
+        // the full-line background stays continuous.
+        if (line.empty())
+            line = " ";
         out.push_back(std::string(kBlockBg) + line + kReset);
         if (nl == std::string::npos)
             break;
@@ -358,7 +363,9 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
             if (i < n)
                 ++i;  // closing fence
             if (!lang.empty())
-                out.push_back(std::string(kDim) + "  " + lang + kReset);
+                // Header bar: same background as the block so the renderer's
+                // full-line fill makes one continuous rectangle.
+                out.push_back(std::string(kBlockBg) + kDim + "  " + lang + kReset);
             const std::string styled = hl ? hl(code, lang) : std::string();
             append_block_bg(out, styled.empty() ? code : styled);
             continue;
