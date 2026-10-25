@@ -63,7 +63,8 @@ bold; other escapes stripped) and drawn as styled runs with `nk_draw_text`:
 - inline per-token backgrounds otherwise;
 - indentation-preserving word wrap with UTF-8-safe hard breaks.
 Planned extensions: route LLM content blocks (```json```, code fences, Markdown)
-through type-specific highlighters into the same renderer.
+through type-specific highlighters into the same renderer; mouse/keyboard text
+selection & copy, wheel scrolling and per-response stats — see **`chat_ux_plan.md`**.
 
 ### 4.2 Attachments (input) — implemented
 - **Drag & drop** of files via GLFW drop callback: images (png/jpg/bmp/gif/tga)
@@ -170,4 +171,7 @@ TTS to cut it short when the ignore-guard is off). **Configurable agent name**
 and **effect brightness** in Settings. Remaining: markdown→styled
   rendering of LLM replies, mic selector in the GUI.
   **Next-phase design:** `spectogram_plan.md` (font scaling, shader-effect plugins,
-  mic spectrogram, hands-free cycle, exe-folder config persistence).
+  mic spectrogram, hands-free cycle, exe-folder config persistence) and
+  **`chat_ux_plan.md`** (per-response LLM stats + context-usage footer with
+  `llm.context_size`, window-size persistence, mouse-wheel/keyboard chat scrolling
+  with follow-bottom, chat text selection & UTF-8 copy via mouse and Shift+arrows).

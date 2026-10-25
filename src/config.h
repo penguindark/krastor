@@ -19,6 +19,7 @@ struct LlmConfig {
         "your replies may be spoken aloud.";
     double temperature = 0.7;
     int max_tokens = 1024;
+    int context_size = 131072;      // model context window (footer usage %)
 };
 
 struct TtsConfig {

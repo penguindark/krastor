@@ -31,6 +31,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "config.h"
@@ -64,7 +65,38 @@ constexpr int kFontMin = 12, kFontMax = 30, kFontStep = 2, kFontDefault = 18;
 struct ChatLine {
     std::string who;   // "you" | "krastor" | "sys"
     std::string text;
+    std::string meta;  // optional dim stats sub-line (assistant replies)
+    ChatLine() = default;
+    ChatLine(std::string w, std::string t, std::string m = {})
+        : who(std::move(w)), text(std::move(t)), meta(std::move(m)) {}
 };
+
+// "4.2s" under a minute, "11m 30s" at/above (stats line formatting).
+std::string fmt_elapsed(double ms)
+{
+    char buf[32];
+    const double s = ms / 1000.0;
+    if (s < 60.0)
+        std::snprintf(buf, sizeof(buf), "%.1fs", s);
+    else
+        std::snprintf(buf, sizeof(buf), "%dm %02ds", static_cast<int>(s / 60.0),
+                      static_cast<int>(std::fmod(s, 60.0)));
+    return buf;
+}
+
+// 131072 -> "131,072" (context usage footer).
+std::string fmt_thousands(long long v)
+{
+    const bool neg = v < 0;
+    std::string s = std::to_string(neg ? -v : v);
+    std::string out;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (i && (s.size() - i) % 3 == 0)
+            out += ',';
+        out += s[i];
+    }
+    return neg ? "-" + out : out;
+}
 
 struct SettingsState {
     char name[128] = {0};
@@ -73,6 +105,7 @@ struct SettingsState {
     char system_prompt[4096] = {0};
     float temperature = 0.7f;
     int max_tokens = 1024;
+    int context_size = 131072;
     std::string voice;
     std::string status;
     bool open = false;
@@ -92,6 +125,7 @@ struct SettingsState {
                       cfg.llm.system_prompt.c_str());
         temperature = static_cast<float>(cfg.llm.temperature);
         max_tokens = cfg.llm.max_tokens;
+        context_size = cfg.llm.context_size;
         effect_intensity = static_cast<float>(cfg.gui.effect_intensity);
         const auto* v = voices.current();
         voice = v ? v->id : (voices.voices().empty() ? std::string() : voices.voices()[0].id);
@@ -124,6 +158,7 @@ struct AppState {
     std::future<std::string> stt_fut;
     std::atomic<bool> speaking{false};
     bool auto_speak = true;
+    int last_prompt_tokens = 0;  // context occupancy = last request's prompt size
 
     // ---- Hands-free pipeline (mic -> STT -> chat -> LLM -> TTS) ----
     // The Stt feeder thread pushes closed VAD segments into `utterances`; a
@@ -164,6 +199,10 @@ struct AppState {
             lines.push_back({"krastor",
                 E + "[48;2;80;20;20m-  full-width red diff line" + E + "[0m"});
             attach_clipboard_image();
+            // Auto-send one short message so the response stats line and the
+            // context footer are visible in a screenshot without typing.
+            auto_speak = false;  // keep the screenshot test silent
+            send("Say hello in one short sentence.");
         }
     }
 
@@ -215,7 +254,11 @@ struct AppState {
         const LlmClient client(llm);          // snapshot: survives settings changes
         const Conversation snapshot = conv;   // copy for the worker thread
         llm_fut = std::async(std::launch::async, [client, snapshot] {
-            return client.complete(snapshot);
+            const auto t_start = std::chrono::steady_clock::now();
+            LlmReply r = client.complete(snapshot);
+            r.elapsed_ms = std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - t_start).count();
+            return r;
         });
     }
 
@@ -322,7 +365,19 @@ struct AppState {
             worker = Worker::None;
             if (reply.ok) {
                 conv.add_assistant(reply.content);
-                lines.push_back({"krastor", reply.content});
+                ChatLine line{"krastor", reply.content, ""};
+                // Stats sub-line: "model - time - tok/s" ("~" when the server
+                // omitted usage and the token counts are estimated).
+                const double secs =
+                    reply.elapsed_ms > 1.0 ? reply.elapsed_ms / 1000.0 : 0.001;
+                char rate[48];
+                std::snprintf(rate, sizeof(rate), "%s%.1f tok/s",
+                              reply.tokens_estimated ? "~" : "",
+                              reply.completion_tokens / secs);
+                line.meta = reply.model + " - " + fmt_elapsed(reply.elapsed_ms) +
+                            " - " + rate;
+                last_prompt_tokens = reply.prompt_tokens;
+                lines.push_back(std::move(line));
                 if (auto_speak)
                     speak_async(reply.content);
             } else {
@@ -378,7 +433,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     if (!s.open)
         return false;
 
-    const int mw = 520, mh = 592;
+    const int mw = 520, mh = 620;
     // The modal needs its own opaque background: the main window's
     // fixed_background is fully transparent so the shader shows through.
     nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
@@ -480,6 +535,9 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     nk_property_float(ctx, "Temperature", 0.0f, &s.temperature, 2.0f, 0.05f, 0.01f);
     nk_layout_row_dynamic(ctx, 26, 1);
     nk_property_int(ctx, "Max tokens", 1, &s.max_tokens, 32000, 64, 1.0f);
+    nk_layout_row_dynamic(ctx, 26, 1);
+    nk_property_int(ctx, "Context tokens", 1024, &s.context_size, 1048576, 1024,
+                    1024.0f);
 
     nk_layout_row_dynamic(ctx, 22, 1);
     nk_label(ctx, "System prompt", NK_LEFT);
@@ -500,6 +558,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         cfg.llm.system_prompt = s.system_prompt;
         cfg.llm.temperature = s.temperature;
         cfg.llm.max_tokens = s.max_tokens;
+        cfg.llm.context_size = s.context_size;
         cfg.tts.default_voice = s.voice;
         if (!s.voice.empty())
             voices.select(s.voice);
@@ -734,6 +793,11 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
             if (l.who == "you") col = nk_rgb(120, 180, 255);
             else if (l.who == "krastor") col = nk_rgb(130, 220, 150);
             content_h += draw_chat_line(ctx, prefix, l.text, col, text_w) + spacing;
+            // Dim stats sub-line under the reply (model - time - tok/s).
+            if (!l.meta.empty())
+                content_h += draw_chat_line(ctx, "  \xC2\xB7 ", l.meta,
+                                             nk_rgb(110, 110, 120), text_w) +
+                             spacing;
         }
         // Pin the view to the newest line. The group keeps its own persistent
         // scroll offset (nk_window_set_scroll would scroll the outer window).
@@ -1091,30 +1155,42 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             if (listen_click)
                 app.start_listen();
 
-            // Status line
+            // Status line + context usage footer.
             nk_layout_row_dynamic(ctx, status_h, 1);
             std::string status_buf;
-            const char* status = "";
-            if (app.worker == AppState::Worker::Thinking) status = "thinking...";
+            if (app.worker == AppState::Worker::Thinking)
+                status_buf = "thinking...";
             else if (app.worker == AppState::Worker::Listening)
-                status = "listening... speak now (max 10 s)";
-            else if (app.speaking.load()) status = "speaking...";
+                status_buf = "listening... speak now (max 10 s)";
+            else if (app.speaking.load()) status_buf = "speaking...";
             else if (app.hands_free()) {
                 status_buf = "hands-free: listening - just speak"
                              "  (ignore while busy: ";
                 status_buf += cfg.agent.ignore_while_speaking ? "on" : "off";
                 status_buf += ")";
-                status = status_buf.c_str();
             }
             else if (const Voice* v = voices.current()) {
                 status_buf = "voice: " + v->id + "  |  mic: " +
                              (cfg.stt.input_device < 0 ? std::string("default")
                                                        : std::to_string(cfg.stt.input_device)) +
                              "  (CLI /devices, /mic)";
-                status = status_buf.c_str();
             }
-            if (*status)
-                nk_label(ctx, status, NK_MIDDLE_LEFT);
+            // ctx: <last prompt tokens> / <model window> — the last request's
+            // prompt size is the current context occupancy. Amber past 85%.
+            {
+                const int total = cfg.llm.context_size > 0 ? cfg.llm.context_size : 1;
+                const int pct = static_cast<int>(100.0 * app.last_prompt_tokens / total);
+                if (!status_buf.empty())
+                    status_buf += "  |  ";
+                status_buf += "ctx: " + fmt_thousands(app.last_prompt_tokens) +
+                              " / " + fmt_thousands(total) +
+                              " (" + std::to_string(pct) + "%)";
+            }
+            if (100.0 * app.last_prompt_tokens > 85.0 * cfg.llm.context_size)
+                nk_label_colored(ctx, status_buf.c_str(), NK_MIDDLE_LEFT,
+                                 nk_rgb(220, 180, 90));
+            else
+                nk_label(ctx, status_buf.c_str(), NK_MIDDLE_LEFT);
         }
         nk_end(ctx);
 

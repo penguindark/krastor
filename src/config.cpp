@@ -80,6 +80,7 @@ Config Config::load(const std::string& path)
             cfg.llm.system_prompt = j.value("system_prompt", cfg.llm.system_prompt);
             cfg.llm.temperature = j.value("temperature", cfg.llm.temperature);
             cfg.llm.max_tokens = j.value("max_tokens", cfg.llm.max_tokens);
+            cfg.llm.context_size = j.value("context_size", cfg.llm.context_size);
         }
         if (root.contains("tts")) {
             const auto& j = root["tts"];
@@ -125,6 +126,7 @@ void Config::save(const std::string& path) const
         {"system_prompt", llm.system_prompt},
         {"temperature", llm.temperature},
         {"max_tokens", llm.max_tokens},
+        {"context_size", llm.context_size},
     };
     root["tts"] = {
         {"models_dir", tts.models_dir},

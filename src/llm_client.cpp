@@ -47,7 +47,8 @@ LlmReply LlmClient::complete(const Conversation& conversation) const
         {"Authorization", "Bearer " + config_.api_key},
     };
 
-    const auto res = https_post(url, headers, body.dump());
+    const std::string payload = body.dump();
+    const auto res = https_post(url, headers, payload);
     if (res.status == 0) {
         reply.error = "HTTP request failed: " + res.error;
         return reply;
@@ -61,6 +62,19 @@ LlmReply LlmClient::complete(const Conversation& conversation) const
         const auto json = nlohmann::json::parse(res.body);
         reply.content = json.at("choices").at(0).at("message").at("content")
                             .get<std::string>();
+        reply.model = json.value("model", config_.model);
+        // OpenAI usage block; some servers omit it or report zeros.
+        if (json.contains("usage") && json["usage"].is_object()) {
+            reply.prompt_tokens = json["usage"].value("prompt_tokens", 0);
+            reply.completion_tokens = json["usage"].value("completion_tokens", 0);
+        }
+        if (reply.prompt_tokens <= 0 || reply.completion_tokens <= 0) {
+            // Rough fallback (~4 chars per token) so the stats line still works
+            // against servers without usage support.
+            reply.prompt_tokens = static_cast<int>(payload.size() / 4);
+            reply.completion_tokens = static_cast<int>(reply.content.size() / 4);
+            reply.tokens_estimated = true;
+        }
         reply.ok = true;
     } catch (const nlohmann::json::exception& e) {
         reply.error = std::string("Unexpected response JSON: ") + e.what();

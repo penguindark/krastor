@@ -434,3 +434,23 @@ hands-free recognize loop, detached speak thread and both `future::get()`
 calls in `poll()` are now try/caught (log + keep running). `main()` installs
 a `std::set_terminate` handler that writes the real exception message to
 `exe_dir()/krastor_error.log` — if the abort ever recurs, the cause is on disk.
+
+---
+
+## 2026-10-26 — chat UX increment: response stats + context footer (chat_ux_plan Step 1)
+
+Implemented `chat_ux_plan.md` Step 1 (plan file committed with this change):
+
+- `LlmReply` carries `model`/`prompt_tokens`/`completion_tokens`/
+  `tokens_estimated`; `llm_client` parses the OpenAI `usage` block and
+  falls back to a chars/4 estimate when the server omits it. Elapsed time is
+  measured by the async worker lambda in `send()`.
+- Each assistant reply gets a dim stats sub-line: `model - time - tok/s`
+  (`~` prefix on the rate when estimated; `4.2s` / `11m 30s` formats).
+- New setting `llm.context_size` (default 131072) + "Context tokens" field in
+  the Settings modal; the status line footer shows `ctx: 5,231 / 131,072 (4%)`
+  with thousands separators, amber past 85% (occupancy = last reply's prompt).
+- `KRASTOR_UITEST=1` now auto-sends one short message (silent) so a screenshot
+  proves both stats render; verified live against LM Studio:
+  `minicpm5-2b-heretic-abliterated - 0.3s - 51.8 tok/s`, `ctx: 45 / 131,072 (0%)`.
+- Both toolchains build clean.
