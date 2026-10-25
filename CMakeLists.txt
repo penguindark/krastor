@@ -22,9 +22,26 @@ endforeach()
 
 add_executable(krastor
     src/main.cpp
+    src/config.cpp
+    src/conversation.cpp
+    src/llm_client.cpp
+    src/voices.cpp
 )
 
 target_compile_features(krastor PRIVATE cxx_std_20)
+
+# Vendored single-header libraries (see libs/development.md).
+target_include_directories(krastor PRIVATE "${CMAKE_SOURCE_DIR}/libs")
+
+if(WIN32)
+    # HTTPS via WinHTTP (built into Windows) — identical behavior on MinGW and MSVC.
+    target_sources(krastor PRIVATE src/http_client_winhttp.cpp)
+    target_link_libraries(krastor PRIVATE winhttp)
+else()
+    target_sources(krastor PRIVATE src/http_client_curl.cpp)
+    find_package(CURL REQUIRED)
+    target_link_libraries(krastor PRIVATE CURL::libcurl)
+endif()
 
 if(MSVC)
     target_compile_options(krastor PRIVATE /W4 /utf-8)

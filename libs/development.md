@@ -6,21 +6,18 @@ Development doc for this folder (see `../project.md` section 4.3).
 Source of third-party libraries vendored into the repo (small, permissive-licensed,
 must compile with MinGW GCC and MSVC on Windows and GCC on Linux).
 
-## Current state (Phase 1)
-Empty (`.gitkeep`). Populated in Phase 5 with the locked stack:
+## Current state (Phase 3, 2026-10-26)
 
-| Library | License | Form |
-|---|---|---|
-| GLFW | zlib | prebuilt lib + headers |
-| glad (OpenGL 3.3 core) | MIT | 2 files |
-| Nuklear | MIT | 1 header |
-| nanosvg | zlib | 2 files |
-| stb_image | MIT/UNLICENSE | headers |
-| md4c | MIT | 2 C files |
-| nlohmann/json | MIT | 1 header |
-| miniaudio | public domain/MIT | 1 header |
+| Library | License | Form | Where |
+|---|---|---|---|
+| nlohmann/json 3.12 | MIT | 1 header | `nlohmann/json.hpp` — config + LLM JSON |
 
-libcurl will be linked from a system/prebuilt install, not vendored here.
+Removed: `httplib` (cpp-httplib 0.63) — its HTTPS transport requires OpenSSL,
+which the compiler-only MinGW install lacks; replaced by WinHTTP (Windows) and
+libcurl (Linux) in `src/http_client_*.cpp`.
+
+Planned for Phase 5 (see project.md 4.3): GLFW, glad, Nuklear, nanosvg, stb_image,
+md4c, miniaudio. libcurl on Linux is found via `find_package(CURL)`, not vendored.
 
 ## Conventions
 - One subfolder per library, pinned version, keep upstream `LICENSE` file.

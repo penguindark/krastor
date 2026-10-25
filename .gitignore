@@ -36,6 +36,9 @@ models/*
 opencode.exe
 opencode.jsonc
 
+# Local configuration (may contain API keys) — copy config.example.json
+config.json
+
 # Editor / OS noise
 .vs/
 .vscode/

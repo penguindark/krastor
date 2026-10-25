@@ -137,8 +137,8 @@ Each tracked folder has a `development.md` describing its development in detail.
   CMake build, python venv, models policy. Hello-world builds with MinGW + MSVC 2026.
 - **Phase 2 — Model research (done 2026-10-25).** Stack chosen: Vosk streaming STT +
   Piper/sherpa-onnx TTS (EN+IT). Python parrot prototype validates the pipeline.
-- **Phase 3 — Core agent (C++).** Config loader, OpenAI-compatible HTTP client,
-  conversation loop, CLI text I/O.
+- **Phase 3 — Core agent (done 2026-10-26).** Config loader, OpenAI-compatible HTTP
+  client (WinHTTP/libcurl), conversation loop, CLI with runtime TTS voice selection.
 - **Phase 4 — Local STT/TTS integration** in C++ (mic capture + playback pipeline).
 - **Phase 5 — GUI.** GLFW + glad + Nuklear game-loop window, GLSL effects, terminal I/O
   panel with JSON/MD/code rendering, attachments input (design session first).

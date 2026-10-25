@@ -131,3 +131,32 @@ Removed (all re-downloadable via `tools/download_models.py`, results kept in
 superseded by big model). Kept: Parakeet (chosen STT), Silero VAD, both Piper
 voices, espeak-ng-data, Vosk big-it + small-en (pending live A/B test).
 Freed ~3.3 GB.
+
+---
+
+## 2026-10-26 — Phase 3: core C++ agent (config, LLM client, conversation, voice registry)
+
+**Modules added** (all build with MinGW + MSVC):
+- `config.h/.cpp` — JSON config loader (`config.json`, gitignored; `config.example.json`
+  committed); API key fallback KRASTOR_API_KEY -> OPENAI_API_KEY.
+- `conversation.h/.cpp` — system prompt + message history, reset.
+- `llm_client.h/.cpp` — OpenAI-compatible POST {base_url}/chat/completions.
+- `http_client.h` + `http_client_winhttp.cpp` (Windows) / `http_client_curl.cpp` (Linux)
+  — minimal HTTPS POST.
+- `voices.h/.cpp` — TTS voice registry: discovers `models/tts-piper-*`, runtime
+  switching via `select()` (user requirement: change voice during use).
+- CLI REPL in `main.cpp`: /help /voices /voice <id> /reset /config /exit.
+
+**HTTP decision:** cpp-httplib was vendored first but its HTTPS needs OpenSSL, absent
+from the compiler-only MinGW install -> replaced by WinHTTP (OS TLS, both compilers)
+on Windows and libcurl on Linux. httplib removed from libs/. nlohmann/json kept.
+
+**Verified:** clean builds on mingw-debug + msvc-2026-debug; CLI smoke test exercised
+voice discovery (en-us-lessac, it-it-paola), runtime switching, unknown-voice
+rejection, config display. LLM calls require an API key.
+
+**Gotchas:** winhttp.h uses `URL_COMPONENTS.nPort` on both toolchains; guard
+`#pragma comment(lib)` with `_MSC_VER`; MinGW install is compiler-only.
+
+**Next:** Phase 4 — local STT (Parakeet/Vosk) + TTS (sherpa-onnx Piper) in C++, wired
+to the voice registry.
