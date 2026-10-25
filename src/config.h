@@ -38,6 +38,8 @@ struct GuiConfig {
     int font_size = 18;             // px, Ctrl +/- steps within [12, 30]
     std::string effect;             // shader effect name ("" = built-in gradient)
     double effect_intensity = 1.0;  // background brightness multiplier 0.2..3
+    int window_w = 900;             // main window size, restored at startup
+    int window_h = 640;
 };
 
 struct AgentConfig {

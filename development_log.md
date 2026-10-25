@@ -454,3 +454,15 @@ Implemented `chat_ux_plan.md` Step 1 (plan file committed with this change):
   proves both stats render; verified live against LM Studio:
   `minicpm5-2b-heretic-abliterated - 0.3s - 51.8 tok/s`, `ctx: 45 / 131,072 (0%)`.
 - Both toolchains build clean.
+
+---
+
+## 2026-10-26 — window size persistence (chat_ux_plan Step 2)
+
+- `gui.window_w`/`gui.window_h` in the config (defaults 900x640); the window
+  is created at the saved size, clamped to >= 480x360.
+- Resize detection in the render loop arms a 500 ms debounced `cfg.save()`
+  (same pattern as the font zoom); a final `cfg.save()` after the loop keeps a
+  resize from the last 500 ms before a clean exit.
+- Verified end-to-end: config-seeded size restored at startup; Win32-resizing
+  the window updated the config after the debounce; clean WM_CLOSE exit works.

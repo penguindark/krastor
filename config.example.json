@@ -19,7 +19,9 @@
   "gui": {
     "font_size": 18,
     "effect": "",
-    "effect_intensity": 1.0
+    "effect_intensity": 1.0,
+    "window_w": 900,
+    "window_h": 640
   },
   "agent": {
     "name": "Krastor",

@@ -50,11 +50,11 @@ namespace krastor {
 
 namespace {
 
-constexpr int kWinW = 900;
-constexpr int kWinH = 600;
 // Font zoom ladder (Ctrl +/-): sizes baked into the atlas at startup, since
 // Nuklear glyphs are static and there is no dynamic font scaling.
 constexpr int kFontMin = 12, kFontMax = 30, kFontStep = 2, kFontDefault = 18;
+// Smallest window size accepted from config/restore.
+constexpr int kWinMinW = 480, kWinMinH = 360;
 
 // ---------------------------------------------------------------- background
 // The fullscreen background is drawn by the pluggable EffectEngine
@@ -870,7 +870,11 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
-    GLFWwindow* win = glfwCreateWindow(kWinW, kWinH, "Krastor", nullptr, nullptr);
+    // Restore the persisted window size (clamped to a usable minimum).
+    cfg.gui.window_w = cfg.gui.window_w < kWinMinW ? kWinMinW : cfg.gui.window_w;
+    cfg.gui.window_h = cfg.gui.window_h < kWinMinH ? kWinMinH : cfg.gui.window_h;
+    GLFWwindow* win =
+        glfwCreateWindow(cfg.gui.window_w, cfg.gui.window_h, "Krastor", nullptr, nullptr);
     if (!win) {
         std::fprintf(stderr, "gui: failed to create window (OpenGL 3.3 core required)\n");
         glfwTerminate();
@@ -927,6 +931,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         return i;
     };
     int font_px = cfg.gui.font_size;
+    double win_save_due = 0.0;  // debounced auto-save of the window size
     if (!fonts.empty())
         nk_style_set_font(&device.ctx, &fonts[font_index_for(font_px)]->handle);
     bool prev_plus = false, prev_minus = false, prev_zero = false;
@@ -965,6 +970,20 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
     while (!glfwWindowShouldClose(win)) {
         int w = 0, h = 0;
         glfwGetWindowSize(win, &w, &h);
+
+        // Window resized by the user: remember it (debounced, like font zoom).
+        if (w != cfg.gui.window_w || h != cfg.gui.window_h) {
+            cfg.gui.window_w = w;
+            cfg.gui.window_h = h;
+            win_save_due = glfwGetTime() + 0.5;
+        }
+        if (win_save_due > 0.0 && glfwGetTime() >= win_save_due) {
+            win_save_due = 0.0;
+            try {
+                cfg.save();
+            } catch (const std::exception&) {
+            }
+        }
 
         glfwPollEvents();
         app.poll();
@@ -1216,6 +1235,13 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         nk_glfw3_render(&device, NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);
 
         glfwSwapBuffers(win);
+    }
+
+    // Final save so a resize (or any debounced change) in the last 500 ms
+    // before a clean exit is not lost.
+    try {
+        cfg.save();
+    } catch (const std::exception&) {
     }
 
     nk_glfw3_shutdown(&device);
