@@ -794,3 +794,15 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   follow-bottom check. Verified by injecting WM_MOUSEWHEEL messages into the
   UITEST build: 25 down notches now reach the bottom, 3 up notches stay put
   (no snap-back). Both toolchains clean.
+
+## 2026-10-26 (later) - Floating action buttons replace the button row
+
+- The full-width Send/Img/Listen/Test voice/Stop row is gone: the chat
+  gained that vertical space back.
+- New floating cluster in the lower-right corner (above the input box):
+  five icon-only micro buttons drawn as color emoji-atlas sprites via
+  nk_button_image in a borderless Nuklear window begun after the main
+  window (so it floats on top): send 🚀, attach image 📎, listen 👂,
+  test voice 🎵, stop ❌. Each shows a tooltip (tiny popup window) on
+  hover; send/listen dim while the worker is busy; text fallback labels when the emoji atlas is missing.
+- Enter-to-send, attach/stop/send/listen/voice actions unchanged, just relocated. Both toolchains clean.

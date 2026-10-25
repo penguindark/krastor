@@ -1,6 +1,8 @@
 // Krastor — GUI implementation (GLFW + OpenGL3 + Nuklear).
 // The window is the agent's main interface: a terminal-style chat panel, a text
-// input with Send, a Listen button (Parakeet STT), an auto-speak toggle (Piper TTS)
+// input, a floating icon-button cluster in the lower-right corner (send,
+// attach image, Listen via Parakeet STT, test voice, stop - each with a
+// tooltip), an auto-speak toggle (Piper TTS)
 // and a gear icon opening the settings modal. Slow work (LLM HTTP, STT, TTS) runs
 // on worker threads so the render loop never blocks. A GLSL fragment shader draws
 // an animated background behind the UI.
@@ -1810,6 +1812,10 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         struct nk_context* ctx = &device.ctx;
 
         // ---- main surface (transparent: the shader shows through) ----
+        // Floating action button geometry: computed inside the main window
+        // (font-proportional row heights live there), consumed after nk_end.
+        float fab_sz = 34.0f;
+        float fab_bottom = 90.0f;  // gap from the window bottom to the fab row
         nk_begin(ctx, "Krastor", nk_rect(0, 0, (float)w, (float)h), 0);
         {
             // A chat click requested keyboard focus: drop the input box's edit
@@ -1824,9 +1830,9 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                                  ? ctx->style.font->height : 18.0f;
             const float top_h = fh * 2.4f;
             const float input_h = fh * 3.7f;
-            const float btn_h = fh * 1.9f;
             const float status_h = fh * 1.2f;
             const float chip_h = fh * 1.45f;
+            fab_sz = fh * 1.45f;  // floating action buttons (icon-only)
 
             // Top bar: title | hands-free | speak toggle | settings
             nk_layout_row_begin(ctx, NK_DYNAMIC, top_h, 4);
@@ -1852,8 +1858,9 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             // group height is the window height minus the other rows (all
             // font-proportional) plus row spacing/padding.
             const float attach_h = app.attachments.empty() ? 0.0f : chip_h + 4.0f;
-            const float chat_h = (float)h - top_h - input_h - btn_h - status_h -
+            const float chat_h = (float)h - top_h - input_h - status_h -
                                  attach_h - 40.0f;
+            fab_bottom = status_h + input_h + attach_h + 14.0f;
             chat_panel(ctx, app, chat_h > 60.0f ? chat_h : 60.0f);
 
             // Attachment chips: one per pasted image, click a chip to remove it.
@@ -1927,36 +1934,13 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             }
             nk_layout_row_end(ctx);
 
-            // Action buttons on their own row below the input box.
-            nk_layout_row_begin(ctx, NK_DYNAMIC, btn_h, 5);
-            nk_layout_row_push(ctx, 0.15f);
-            const bool send_click =
-                nk_button_label(ctx, app.worker == AppState::Worker::None ? "Send" : "...");
-            nk_layout_row_push(ctx, 0.09f);
-            const bool img_click = nk_button_label(ctx, "Img");
-            nk_layout_row_push(ctx, 0.18f);
-            const bool listen_click =
-                nk_button_label(ctx, app.worker == AppState::Worker::Listening
-                                        ? "Listening..." : "Listen");
-            nk_layout_row_push(ctx, 0.18f);
-            if (nk_button_label(ctx, app.speaking.load() ? "Speaking..." : "Test voice"))
-                app.speak_async("Ciao, la voce funziona.");
-            nk_layout_row_push(ctx, 0.13f);
-            const bool stop_click = nk_button_label(ctx, "Stop");
-            nk_layout_row_end(ctx);
-
-            if (img_click)
-                app.attach_clipboard_image();
-            if (stop_click)
-                app.stop();
-
-            if ((send_click || (edit_state & NK_EDIT_COMMITED) != 0) &&
+            // Enter sends (the action buttons live in the floating cluster
+            // drawn after nk_end).
+            if ((edit_state & NK_EDIT_COMMITED) != 0 &&
                 app.worker == AppState::Worker::None) {
                 app.send(app.input);
                 app.input[0] = '\0';
             }
-            if (listen_click)
-                app.start_listen();
 
             // Status line + context usage footer.
             nk_layout_row_dynamic(ctx, status_h, 1);
@@ -1996,6 +1980,107 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 nk_label(ctx, status_buf.c_str(), NK_MIDDLE_LEFT);
         }
         nk_end(ctx);
+
+        // ---- floating action buttons (lower-right corner, above the input) ----
+        // Icon-only micro buttons (color emoji atlas sprites) with hover
+        // tooltips; they replace the old full-width button row. Drawn after
+        // the main window so they float on top of the chat.
+        {
+            const float wpad = ctx->style.window.padding.x;
+            const float hpad = ctx->style.window.padding.y;
+            const float sp = ctx->style.window.spacing.x;
+            const float fw = 5.0f * fab_sz + 4.0f * sp + 2.0f * wpad;
+            const float fht = fab_sz + 2.0f * hpad;
+            const struct nk_rect fab =
+                nk_rect((float)w - fw - 10.0f, (float)h - fab_bottom - fht, fw, fht);
+            nk_window_set_position(ctx, "##fabs", nk_vec2(fab.x, fab.y));
+            nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
+                                     nk_style_item_color(nk_rgba(22, 24, 32, 225)));
+            bool f_send = false, f_img = false, f_listen = false;
+            bool f_voice = false, f_stop = false;
+            char tip[48] = "";
+            struct nk_rect tip_at = nk_rect(0, 0, 0, 0);
+            if (nk_begin(ctx, "##fabs", fab, NK_WINDOW_NO_SCROLLBAR)) {
+                nk_layout_row_static(ctx, fab_sz, (int)fab_sz, 5);
+                const float sx0 = ctx->current->layout->at_x;
+                const float sy0 = ctx->current->layout->at_y;
+                // One icon button: emoji sprite (text fallback if the atlas is
+                // missing), dimmed while disabled, tooltip on hover.
+                auto fab_btn = [&](int i, char32_t cp, const char* label,
+                                   const char* fallback, bool enabled) -> bool {
+                    const struct nk_rect slot =
+                        nk_rect(sx0 + (float)i * (fab_sz + sp), sy0, fab_sz, fab_sz);
+                    bool clicked = false;
+                    const EmojiAtlas::Rect* r =
+                        app.emoji.ok() ? app.emoji.find(cp) : nullptr;
+                    if (r) {
+                        struct nk_image img =
+                            nk_image_id(static_cast<int>(app.emoji.texture()));
+                        img.w = static_cast<nk_ushort>(app.emoji.tex_w());
+                        img.h = static_cast<nk_ushort>(app.emoji.tex_h());
+                        img.region[0] = static_cast<nk_ushort>(r->x);
+                        img.region[1] = static_cast<nk_ushort>(r->y);
+                        img.region[2] = static_cast<nk_ushort>(r->w);
+                        img.region[3] = static_cast<nk_ushort>(r->h);
+                        clicked = nk_button_image(ctx, img) != 0;
+                    } else {
+                        clicked = nk_button_label(ctx, fallback) != 0;
+                    }
+                    if (!enabled)  // busy: grey the icon out
+                        nk_fill_rect(&ctx->current->buffer, slot, 3,
+                                     nk_rgba(16, 18, 24, 160));
+                    if (nk_input_is_mouse_hovering_rect(&ctx->input, slot)) {
+                        std::snprintf(tip, sizeof(tip), "%s", label);
+                        tip_at = slot;
+                    }
+                    return clicked;
+                };
+                const bool busy = app.worker != AppState::Worker::None;
+                f_send = fab_btn(0, 0x1F680, "Send", "Send", !busy);
+                f_img = fab_btn(1, 0x1F4CE, "Attach image from clipboard",
+                                "Img", true);
+                f_listen = fab_btn(2, 0x1F442, "Listen (mic, max 10 s)",
+                                   "Mic", !busy);
+                f_voice = fab_btn(3, 0x1F3B5, "Test voice", "Voice", true);
+                f_stop = fab_btn(4, 0x274C, "Stop: cancel request + silence",
+                                 "Stop", true);
+            }
+            nk_end(ctx);
+            nk_style_pop_style_item(ctx);
+
+            // Tooltip: tiny opaque popup centered above the hovered button.
+            if (tip[0]) {
+                const float tf = ctx->style.font && ctx->style.font->height > 0.0f
+                                     ? ctx->style.font->height : 18.0f;
+                const float tw =
+                    text_w_px(ctx->style.font, tip, (int)std::strlen(tip)) + 20.0f;
+                const struct nk_rect tr =
+                    nk_rect(tip_at.x + tip_at.w / 2.0f - tw / 2.0f,
+                            tip_at.y - tf * 1.6f - 6.0f, tw, tf * 1.6f);
+                nk_window_set_position(ctx, "##tip", nk_vec2(tr.x, tr.y));
+                nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
+                                         nk_style_item_color(nk_rgba(16, 18, 24, 245)));
+                if (nk_begin(ctx, "##tip", tr, NK_WINDOW_NO_SCROLLBAR)) {
+                    nk_layout_row_dynamic(ctx, tf * 1.6f, 1);
+                    nk_label(ctx, tip, NK_MIDDLE_CENTER);
+                }
+                nk_end(ctx);
+                nk_style_pop_style_item(ctx);
+            }
+
+            if (f_img)
+                app.attach_clipboard_image();
+            if (f_stop)
+                app.stop();
+            if (f_send && app.worker == AppState::Worker::None && app.input[0]) {
+                app.send(app.input);
+                app.input[0] = '\0';
+            }
+            if (f_listen)
+                app.start_listen();
+            if (f_voice)
+                app.speak_async("Ciao, la voce funziona.");
+        }
 
         settings_modal(ctx, cfg, voices, app.settings, w, h, fx, app.models);
 
