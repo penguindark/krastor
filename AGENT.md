@@ -1,0 +1,37 @@
+# AGENT.md — Base instructions & index
+
+Read this first. It is the entry point for any AI agent or developer working on this repo.
+
+## Source of truth
+- **`project.md`** — what the project is, architecture, requirements, roadmap.
+- **`development_log.md`** — chronological log of all development. Append a dated entry
+  after every working session.
+
+## Working rules
+1. All documentation, code comments and logs are in **English**.
+2. Language: **C++20**. Windows code must compile with **both** MinGW GCC
+   (`C:\mingw64`) and MSVC (default: VS 2026). Target platforms: Windows 10, Linux.
+3. Build only through CMake presets (`CMakePresets.json`) or `scripts/build.ps1` /
+   `scripts/build.sh`. Intermediates go to `obj/`, executables to `bin/`.
+4. Python: always `C:\Python313` through `.venv` — never the system PATH python.
+5. Never commit models, binaries, build outputs or `.venv` (see `.gitignore`).
+   Each model lives in its own `models/<role>-<name>/` subfolder with a README
+   (source, license, files).
+6. Every tracked folder has a `development.md` — keep it updated when you change that
+   folder's content.
+7. Append to `development_log.md` at the end of each session.
+
+## Index of folder-level development docs
+- `src/development.md` — C++ sources
+- `data/development.md` — assets (fonts, images, shaders)
+- `models/development.md` — local AI models policy and inventory (folder git-ignored)
+- `tools/development.md` — python prototypes and scripts
+- `libs/development.md` — vendored third-party libraries
+- `scripts/development.md` — build/dev scripts
+
+## Quick start
+```powershell
+scripts\build.ps1 -Toolchain msvc2026 -Config Debug   # default MSVC
+scripts\build.ps1 -Toolchain mingw   -Config Debug   # MinGW GCC
+```
+Executable output: `bin\krastor.exe`.

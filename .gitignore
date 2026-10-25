@@ -1,0 +1,40 @@
+# Build outputs and intermediates
+bin/
+obj/
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CMakeUserPresets.json
+
+# Compiled artifacts (belt and suspenders)
+*.o
+*.obj
+*.exe
+*.dll
+*.a
+*.lib
+*.pdb
+*.ilk
+*.out
+*.so
+
+# Python virtual environment
+.venv/
+__pycache__/
+*.pyc
+
+# AI models — never committed (see project.md section 6).
+# Keep the folder's development.md tracked as documentation exception.
+models/*
+!models/development.md
+
+# Local tool files (not project content)
+opencode.exe
+opencode.jsonc
+
+# Editor / OS noise
+.vs/
+.vscode/
+Thumbs.db
+Desktop.ini
