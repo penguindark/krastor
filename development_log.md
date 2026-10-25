@@ -765,3 +765,16 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
 - main.cpp now prints "config: <path>" at startup so the loaded file is
   always visible. Verified via UITEST screenshot: modal shows the merged
   values. Both toolchains clean.
+
+## 2026-10-26 (later) - OpenCode-style markdown tables
+
+- Tables now render as a full box-drawing grid like the OpenCode TUI:
+  top/bottom borders, a rule between every row, violet header text and
+  one space of padding on both sides of each cell.
+- Column widths are measured on the *rendered* cell text (new `vis_cp`
+  helper strips ANSI escapes): previously the raw markdown width (with
+  backticks) was used, so inline-code cells desynchronized the `|` bars.
+- GFM column alignment honored: the separator row's colons (`:---`,
+  `---:`, `:---:`) left/right/center-pad every cell in the column.
+- UITEST seeds a 3-column table (inline-code first column + centered
+  last column) as the regression sample. Both toolchains clean.

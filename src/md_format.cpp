@@ -36,6 +36,7 @@ const char* kSep     = "\x1b[38;2;110;110;120m";  // dim gray (table/rule bars)
 const char* kCodeFg  = "\x1b[38;2;210;200;120m";  // khaki inline code
 const char* kCodeBg  = "\x1b[48;2;38;40;48m";     // inline code background
 const char* kBlockBg = "\x1b[48;2;24;26;33m";     // fenced block background
+const char* kTableHead = "\x1b[38;2;198;120;221m"; // violet table header text
 
 const char* kRule = "────────────────────────────────────────────────────────────";
 
@@ -54,6 +55,23 @@ size_t cp_count(const std::string& s)
     size_t n = 0;
     for (size_t i = 0; i < s.size(); i += utf8_len(s[i]))
         ++n;
+    return n;
+}
+
+// Visible codepoint count of an ANSI-styled string (escape sequences skipped):
+// markdown markers like ` don't occupy screen space once styled.
+size_t vis_cp(const std::string& s)
+{
+    size_t n = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\x1b') {
+            while (i < s.size() && s[i] != 'm')
+                ++i;
+            continue;
+        }
+        i += utf8_len(s[i]) - 1;
+        ++n;
+    }
     return n;
 }
 
@@ -371,7 +389,8 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
             continue;
         }
 
-        // table: header row + separator row, then data rows
+        // table: full grid like the OpenCode TUI - box-drawing border on
+        // every side and between all rows, violet header, 1-cell padding.
         if (table_row(ln) && i + 1 < n && table_sep(lines[i + 1])) {
             std::vector<std::vector<std::string>> rows;
             size_t j = i;
@@ -383,30 +402,66 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
             size_t cols = 0;
             for (const auto& r : rows)
                 cols = std::max(cols, r.size());
+            // Style every cell first: column widths must be measured on the
+            // rendered text (markdown markers vanish once styled).
+            std::vector<std::vector<std::string>> cell(rows.size());
             std::vector<size_t> w(cols, 3);
-            for (const auto& r : rows)
-                for (size_t c = 0; c < r.size(); ++c)
-                    w[c] = std::max(w[c], cp_count(r[c]));
-            for (size_t r = 0; r < rows.size(); ++r) {
-                std::string line = kSep;
-                line += "│";
-                line += kReset;
+            for (size_t r = 0; r < rows.size(); ++r)
                 for (size_t c = 0; c < cols; ++c) {
-                    const std::string cell =
-                        c < rows[r].size() ? inline_md(rows[r][c]) : std::string();
-                    const size_t raw =
-                        c < rows[r].size() ? cp_count(rows[r][c]) : 0;
+                    cell[r].push_back(c < rows[r].size()
+                                          ? inline_md(rows[r][c])
+                                          : std::string());
+                    w[c] = std::max(w[c], vis_cp(cell[r][c]));
+                }
+            // Column alignment from the separator row (GFM): `:---` left,
+            // `---:` right, `:---:` center; plain `---` defaults to left.
+            std::vector<char> align(cols, 'l');
+            {
+                const std::vector<std::string> seps = table_cells(lines[i + 1]);
+                for (size_t c = 0; c < cols && c < seps.size(); ++c) {
+                    const std::string t = trim(seps[c]);
+                    const bool lc = !t.empty() && t.front() == ':';
+                    const bool rc = t.size() > 1 && t.back() == ':';
+                    align[c] = (lc && rc) ? 'c' : (rc ? 'r' : 'l');
+                }
+            }
+
+            // Horizontal rule: left/middle/right corners + dashes per column.
+            auto bar = [&](const char* l, const char* m, const char* rc) {
+                std::string s = std::string(kSep) + l;
+                for (size_t c = 0; c < cols; ++c) {
+                    for (size_t k = 0; k < w[c] + 2; ++k)
+                        s += "─";
+                    s += (c + 1 < cols) ? m : rc;
+                }
+                return s + kReset;
+            };
+
+            out.push_back(bar("┌", "┬", "┐"));
+            for (size_t r = 0; r < rows.size(); ++r) {
+                std::string line = std::string(kSep) + "│" + kReset + " ";
+                for (size_t c = 0; c < cols; ++c) {
+                    const size_t raw = vis_cp(cell[r][c]);
+                    const size_t pad = w[c] - raw;
+                    const size_t left = align[c] == 'r'   ? pad
+                                        : align[c] == 'c' ? pad / 2
+                                                          : 0;
+                    line += std::string(left, ' ');
                     if (r == 0)
-                        line += std::string(kBold) + cell + kReset +
-                                std::string(w[c] - raw, ' ');
+                        line += std::string(kTableHead) + cell[r][c] + kReset;
                     else
-                        line += cell + std::string(w[c] - raw, ' ');
+                        line += cell[r][c];
+                    line += std::string(pad - left, ' ');
+                    line += " ";
                     line += kSep;
                     line += "│";
-                    line += kReset;
-                    line += " ";
+                    if (c + 1 < cols)
+                        line += " ";
                 }
+                line += kReset;
                 out.push_back(line);
+                out.push_back(r + 1 < rows.size() ? bar("├", "┼", "┤")
+                                                  : bar("└", "┴", "┘"));
             }
             i = j;
             continue;

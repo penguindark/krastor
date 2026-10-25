@@ -313,9 +313,10 @@ struct AppState {
                 "1. ordered\n"
                 "> quoted text\n"
                 "---\n"
-                "| Col A | Col B |\n"
-                "|---|---|\n"
-                "| 1 | two |")});
+                "| Hash | Descrizione | Timestamp |\n"
+                "|---|---|:---:|\n"
+                "| `bfd3305` | Print loaded config path at startup | 2026-10-25 09:16 |\n"
+                "| `12ec6e3` | Code-block aesthetics + settings spacing | 2026-10-25 09:10 |")});
             // Code-block sample with an interior blank line (background
             // continuity regression for append_block_bg).
             lines.push_back({"krastor", fmt.format(
