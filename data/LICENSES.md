@@ -17,10 +17,12 @@
 - Used for full-color emoji glyphs in the chat panel (src/emoji.cpp).
 
 ## data/icons/*.svg
-- **Lucide** icon set (ISC license), 5 icons: `send`, `paperclip`, `ear`,
-  `volume-2`, `square`.
+- **Lucide** icon set (ISC license), 11 icons: `send`, `paperclip`, `ear`,
+  `volume-2`, `square`, `settings`, `mic`, `mic-off`, `volume-x`, `x`,
+  `check`.
 - Source: <https://github.com/lucide-icons/lucide> (`icons/<name>.svg`,
   fetched from the `main` branch on 2026-10-29)
 - License: ISC
 - Rasterized at runtime to a white/alpha sprite atlas by `src/icons.cpp`
-  (LunaSVG) for the floating action buttons.
+  (LunaSVG) for the floating action buttons, the top bar, the attachment
+  chips and the Settings modal buttons.

@@ -185,6 +185,8 @@ model reasoning, and full-color emoji via a Noto sprite atlas. **Stop button**
 aborts an in-flight LLM request instantly (cross-thread WinHTTP handle close /
 curl progress abort) and cuts TTS playback mid-utterance. **SVG UI icons**:
 LunaSVG (git submodule, MIT) rasterizes `data/icons/*.svg` (Lucide set) into
-a white/alpha sprite atlas at startup, drawn on the floating action buttons
-with runtime tint; isolated behind `src/icons.cpp`, fallback chain
+a white/alpha sprite atlas at startup, drawn with runtime tint on the floating
+action buttons, the compact top bar (hands-free mic/mic-off, speak
+volume-2/volume-x, settings), the attachment chips (x) and the Settings modal
+Save/Close (check/x); isolated behind `src/icons.cpp`, fallback chain
 SVG -> emoji atlas -> text; headless self-test via `krastor --icon-test`.

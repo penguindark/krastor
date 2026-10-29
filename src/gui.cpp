@@ -110,6 +110,70 @@ std::string fmt_thousands(long long v)
     return neg ? "-" + out : out;
 }
 
+// nk_image referencing a pixel sub-rect of a sprite atlas texture (the SVG
+// icon atlas or the emoji atlas). Shared by the FAB cluster and button_icon.
+struct nk_image atlas_image(unsigned tex, int tw, int th, int x, int y,
+                             int w, int h)
+{
+    struct nk_image img = nk_image_id(static_cast<int>(tex));
+    img.w = static_cast<nk_ushort>(tw);
+    img.h = static_cast<nk_ushort>(th);
+    img.region[0] = static_cast<nk_ushort>(x);
+    img.region[1] = static_cast<nk_ushort>(y);
+    img.region[2] = static_cast<nk_ushort>(w);
+    img.region[3] = static_cast<nk_ushort>(h);
+    return img;
+}
+
+// Icon+text button with the SVG atlas -> plain label fallback (same
+// degradation chain as the floating action buttons). Nuklear's own
+// text+image button centers the text over the FULL width and paints it
+// under the icon on narrow buttons, so this draws the button manually:
+// background + click via nk_do_button, icon at the left edge, text centered
+// in the area right of the icon. The icon is sized from the button height,
+// so it scales with the font zoom for free. Uses NK_LIB internals - the same
+// access pattern the FAB cluster already relies on.
+float text_w_px(const struct nk_user_font* f, const char* s, int n); // fwd
+bool button_icon(nk_context* ctx, const IconAtlas& icons, const char* icon,
+                 const char* label)
+{
+    const IconAtlas::Rect* r = icons.ok() ? icons.find(icon) : nullptr;
+    if (!r)
+        return nk_button_label(ctx, label) != 0;
+
+    struct nk_rect slot;
+    nk_panel_alloc_space(&slot, ctx);  // consume the layout slot
+    nk_flags state = 0;
+    struct nk_rect content;
+    const bool clicked = nk_do_button(&state, &ctx->current->buffer, slot,
+                                      &ctx->style.button, &ctx->input,
+                                      NK_BUTTON_DEFAULT, &content) != 0;
+
+    const struct nk_style_button* st = &ctx->style.button;
+    const struct nk_image img =
+        atlas_image(icons.texture(), icons.tex_w(), icons.tex_h(), r->x, r->y,
+                    r->w, r->h);
+    const float ih = slot.h - 2.0f * st->padding.y;
+    nk_draw_image(&ctx->current->buffer,
+                  nk_rect(slot.x + 2.0f * st->padding.x,
+                          slot.y + (slot.h - ih) / 2.0f, ih, ih),
+                  &img, nk_white);
+
+    const int len = (int)std::strlen(label);
+    const float fh = ctx->style.font->height;
+    const float tw = text_w_px(ctx->style.font, label, len);
+    const float tx0 = slot.x + 3.0f * st->padding.x + ih;
+    const float avail = slot.x + slot.w - st->padding.x - tx0;
+    const nk_color txt = (state & NK_WIDGET_STATE_HOVER)   ? st->text_hover
+                         : (state & NK_WIDGET_STATE_ACTIVED) ? st->text_active
+                                                             : st->text_normal;
+    nk_draw_text(&ctx->current->buffer,
+                 nk_rect(tx0 + (avail - tw) / 2.0f, slot.y + (slot.h - fh) / 2.0f,
+                         tw > 1.0f ? tw : 1.0f, fh),
+                 label, len, ctx->style.font, nk_rgba(0, 0, 0, 0), txt);
+    return clicked;
+}
+
 // ---- UTF-8 codepoint helpers (selection maps on codepoints, not bytes, so
 // Italian accents and emoji stay one position each) ----
 int cp_len(unsigned char c)
@@ -301,7 +365,6 @@ struct AppState {
                 E + "[48;2;20;60;30m+  full-width green diff line" + E + "[0m"});
             lines.push_back({"krastor",
                 E + "[48;2;80;20;20m-  full-width red diff line" + E + "[0m"});
-            attach_clipboard_image();
             // Filler so the panel is scrollable (wheel/keyboard scroll tests).
             for (int i = 1; i <= 40; ++i) {
                 char buf[80];
@@ -345,6 +408,13 @@ struct AppState {
             // context footer are visible in a screenshot without typing.
             auto_speak = false;  // keep the screenshot test silent
             send("Say hello in one short sentence.");
+            // Attach the clipboard image (if any) AFTER the auto-send: send()
+            // consumes and clears the attachments, so attaching before it would
+            // leave no chip to screenshot.
+            attach_clipboard_image();
+            // Open the Settings modal for icon/modal screenshot tests.
+            if (std::getenv("KRASTOR_UITEST_SETTINGS"))
+                settings.open = true;
         }
     }
 
@@ -686,7 +756,7 @@ void word_range(const AppState& app, int line, int cp, int& lo, int& hi)
 // ------------------------------------------------------------- settings modal
 bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
                     SettingsState& s, int win_w, int win_h, EffectEngine& fx,
-                    const LlmModelRegistry& models)
+                    const LlmModelRegistry& models, const IconAtlas& icons)
 {
     if (!s.open)
         return false;
@@ -841,7 +911,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     }
 
     nk_layout_row_dynamic(ctx, 30, 2);
-    if (nk_button_label(ctx, "Save")) {
+    if (button_icon(ctx, icons, "check", "Save")) {
         cfg.agent.name = s.name;
         cfg.llm.model_ref = s.model_ref;
         if (!apply_model_ref(cfg.llm, models))
@@ -862,7 +932,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
             s.status = std::string("Save failed: ") + e.what();
         }
     }
-    if (nk_button_label(ctx, "Close")) {
+    if (button_icon(ctx, icons, "x", "Close")) {
         s.open = false;
         s.status.clear();
     }
@@ -1833,7 +1903,10 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             // the Ctrl +/- zoom.
             const float fh = ctx->style.font && ctx->style.font->height > 0.0f
                                  ? ctx->style.font->height : 18.0f;
-            const float top_h = fh * 2.4f;
+            // Compact top bar: short buttons (the icons size themselves from
+            // the button height) and columns only as wide as the labels need,
+            // so the chat gets the rest.
+            const float top_h = fh * 1.7f;
             const float input_h = fh * 3.7f;
             const float status_h = fh * 1.2f;
             const float chip_h = fh * 1.45f;
@@ -1841,21 +1914,24 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
 
             // Top bar: title | hands-free | speak toggle | settings
             nk_layout_row_begin(ctx, NK_DYNAMIC, top_h, 4);
-            nk_layout_row_push(ctx, 0.34f);
+            nk_layout_row_push(ctx, 0.40f);
             nk_label(ctx, app.name.c_str(), NK_MIDDLE_LEFT);
-            nk_layout_row_push(ctx, 0.28f);
-            if (nk_button_label(ctx, app.hands_free() ? "Hands-free: ON"
-                                                      : "Hands-free: OFF")) {
+            nk_layout_row_push(ctx, 0.22f);
+            if (button_icon(ctx, app.icons, app.hands_free() ? "mic" : "mic-off",
+                            app.hands_free() ? "Hands-free: ON"
+                                             : "Hands-free: OFF")) {
                 if (app.hands_free())
                     app.stop_hands_free();
                 else
                     app.start_hands_free();
             }
-            nk_layout_row_push(ctx, 0.18f);
-            if (nk_button_label(ctx, app.auto_speak ? "Speak: ON" : "Speak: OFF"))
+            nk_layout_row_push(ctx, 0.15f);
+            if (button_icon(ctx, app.icons,
+                            app.auto_speak ? "volume-2" : "volume-x",
+                            app.auto_speak ? "Speak: ON" : "Speak: OFF"))
                 app.auto_speak = !app.auto_speak;
-            nk_layout_row_push(ctx, 0.20f);
-            if (nk_button_label(ctx, "Settings"))
+            nk_layout_row_push(ctx, 0.13f);
+            if (button_icon(ctx, app.icons, "settings", "Settings"))
                 app.settings.open = !app.settings.open;
             nk_layout_row_end(ctx);
 
@@ -1910,17 +1986,6 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                         fab_strip.y + fab_pad, fab_sz, fab_sz);
                     nk_flags state = 0;
                     // Icon source chain: SVG atlas -> emoji atlas -> text.
-                    auto atlas_image = [](unsigned tex, int tw, int th,
-                                          int x, int y, int w, int h) {
-                        struct nk_image img = nk_image_id(static_cast<int>(tex));
-                        img.w = static_cast<nk_ushort>(tw);
-                        img.h = static_cast<nk_ushort>(th);
-                        img.region[0] = static_cast<nk_ushort>(x);
-                        img.region[1] = static_cast<nk_ushort>(y);
-                        img.region[2] = static_cast<nk_ushort>(w);
-                        img.region[3] = static_cast<nk_ushort>(h);
-                        return img;
-                    };
                     const IconAtlas::Rect* ir =
                         app.icons.ok() ? app.icons.find(fabs[i].icon) : nullptr;
                     const EmojiAtlas::Rect* r =
@@ -1995,11 +2060,15 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 nk_layout_row_begin(ctx, NK_STATIC, chip_h, (int)app.attachments.size());
                 size_t remove_idx = SIZE_MAX;
                 for (size_t i = 0; i < app.attachments.size(); ++i) {
+                    // With the icon atlas the leading "[x]" becomes the x
+                    // icon; without it the text hint stays (same fallback
+                    // chain as every other icon button).
+                    const bool has_x = app.icons.ok() && app.icons.find("x");
                     char chip[64];
-                    std::snprintf(chip, sizeof(chip), "[x] %dx%d",
+                    std::snprintf(chip, sizeof(chip), has_x ? "%dx%d" : "[x] %dx%d",
                                   app.attachments[i].width, app.attachments[i].height);
                     nk_layout_row_push(ctx, fh * 6.5f);
-                    if (nk_button_label(ctx, chip))
+                    if (button_icon(ctx, app.icons, "x", chip))
                         remove_idx = i;
                 }
                 nk_layout_row_end(ctx);
@@ -2108,7 +2177,8 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         }
         nk_end(ctx);
 
-        settings_modal(ctx, cfg, voices, app.settings, w, h, fx, app.models);
+        settings_modal(ctx, cfg, voices, app.settings, w, h, fx, app.models,
+                       app.icons);
 
         // A saved name change propagates to the top bar and the window title.
         if (cfg.agent.name != app.name) {

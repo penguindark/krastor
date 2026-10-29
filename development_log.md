@@ -854,3 +854,28 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   5 icons PASS. GUI screenshot tests: SVG icons crisp on the FAB strip;
   renaming `data/icons` degrades correctly to the emoji atlas.
   Both toolchains clean.
+
+## 2026-10-29 (later) - SVG icons on top bar, chips and modal + compact header
+
+- 6 new Lucide SVGs in `data/icons/` (ISC, now 11 total): `settings`,
+  `mic`, `mic-off`, `volume-x`, `x`, `check`.
+- New `button_icon()` helper in `gui.cpp`: icon+text button drawn manually
+  (`nk_panel_alloc_space` + `nk_do_button` + `nk_draw_image`/
+  `nk_draw_text`) because `nk_button_image_text` centers the text over the
+  FULL button width and paints it under the icon on narrow buttons. Icon
+  sized from the button height, so it scales with the Ctrl +/- font zoom.
+  Fallback chain identical to the FABs: SVG atlas -> plain label.
+- Wired up: top bar (Hands-free mic/mic-off, Speak volume-2/volume-x,
+  Settings gear), attachment chips (x + "WxH" label, click to remove),
+  Settings modal Save (check) / Close (x).
+- **Compact top bar**: row height `fh*2.4` -> `fh*1.7`, column ratios
+  0.40/0.22/0.15/0.13 (were 0.34/0.28/0.18/0.20) so the buttons occupy much
+  less space and the chat gets the rest.
+- UITEST hook fix: the auto-attach ran before the UITEST auto-send, and
+  `send()` consumes + clears the attachments, so the chip row never
+  appeared in screenshot tests (the chip itself rendered fine for real
+  pastes). The hook now attaches after the send. `KRASTOR_UITEST_SETTINGS=1`
+  opens the Settings modal for modal screenshots (permanent test hook).
+- Verified by screenshots: compact top bar with crisp icons, chip row
+  ("x 256x192") between chat and input, modal Save/Close icons. Both
+  toolchains clean.
