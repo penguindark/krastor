@@ -15,3 +15,12 @@
   fonts/NotoColorEmoji.ttf)
 - License: SIL Open Font License 1.1 (OFL)
 - Used for full-color emoji glyphs in the chat panel (src/emoji.cpp).
+
+## data/icons/*.svg
+- **Lucide** icon set (ISC license), 5 icons: `send`, `paperclip`, `ear`,
+  `volume-2`, `square`.
+- Source: <https://github.com/lucide-icons/lucide> (`icons/<name>.svg`,
+  fetched from the `main` branch on 2026-10-29)
+- License: ISC
+- Rasterized at runtime to a white/alpha sprite atlas by `src/icons.cpp`
+  (LunaSVG) for the floating action buttons.

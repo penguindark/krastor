@@ -20,6 +20,7 @@
 #include "formatters.h"
 #include "highlight.h"
 #include "gui.h"
+#include "icons.h"
 #include "llm_client.h"
 #include "llm_models.h"
 #include "stt.h"
@@ -67,6 +68,46 @@ void list_voices(const krastor::VoiceRegistry& voices)
                   << v.id << "  (" << v.language << ")\n";
 }
 
+// Headless self-test for the SVG icon pipeline (LunaSVG + IconAtlas):
+// rasterizes data/icons/*.svg without GL, asserts every icon drew a sane
+// amount of ink (line-art strokes: not blank, not a filled square) and
+// dumps the atlas to icon_atlas_test.png for visual inspection.
+// Exit code 0 = all good, 1 = failure.
+int run_icon_test()
+{
+    krastor::IconAtlas icons;
+    const std::string exe_dir = krastor::Config::exe_dir();
+    bool loaded = icons.rasterize(exe_dir + "/data/icons");
+    if (!loaded)
+        loaded = icons.rasterize("data/icons");
+    if (!loaded) {
+        std::cerr << "icon-test: FAIL - no icons found in data/icons\n";
+        return 1;
+    }
+    std::cout << "icon-test: " << icons.names().size() << " icons, atlas "
+              << icons.tex_w() << "x" << icons.tex_h() << '\n';
+    int failures = 0;
+    for (const auto& name : icons.names()) {
+        const double cov = icons.coverage(name);
+        const bool sane = cov > 0.02 && cov < 0.75;
+        std::printf("  %-12s coverage %5.1f%%  %s\n", name.c_str(),
+                    cov * 100.0, sane ? "OK" : "FAIL");
+        if (!sane)
+            ++failures;
+    }
+    const std::string png = "icon_atlas_test.png";
+    if (icons.dump_png(png))
+        std::cout << "icon-test: atlas written to " << png << '\n';
+    else
+        std::cout << "icon-test: WARNING - could not write the atlas PNG\n";
+    if (failures) {
+        std::cerr << "icon-test: FAIL - " << failures << " icon(s) out of range\n";
+        return 1;
+    }
+    std::cout << "icon-test: PASS\n";
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -102,12 +143,13 @@ int main(int argc, char** argv)
         std::abort();
     });
 
-    // Args: [--gui] [config.json]
+    // Args: [--gui] [--icon-test] [config.json]
     bool use_gui = false;
     std::string config_path;  // empty -> default (exe dir, legacy CWD fallback)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--gui") use_gui = true;
+        else if (a == "--icon-test") return run_icon_test();
         else config_path = a;
     }
     if (config_path.empty())

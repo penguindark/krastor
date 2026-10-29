@@ -88,15 +88,15 @@ ANSI-stripped raw UTF-8 clipboard).
 Game-loop window: continuous frame loop, GLSL shader background ("living surface"),
 UI toolkit drawn on top each frame.
 
-Minimal library stack (all vendored in `libs/`, MIT/zlib, compile with MinGW + MSVC,
-Windows + Linux):
+Minimal library stack (all in `libs/` — vendored or git submodules, MIT/zlib,
+compile with MinGW + MSVC, Windows + Linux; see `libs/development.md`):
 
 | Need | Library | Compile cost |
 |---|---|---|
 | Window, game loop, input, drag&drop, clipboard | GLFW | prebuilt lib, zero compilation |
 | OpenGL 3.3 core loading | glad | 2 files |
 | UI toolkit (text, buttons, menus, icons, multiline edit) | Nuklear | 1 header |
-| SVG rasterizing | nanosvg | 2 files |
+| SVG rasterizing | LunaSVG (git submodule, replaces nanosvg: stroke support + maintained) | static lib via `add_subdirectory`, isolated behind `src/icons.cpp` |
 | PNG/JPG | stb_image | 1 header |
 | Markdown parsing | md4c | 2 files (C) |
 | JSON | nlohmann/json | 1 header |
@@ -114,7 +114,7 @@ obj/       build intermediates (CMake binary dirs) — git ignored
 bin/       executables — git ignored
 models/    local AI models, one subfolder per model — git ignored
 tools/     python prototypes/scripts (uses .venv)
-libs/      vendored third-party libraries (populated in GUI phase)
+libs/      third-party libraries: vendored headers + git submodules
 scripts/   build/dev scripts
 .venv/     python virtual env (C:\Python313) — git ignored
 ```
@@ -140,6 +140,9 @@ Each tracked folder has a `development.md` describing its development in detail.
   - `msvc-2022-debug` / `msvc-2022-release` — fallback (VS 17 2022)
   - `linux-gcc-debug` / `linux-gcc-release`
 - Build intermediates live in `obj/<preset>/`, executables land in `bin/`.
+- Source libraries that ship full sources live in `libs/` as **git
+  submodules** (only URL + pinned SHA in the repo): clone with
+  `git clone --recursive`; the build scripts auto-init them when missing.
 - Helper scripts: `scripts/build.ps1` (Windows), `scripts/build.sh` (Linux).
 - Rule: code must keep compiling with both MinGW GCC and MSVC on Windows; no
   compiler-specific extensions without a guarded abstraction.
@@ -180,4 +183,8 @@ replies (headings, bold/italic, inline code, lists, quotes, tables), data-driven
 syntax highlighting (`data/languages/*.json`), collapsible "Thought" blocks for
 model reasoning, and full-color emoji via a Noto sprite atlas. **Stop button**
 aborts an in-flight LLM request instantly (cross-thread WinHTTP handle close /
-curl progress abort) and cuts TTS playback mid-utterance.
+curl progress abort) and cuts TTS playback mid-utterance. **SVG UI icons**:
+LunaSVG (git submodule, MIT) rasterizes `data/icons/*.svg` (Lucide set) into
+a white/alpha sprite atlas at startup, drawn on the floating action buttons
+with runtime tint; isolated behind `src/icons.cpp`, fallback chain
+SVG -> emoji atlas -> text; headless self-test via `krastor --icon-test`.

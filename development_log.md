@@ -824,3 +824,33 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
 - Verified end-to-end by temporarily injecting a synthetic mouse click into
   ctx->input on the Send slot: with the input cleared the send fired; the
   injection code was removed afterwards. Both toolchains clean.
+
+## 2026-10-29 - SVG UI icons (LunaSVG git submodule)
+
+- The floating action buttons now draw real vector icons instead of color
+  emoji. New `data/icons/` holds 5 Lucide SVGs (ISC): send, paperclip, ear,
+  volume-2, square - stroke-based, a few KB total.
+- **LunaSVG 3.5.0** (MIT) enters as a **git submodule** (`libs/lunasvg`,
+  pinned tag v3.5.0): only the URL + commit SHA live in the repo, no library
+  sources in git. plutovg is vendored inside the lunasvg repo itself, so no
+  nested submodule. Built as a static lib (examples off, system-font scan off,
+  external-resource loading off). Chosen over nanosvg (the original plan):
+  nanosvg is unmaintained and cannot rasterize strokes.
+- Dependency policy recorded in `libs/development.md`: full-source libraries
+  -> git submodule; prebuilt binaries -> download_deps.py; single headers ->
+  vendored. `scripts/build.ps1`/`build.sh` auto-run
+  `git submodule update --init --recursive` when the submodule is missing;
+  CMake aborts with the same hint. Fixed the broken msvc preset mapping in
+  build.ps1 on the way (msvc2026 -> msvc-2026-<cfg>).
+- **Isolation**: `src/icons.h/.cpp` (`IconAtlas`) is the ONLY translation
+  unit that includes `lunasvg.h`. It rasterizes every `*.svg` in the
+  folder into one white/alpha GL sprite atlas (64 px cells, deterministic
+  sorted layout); `currentColor` is rewritten to white before parsing so
+  icons tint at draw time. `gui.cpp` sees just the IconAtlas API - same
+  pattern as EmojiAtlas. FAB render chain: SVG atlas -> emoji atlas -> text.
+- **Tests**: `krastor --icon-test` headless mode (no GL): rasterizes the
+  folder, asserts every icon's ink coverage is in 2%..75% (not blank, not a
+  filled square), dumps `icon_atlas_test.png` for visual inspection - all
+  5 icons PASS. GUI screenshot tests: SVG icons crisp on the FAB strip;
+  renaming `data/icons` degrades correctly to the emoji atlas.
+  Both toolchains clean.

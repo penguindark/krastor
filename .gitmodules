@@ -1,0 +1,3 @@
+[submodule "libs/lunasvg"]
+	path = libs/lunasvg
+	url = https://github.com/sammycage/lunasvg

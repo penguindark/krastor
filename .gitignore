@@ -48,3 +48,6 @@ Desktop.ini
 # Emoji atlas source font (downloaded, see tools/gen_emoji_atlas.py); the
 # generated emoji_atlas.png/json ARE committed.
 data/fonts/NotoColorEmoji.ttf
+
+# Icon atlas self-test artifact (krastor --icon-test, written to the CWD)
+icon_atlas_test.png

@@ -27,6 +27,20 @@ set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
 add_subdirectory(libs/glfw EXCLUDE_FROM_ALL)
 
+# LunaSVG (git submodule, MIT): SVG rasterizer for the UI icons. Isolated
+# behind src/icons.cpp - no other Krastor source includes lunasvg.h. Static
+# build, no examples, no system font scan, no external resource loading
+# (Krastor reads the .svg files itself and passes the bytes to the parser).
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/libs/lunasvg/CMakeLists.txt")
+    message(FATAL_ERROR
+        "lunasvg submodule missing in libs/lunasvg - "
+        "run: git submodule update --init --recursive")
+endif()
+set(LUNASVG_BUILD_EXAMPLES        OFF CACHE BOOL "" FORCE)
+set(LUNASVG_DISABLE_LOAD_SYSTEM_FONTS ON CACHE BOOL "" FORCE)
+set(LUNASVG_DISABLE_EXTERNAL_RESOURCES ON CACHE BOOL "" FORCE)
+add_subdirectory(libs/lunasvg EXCLUDE_FROM_ALL)
+
 # sherpa-onnx prebuilt C API for local TTS/STT (Windows). The binaries are
 # git-ignored; fetch them first with:  .venv\Scripts\python tools\download_deps.py
 if(WIN32)
@@ -57,6 +71,7 @@ add_executable(krastor
     src/tts.cpp
     src/stt.cpp
     src/gui.cpp
+    src/icons.cpp
     src/clipboard.cpp
     src/effects.cpp
     src/audio_analysis.cpp
@@ -73,7 +88,7 @@ target_include_directories(krastor PRIVATE
     "${CMAKE_SOURCE_DIR}/libs/glfw/include"
 )
 
-target_link_libraries(krastor PRIVATE glfw)
+target_link_libraries(krastor PRIVATE glfw lunasvg::lunasvg)
 
 if(WIN32)
     # HTTPS via WinHTTP (built into Windows) — identical behavior on MinGW and MSVC.
