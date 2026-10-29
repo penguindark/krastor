@@ -879,3 +879,37 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
 - Verified by screenshots: compact top bar with crisp icons, chip row
   ("x 256x192") between chat and input, modal Save/Close icons. Both
   toolchains clean.
+
+---
+
+## 2026-10-29 (later) - Microphone echo cancellation + noise suppression
+
+- New input-DSP pipeline `src/audio_fx.h/.cpp` (**AudioFx** singleton):
+  every mic block (16 kHz mono float) runs **SpeexDSP acoustic echo
+  cancellation** (160-sample frames, 256 ms tail) then **RNNoise noise
+  suppression** (resampled 16k->48k, 480-sample frames) before the VAD, so
+  hands-free mode hears the user, not Krastor's TTS or room noise. Isolation
+  rule like icons.cpp: only audio_fx.cpp includes rnnoise.h / speex headers.
+- **Far-end reference**: `src/tts.cpp` playback refactored from `ma_engine`
+  to a dedicated `ma_device` opened at the voice's native rate; its data
+  callback feeds the exact samples reaching the speakers into a 3 s far-end
+  ring (`AudioFx::push_playback`), read nominally 100 ms behind the live
+  cursor (Speex's delay estimator fine-tunes within the tail). `interrupt()`
+  semantics unchanged.
+- New git submodules `libs/rnnoise` + `libs/speexdsp` (both xiph, BSD-3,
+  autotools-only): `libs/audiofx/CMakeLists.txt` compiles the needed sources
+  as static libs (hand-written `speexdsp_config/config.h` replaces autotools,
+  float build + smallft). RNNoise model tables are not in its git repo:
+  `tools/download_deps.py` now also fetches the sha256-addressed tarball from
+  media.xiph.org into git-ignored `libs/rnnoise-data/` (certifi used for the
+  expired-intermediate trust issue). Build scripts check all three submodules.
+- Config `stt.denoise` / `stt.echo_cancel` (default on) + two live Settings
+  checkboxes; modal height 620 -> 680 so Save/Close stay visible.
+- Headless self-test `krastor --fx-test`: denoise stage asserts stationary
+  noise RMS drops >6 dB (0.0111 -> 0.0000), echo stage a synthetic 100 ms
+  echo drops >6 dB (0.1388 -> 0.0022, ~18 dB); dumps fx_test_in/out.wav.
+  Gotchas recorded: RNNoise's float API wants int16-scaled samples; the
+  Speex AEC API is int16-only.
+- Verified: `--fx-test` + `--icon-test` PASS on both toolchains; GUI
+  screenshot shows the two new checkboxes and Save/Close; TTS barge-in path
+  unchanged. Both toolchains clean.

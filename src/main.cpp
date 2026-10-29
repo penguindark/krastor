@@ -3,12 +3,16 @@
 // TTS voice selection. STT/TTS audio and the GUI arrive in Phases 4/5.
 // See project.md (master description) and src/development.md (this folder).
 
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <random>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -16,6 +20,7 @@
 #endif
 
 #include "config.h"
+#include "audio_fx.h"
 #include "conversation.h"
 #include "formatters.h"
 #include "highlight.h"
@@ -108,6 +113,153 @@ int run_icon_test()
     return 0;
 }
 
+float rms(const float* p, size_t n)
+{
+    double s = 0.0;
+    for (size_t i = 0; i < n; ++i)
+        s += static_cast<double>(p[i]) * p[i];
+    return n ? static_cast<float>(std::sqrt(s / n)) : 0.0f;
+}
+
+// Minimal 44-byte-header IEEE-float mono WAV writer (test artifacts).
+bool write_wav(const char* path, const std::vector<float>& samples, int rate)
+{
+    std::FILE* f = std::fopen(path, "wb");
+    if (!f)
+        return false;
+    const uint32_t data = static_cast<uint32_t>(samples.size() * 4);
+    auto put32 = [&](uint32_t v) { std::fwrite(&v, 1, 4, f); };
+    auto put16 = [&](uint16_t v) { std::fwrite(&v, 1, 2, f); };
+    std::fwrite("RIFF", 1, 4, f);
+    put32(36 + data);
+    std::fwrite("WAVEfmt ", 1, 8, f);
+    put32(16); put16(3); put16(1);
+    put32(static_cast<uint32_t>(rate));
+    put32(static_cast<uint32_t>(rate) * 4);
+    put16(4); put16(32);
+    std::fwrite("data", 1, 4, f);
+    put32(data);
+    std::fwrite(samples.data(), 1, data, f);
+    std::fclose(f);
+    return true;
+}
+
+// Headless self-test for the input DSP chain (see src/audio_fx.h):
+//  1. noise suppression: stationary noise must drop by >6 dB after RNNoise;
+//  2. echo cancellation: a synthetic echo (far-end delayed by the nominal
+//     pipeline offset) must drop by >6 dB after the Speex AEC converges.
+// Dumps fx_test_in.wav / fx_test_out.wav in the CWD for listening.
+// Exit code 0 = both PASS, 1 = failure.
+int run_fx_test()
+{
+    auto& fx = krastor::AudioFx::instance();
+    constexpr int kRate = 16000;
+    constexpr int kFrame = 160;  // 10 ms
+    int failures = 0;
+
+    // ---- 1. noise suppression --------------------------------------------
+    fx.set_echo_cancel(false);
+    fx.set_denoise(true);
+    {
+        std::mt19937 rng(42);
+        std::uniform_real_distribution<float> noise(-0.02f, 0.02f);
+        auto gen = [&](int i) {
+            float s = noise(rng);  // stationary hiss over the whole clip
+            if (i >= kRate / 2 && i < 2 * kRate + kRate / 2) {
+                const double t = i / static_cast<double>(kRate);
+                const double two_pi = 6.283185307179586;
+                s += static_cast<float>(
+                    0.25 * std::sin(two_pi * 180.0 * t) *
+                    (0.6 + 0.4 * std::sin(two_pi * 3.0 * t)));
+            }
+            return s;
+        };
+        const int total = 3 * kRate;
+        std::vector<float> in(static_cast<size_t>(total)), out;
+        for (int i = 0; i < total; ++i)
+            in[static_cast<size_t>(i)] = gen(i);
+        const std::vector<float> in_copy = in;
+        for (int off = 0; off + kFrame <= total; off += kFrame) {
+            float buf[kFrame];
+            const int got = fx.process(in.data() + off, buf, kFrame);
+            out.insert(out.end(), buf, buf + got);
+        }
+        // Tail 0.3 s: noise-only in the input; compare against the matching
+        // (delayed) tail of the output.
+        const size_t tail = kFrame * 3;
+        const float before = rms(in_copy.data() + in_copy.size() - tail, tail);
+        const float after = out.size() >= tail ? rms(out.data() + out.size() - tail, tail) : 1e9f;
+        const bool pass = before > 0.0f && after < before * 0.5f;
+        std::printf("fx-test denoise: noise RMS %.4f -> %.4f  %s\n", before,
+                    after, pass ? "OK" : "FAIL");
+        if (!pass)
+            ++failures;
+        write_wav("fx_test_in.wav", in_copy, kRate);
+        write_wav("fx_test_out.wav", out, kRate);
+        std::cout << "fx-test: wrote fx_test_in.wav / fx_test_out.wav\n";
+    }
+
+    // ---- 2. echo cancellation ---------------------------------------------
+    fx.set_denoise(false);
+    fx.set_echo_cancel(true);
+    {
+        std::mt19937 rng(7);
+        std::uniform_real_distribution<float> farnd(-0.3f, 0.3f);
+        std::uniform_real_distribution<float> mic_noise(-0.002f, 0.002f);
+        const int delay = 1600;  // 100 ms acoustic path = AudioFx nominal
+        const int total = 4 * kRate;
+        std::vector<float> ref(static_cast<size_t>(total));
+        for (auto& s : ref)
+            s = farnd(rng);
+        std::vector<float> mic(static_cast<size_t>(total), 0.0f);
+        for (int i = delay; i < total; ++i)
+            mic[static_cast<size_t>(i)] =
+                0.8f * ref[static_cast<size_t>(i - delay)] + mic_noise(rng);
+
+        std::vector<float> out;
+        float buf[kFrame];
+        for (int off = 0; off + kFrame <= total; off += kFrame) {
+            fx.push_playback(ref.data() + off, kFrame, kRate);
+            const int got = fx.process(mic.data() + off, buf, kFrame);
+            out.insert(out.end(), buf, buf + got);
+        }
+        // Last 2 s: after the AEC has converged. Echo-only input vs output.
+        const size_t tail = static_cast<size_t>(kRate) * 2;
+        const float before = rms(mic.data() + mic.size() - tail, tail);
+        const float after = out.size() >= tail ? rms(out.data() + out.size() - tail, tail) : 1e9f;
+        const bool pass = before > 0.0f && after < before * 0.5f;
+        std::printf("fx-test echo:   echo RMS %.4f -> %.4f  %s\n", before,
+                    after, pass ? "OK" : "FAIL");
+        if (!pass)
+            ++failures;
+
+        // Smoke: far-end pushed at a Piper-like 22050 Hz must stream through
+        // the internal resampler without hangs or runaway buffering.
+        std::vector<float> ref22(static_cast<size_t>(22050));
+        for (auto& s : ref22)
+            s = farnd(rng);
+        std::vector<float> out22;
+        for (size_t off = 0; off + kFrame <= ref22.size(); off += kFrame) {
+            fx.push_playback(ref22.data() + off, kFrame, 22050);
+            std::vector<float> silent(kFrame, 0.0f);
+            const int got = fx.process(silent.data(), buf, kFrame);
+            out22.insert(out22.end(), buf, buf + got);
+        }
+        const bool smoke = out22.size() > kRate;  // ~1 s of output flowed
+        std::printf("fx-test ref22k: %zu samples out  %s\n", out22.size(),
+                    smoke ? "OK" : "FAIL");
+        if (!smoke)
+            ++failures;
+    }
+
+    if (failures) {
+        std::cerr << "fx-test: FAIL (" << failures << " stage(s))\n";
+        return 1;
+    }
+    std::cout << "fx-test: PASS\n";
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -143,13 +295,14 @@ int main(int argc, char** argv)
         std::abort();
     });
 
-    // Args: [--gui] [--icon-test] [config.json]
+    // Args: [--gui] [--icon-test] [--fx-test] [config.json]
     bool use_gui = false;
     std::string config_path;  // empty -> default (exe dir, legacy CWD fallback)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--gui") use_gui = true;
         else if (a == "--icon-test") return run_icon_test();
+        else if (a == "--fx-test") return run_fx_test();
         else config_path = a;
     }
     if (config_path.empty())
@@ -176,6 +329,10 @@ int main(int argc, char** argv)
             std::cerr << "warning: config migration failed: " << e.what() << '\n';
         }
     }
+    // Input DSP toggles (RNNoise denoise / SpeexDSP echo cancel) drive the
+    // shared AudioFx pipeline used by the mic capture and the TTS tap.
+    krastor::AudioFx::instance().set_denoise(cfg.stt.denoise);
+    krastor::AudioFx::instance().set_echo_cancel(cfg.stt.echo_cancel);
 
     // llm_models.json (opencode.jsonc format): when llm.model_ref names an
     // entry there, its URL/key/model/context override the explicit fields.

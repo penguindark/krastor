@@ -52,6 +52,7 @@
 #include "clipboard.h"
 #include "effects.h"
 #include "audio_analysis.h"
+#include "audio_fx.h"
 
 namespace krastor {
 
@@ -761,7 +762,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     if (!s.open)
         return false;
 
-    const int mw = 520, mh = 620;
+    const int mw = 520, mh = 680;
     // The modal needs its own opaque background: the main window's
     // fixed_background is fully transparent so the shader shows through.
     nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
@@ -891,6 +892,36 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
             }
             s.status = std::string("ignore while busy: ") +
                        (cfg.agent.ignore_while_speaking ? "on" : "off");
+        }
+    }
+
+    // Input DSP (applied live to the shared AudioFx pipeline + saved).
+    nk_layout_row_dynamic(ctx, 24, 1);
+    {
+        nk_bool dn = cfg.stt.denoise ? nk_true : nk_false;
+        if (nk_checkbox_label(ctx, "Noise suppression (mic)", &dn)) {
+            cfg.stt.denoise = dn != 0;
+            AudioFx::instance().set_denoise(cfg.stt.denoise);
+            try {
+                cfg.save();
+            } catch (const std::exception&) {
+            }
+            s.status = std::string("noise suppression: ") +
+                       (cfg.stt.denoise ? "on" : "off");
+        }
+    }
+    nk_layout_row_dynamic(ctx, 24, 1);
+    {
+        nk_bool ec = cfg.stt.echo_cancel ? nk_true : nk_false;
+        if (nk_checkbox_label(ctx, "Echo cancellation (mic hears TTS)", &ec)) {
+            cfg.stt.echo_cancel = ec != 0;
+            AudioFx::instance().set_echo_cancel(cfg.stt.echo_cancel);
+            try {
+                cfg.save();
+            } catch (const std::exception&) {
+            }
+            s.status = std::string("echo cancellation: ") +
+                       (cfg.stt.echo_cancel ? "on" : "off");
         }
     }
 

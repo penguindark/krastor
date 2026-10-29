@@ -15,7 +15,9 @@
     "speed": 1.0
   },
   "stt": {
-    "input_device": -1
+    "input_device": -1,
+    "denoise": true,
+    "echo_cancel": true
   },
   "gui": {
     "font_size": 18,

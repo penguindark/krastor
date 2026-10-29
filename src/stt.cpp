@@ -4,6 +4,7 @@
 #include "stt.h"
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "config.h"
+#include "audio_fx.h"
 
 #ifdef _WIN32
 
@@ -124,22 +126,37 @@ struct Stt::Impl {
         (void)output;
         auto* self = static_cast<Impl*>(device->pUserData);
         const auto* samples = static_cast<const float*>(input);
+        // Echo cancellation + noise suppression (see audio_fx.h). The stage
+        // may return fewer samples than fed while its 10 ms frame buffers
+        // fill; the rest arrives with the next block (fixed delay, no loss).
+        float proc[4096];
+        const float* src = samples;
+        ma_uint32 left = frame_count;
         float mx = 0.0f;
-        for (ma_uint32 i = 0; i < frame_count; ++i) {
-            const float a = std::fabs(samples[i]);
-            if (a > mx) mx = a;
+        while (left > 0) {
+            const int chunk = static_cast<int>(std::min<ma_uint32>(left, 4096));
+            const int got = AudioFx::instance().process(src, proc, chunk);
+            src += chunk;
+            left -= static_cast<ma_uint32>(chunk);
+            for (int i = 0; i < got; ++i) {
+                const float a = std::fabs(proc[i]);
+                if (a > mx) mx = a;
+            }
+            if (got <= 0)
+                continue;
+            // Copy into the visualization ring, then publish the new cursor
+            // so the reader never sees an index ahead of the data.
+            const size_t w = self->ring_w.load(std::memory_order_relaxed);
+            for (int i = 0; i < got; ++i)
+                self->ring[(w + i) % Stt::Impl::kRing] = proc[i];
+            self->ring_w.store(w + static_cast<size_t>(got),
+                               std::memory_order_release);
+            std::lock_guard<std::mutex> lock(self->pcm_mutex);
+            self->pcm.insert(self->pcm.end(), proc, proc + got);
         }
         self->level.store(mx);
         float cur = self->peak.load();
         while (cur < mx && !self->peak.compare_exchange_weak(cur, mx)) {}
-        // Copy into the visualization ring, then publish the new cursor so the
-        // reader never sees an index ahead of the data.
-        const size_t w = self->ring_w.load(std::memory_order_relaxed);
-        for (ma_uint32 i = 0; i < frame_count; ++i)
-            self->ring[(w + i) % Stt::Impl::kRing] = samples[i];
-        self->ring_w.store(w + frame_count, std::memory_order_release);
-        std::lock_guard<std::mutex> lock(self->pcm_mutex);
-        self->pcm.insert(self->pcm.end(), samples, samples + frame_count);
     }
 
     // Opens (or switches to) the capture device and starts it.

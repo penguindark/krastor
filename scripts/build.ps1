@@ -19,7 +19,9 @@ Write-Host "Building with preset: $preset"
 
 # Source libraries live in git submodules (see libs/development.md): make
 # sure they are present before configuring.
-if (-not (Test-Path "$PSScriptRoot\..\libs\lunasvg\CMakeLists.txt")) {
+if (-not (Test-Path "$PSScriptRoot\..\libs\lunasvg\CMakeLists.txt") -or
+    -not (Test-Path "$PSScriptRoot\..\libs\rnnoise\include\rnnoise.h") -or
+    -not (Test-Path "$PSScriptRoot\..\libs\speexdsp\include\speex\speex_echo.h")) {
     Write-Host "Initializing git submodules..."
     git -C "$PSScriptRoot\.." submodule update --init --recursive
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

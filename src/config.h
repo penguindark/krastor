@@ -36,6 +36,10 @@ struct SttConfig {
     // Index into the capture-device list shown by the CLI `/devices` command.
     // -1 = system default microphone.
     int input_device = -1;
+    // Input DSP (see src/audio_fx.h): RNNoise noise suppression and SpeexDSP
+    // acoustic echo cancellation (uses the TTS playback as far-end reference).
+    bool denoise = true;
+    bool echo_cancel = true;
 };
 
 struct GuiConfig {

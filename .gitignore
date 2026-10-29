@@ -51,3 +51,10 @@ data/fonts/NotoColorEmoji.ttf
 
 # Icon atlas self-test artifact (krastor --icon-test, written to the CWD)
 icon_atlas_test.png
+
+# RNNoise model weights (generated C tables, fetched by tools/download_deps.py)
+libs/rnnoise-data/
+
+# Input-DSP self-test artifacts (krastor --fx-test, written to the CWD)
+fx_test_in.wav
+fx_test_out.wav

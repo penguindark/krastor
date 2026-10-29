@@ -41,6 +41,18 @@ set(LUNASVG_DISABLE_LOAD_SYSTEM_FONTS ON CACHE BOOL "" FORCE)
 set(LUNASVG_DISABLE_EXTERNAL_RESOURCES ON CACHE BOOL "" FORCE)
 add_subdirectory(libs/lunasvg EXCLUDE_FROM_ALL)
 
+# Audio input DSP (git submodules, BSD-3): RNNoise (mic noise suppression)
+# and SpeexDSP (acoustic echo cancellation + resamplers). Neither ships
+# CMakeLists.txt, so libs/audiofx provides the build glue; the libraries are
+# touched only through src/audio_fx.cpp (same isolation rule as LunaSVG).
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/libs/rnnoise/include/rnnoise.h" OR
+   NOT EXISTS "${CMAKE_SOURCE_DIR}/libs/speexdsp/include/speex/speex_echo.h")
+    message(FATAL_ERROR
+        "rnnoise/speexdsp submodules missing - "
+        "run: git submodule update --init --recursive")
+endif()
+add_subdirectory(libs/audiofx)
+
 # sherpa-onnx prebuilt C API for local TTS/STT (Windows). The binaries are
 # git-ignored; fetch them first with:  .venv\Scripts\python tools\download_deps.py
 if(WIN32)
@@ -70,6 +82,7 @@ add_executable(krastor
     src/voices.cpp
     src/tts.cpp
     src/stt.cpp
+    src/audio_fx.cpp
     src/gui.cpp
     src/icons.cpp
     src/clipboard.cpp
@@ -88,7 +101,7 @@ target_include_directories(krastor PRIVATE
     "${CMAKE_SOURCE_DIR}/libs/glfw/include"
 )
 
-target_link_libraries(krastor PRIVATE glfw lunasvg::lunasvg)
+target_link_libraries(krastor PRIVATE glfw lunasvg::lunasvg rnnoise speexdsp)
 
 if(WIN32)
     # HTTPS via WinHTTP (built into Windows) — identical behavior on MinGW and MSVC.

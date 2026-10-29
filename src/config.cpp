@@ -92,6 +92,8 @@ Config Config::load(const std::string& path)
         if (root.contains("stt")) {
             const auto& j = root["stt"];
             cfg.stt.input_device = j.value("input_device", cfg.stt.input_device);
+            cfg.stt.denoise = j.value("denoise", cfg.stt.denoise);
+            cfg.stt.echo_cancel = j.value("echo_cancel", cfg.stt.echo_cancel);
         }
         if (root.contains("gui")) {
             const auto& j = root["gui"];
@@ -140,6 +142,8 @@ void Config::save(const std::string& path) const
     };
     root["stt"] = {
         {"input_device", stt.input_device},
+        {"denoise", stt.denoise},
+        {"echo_cancel", stt.echo_cancel},
     };
     root["gui"] = {
         {"font_size", gui.font_size},

@@ -102,6 +102,8 @@ compile with MinGW + MSVC, Windows + Linux; see `libs/development.md`):
 | JSON | nlohmann/json | 1 header |
 | HTTP to LLM API | libcurl | link only |
 | Audio playback (TTS) | miniaudio | 1 header |
+| Mic noise suppression | RNNoise (git submodule, BSD-3) | static lib via `libs/audiofx/` glue, isolated behind `src/audio_fx.cpp` |
+| Acoustic echo cancellation + resampling | SpeexDSP (git submodule, BSD-3) | static lib via `libs/audiofx/` glue, isolated behind `src/audio_fx.cpp` |
 
 Frame model: update -> GLSL background pass -> UI pass -> swap buffers.
 
@@ -190,3 +192,9 @@ action buttons, the compact top bar (hands-free mic/mic-off, speak
 volume-2/volume-x, settings), the attachment chips (x) and the Settings modal
 Save/Close (check/x); isolated behind `src/icons.cpp`, fallback chain
 SVG -> emoji atlas -> text; headless self-test via `krastor --icon-test`.
+**Input audio DSP**: the microphone path runs echo cancellation (SpeexDSP AEC,
+far-end reference tapped from the TTS playback device callback) and noise
+suppression (RNNoise) before the VAD, so hands-free mode hears the user and
+not Krastor's own voice or room noise; toggles `stt.denoise`/`stt.echo_cancel`
+(config + Settings checkboxes, applied live), isolated behind
+`src/audio_fx.cpp`, headless self-test via `krastor --fx-test`.

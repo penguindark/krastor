@@ -37,17 +37,20 @@ git clone --recursive <URL-del-repo> krastor
 cd krastor
 ```
 
-`--recursive` porta dentro il submodule **`libs/lunasvg`** (rasterizzatore
-SVG, tag v3.5.0; plutovg è già vendorato dentro, nessun sotto-submodule).
-Se cloni senza `--recursive` nessun problema: `scripts/build.ps1` esegue
-automaticamente `git submodule update --init --recursive` quando manca.
+`--recursive` porta dentro i submodule: **`libs/lunasvg`** (rasterizzatore
+SVG, tag v3.5.0; plutovg è già vendorato dentro, nessun sotto-submodule),
+**`libs/rnnoise`** (noise suppression del micro) e **`libs/speexdsp`**
+(eco cancellazione + resampler). Se cloni senza `--recursive` nessun
+problema: `scripts/build.ps1` esegue automaticamente
+`git submodule update --init --recursive` quando ne manca uno.
 
 Tutto il resto delle librerie è già nel repo (header singoli o sorgenti:
 GLFW, Nuklear, glad, nlohmann/json, miniaudio, stb).
 
-## 3. Scaricare i binari sherpa-onnx (motore TTS/STT)
+## 3. Scaricare i binari esterni (sherpa-onnx + pesi RNNoise)
 
-Sono git-ignored (regola globale `*.dll`/`*.lib`). Circa 40 MB:
+Sono git-ignored (regola globale `*.dll`/`*.lib` + `libs/rnnoise-data/`).
+Circa 40 MB:
 
 ```powershell
 python tools\download_deps.py
@@ -55,7 +58,9 @@ python tools\download_deps.py
 
 Porta in `libs/sherpa-onnx/lib/` i 4 file `sherpa-onnx-c-api.dll/.lib`,
 `onnxruntime.dll`, `onnxruntime_providers_shared.dll` (release pinned
-1.13.8 — **non** aggiornare a 2.x, ignora `data_dir` e rompe le voci Piper).
+1.13.8 — **non** aggiornare a 2.x, ignora `data_dir` e rompe le voci Piper)
+e in `libs/rnnoise-data/src/` le tabelle C dei pesi del denoiser RNNoise
+(il repo git di RNNoise non le contiene; tarball verificato via sha256).
 La build CMake copierà poi le DLL accanto a `bin\krastor.exe` da sole.
 
 ## 4. Scaricare i modelli AI (voce) — `models/`
@@ -141,10 +146,13 @@ Senza argomenti parte la modalità CLI (stessa chat, testuale).
 # atlas delle icone SVG senza GUI: rasterizza le 11 icone, controlla
 # l'coverage e scrive icon_atlas_test.png da ispezionare
 .\bin\krastor.exe --icon-test
+.\bin\krastor.exe --fx-test
 ```
 
 - Icone mancanti/emoji al posto delle SVG → sei partito da una cartella che
   non contiene `data/icons` (lancia dalla root) oppure `--icon-test` fallisce.
+- `--fx-test` FAIL → i pesi RNNoise mancano o sono corrotti: riesegui
+  `python tools\download_deps.py`.
 - Voce muta → mancano `models\tts-piper-*` + `models\espeak-ng-data` (punto 4).
 - "LLM error" → `llm_models.json`/`config.json` puntano a un endpoint non
   raggiungibile (punto 5).
@@ -155,6 +163,7 @@ Senza argomenti parte la modalità CLI (stessa chat, testuale).
 | Sintomo | Causa / fix |
 |---|---|
 | CMake: "lunasvg submodule missing" | `git submodule update --init --recursive` |
+| CMake: "RNNoise model data missing" | `python tools\download_deps.py` (pesi RNNoise in `libs\rnnoise-data\`) |
 | Link error su `sherpa-onnx-c-api.lib` | non hai eseguito il punto 3 |
 | `onnxruntime.dll` mancante accanto all'exe | rebuild (la copy post-build non è girata) o copia manuale da `libs\sherpa-onnx\lib\` |
 | Config non salvata | `bin\config.json` è in sola lettura / cartella protetta; sposta tutto fuori da `Program Files` |

@@ -15,11 +15,15 @@
 
 #include "config.h"
 #include "voices.h"
+#include "audio_fx.h"
 
 #ifdef _WIN32
 
 #include <miniaudio.h>
 #include <sherpa-onnx/c-api/c-api.h>
+
+#include <algorithm>
+#include <mutex>
 
 namespace krastor {
 
@@ -31,17 +35,30 @@ struct Tts::Impl {
 
     const SherpaOnnxOfflineTts* tts = nullptr;
     std::string loaded_folder;  // voice folder currently loaded into `tts`
-    ma_engine engine{};
-    bool engine_ok = false;
     std::atomic<bool> cancel{false};  // set by interrupt(): stop playback now
+
+    // Dedicated playback device (instead of ma_engine): its data callback
+    // knows the exact samples reaching the speakers, so it can feed the
+    // far-end reference to the AEC (AudioFx::push_playback). Opened lazily
+    // at the loaded voice's native rate; mono float32.
+    ma_device out{};
+    bool out_ok = false;
+    int out_rate = 0;
+
+    // Current playback buffer (guarded by play_mtx; the audio thread pulls
+    // sequential frames, play() waits for the cursor to reach the end).
+    std::mutex play_mtx;
+    const float* play_buf = nullptr;
+    long long play_total = 0;
+    long long play_pos = 0;
 
     Impl(VoiceRegistry& v, const Config& c) : voices(v), cfg(c) {}
     ~Impl()
     {
         if (tts)
             SherpaOnnxDestroyOfflineTts(tts);
-        if (engine_ok)
-            ma_engine_uninit(&engine);
+        if (out_ok)
+            ma_device_uninit(&out);
     }
 
     // Loads (or reloads after a runtime voice switch) the Piper model.
@@ -101,55 +118,84 @@ struct Tts::Impl {
         return true;
     }
 
-    // Blocking mono float playback through the default output device.
-    // miniaudio's decoder expects a container, so the raw float PCM is wrapped
-    // in a minimal 44-byte WAV header (IEEE float, mono) in memory.
-    void play(const float* samples, int n, int sample_rate)
+    // Opens (or reopens after a voice sample-rate change) the playback device
+    // at the voice's native rate and keeps it running; idle = silence.
+    bool ensure_out(int sample_rate)
     {
-        const size_t data_bytes = sizeof(float) * static_cast<size_t>(n);
-        std::vector<uint8_t> wav(44 + data_bytes);
-        auto put32 = [&](size_t off, uint32_t v) {
-            wav[off] = v & 0xFF; wav[off + 1] = (v >> 8) & 0xFF;
-            wav[off + 2] = (v >> 16) & 0xFF; wav[off + 3] = (v >> 24) & 0xFF;
-        };
-        auto put16 = [&](size_t off, uint16_t v) {
-            wav[off] = v & 0xFF; wav[off + 1] = (v >> 8) & 0xFF;
-        };
-        memcpy(wav.data(), "RIFF", 4);
-        put32(4, 36 + static_cast<uint32_t>(data_bytes));
-        memcpy(wav.data() + 8, "WAVEfmt ", 8);
-        put32(16, 16);                       // fmt chunk size
-        put16(20, 3);                        // WAVE_FORMAT_IEEE_FLOAT
-        put16(22, 1);                        // channels
-        put32(24, static_cast<uint32_t>(sample_rate));
-        put32(28, static_cast<uint32_t>(sample_rate) * 4);  // byte rate
-        put16(32, 4);                        // block align
-        put16(34, 32);                       // bits per sample
-        memcpy(wav.data() + 36, "data", 4);
-        put32(40, static_cast<uint32_t>(data_bytes));
-        memcpy(wav.data() + 44, samples, data_bytes);
+        if (out_ok && out_rate == sample_rate)
+            return true;
+        if (out_ok) {
+            ma_device_uninit(&out);
+            out_ok = false;
+        }
+        ma_device_config dc = ma_device_config_init(ma_device_type_playback);
+        dc.playback.format = ma_format_f32;
+        dc.playback.channels = 1;
+        dc.sampleRate = static_cast<ma_uint32>(sample_rate);
+        dc.dataCallback = out_callback;
+        dc.pUserData = this;
+        if (ma_device_init(nullptr, &dc, &out) != MA_SUCCESS ||
+            ma_device_start(&out) != MA_SUCCESS) {
+            std::fprintf(stderr,
+                         "tts: no audio output device — speech will be silent\n");
+            out_ok = false;
+            return false;
+        }
+        out_ok = true;
+        out_rate = sample_rate;
+        return true;
+    }
 
-        ma_decoder_config dcfg = ma_decoder_config_init(
-            ma_format_f32, 1, static_cast<ma_uint32>(sample_rate));
-        ma_decoder decoder;
-        if (ma_decoder_init_memory(wav.data(), wav.size(), &dcfg, &decoder) != MA_SUCCESS) {
-            std::fprintf(stderr, "tts: playback setup failed\n");
-            return;
+    // Pulls the current utterance's PCM; whatever is emitted (including the
+    // zero padding) is handed to the AEC as the far-end reference.
+    static void out_callback(ma_device* device, void* output, const void*,
+                             ma_uint32 frames)
+    {
+        auto* self = static_cast<Impl*>(device->pUserData);
+        auto* out = static_cast<float*>(output);
+        {
+            std::lock_guard<std::mutex> lock(self->play_mtx);
+            long long take = 0;
+            if (self->play_buf && !self->cancel.load())
+                take = std::min<long long>(
+                    self->play_total - self->play_pos,
+                    static_cast<long long>(frames));
+            if (take > 0)
+                std::memcpy(out, self->play_buf + self->play_pos,
+                            sizeof(float) * static_cast<size_t>(take));
+            if (take < static_cast<long long>(frames))
+                std::memset(out + take, 0,
+                            sizeof(float) * (frames - take));
+            self->play_pos += take;
         }
-        ma_sound sound;
-        if (ma_sound_init_from_data_source(&engine, &decoder, 0, nullptr,
-                                           &sound) != MA_SUCCESS) {
-            std::fprintf(stderr, "tts: playback init failed\n");
-            ma_decoder_uninit(&decoder);
-            return;
+        AudioFx::instance().push_playback(out, static_cast<int>(frames),
+                                          self->out_rate);
+    }
+
+    // Blocking mono float playback through the default output device.
+    bool play(const float* samples, int n, int sample_rate)
+    {
+        if (!ensure_out(sample_rate))
+            return false;
+        {
+            std::lock_guard<std::mutex> lock(play_mtx);
+            play_buf = samples;
+            play_total = n;
+            play_pos = 0;
         }
-        ma_sound_start(&sound);
-        while (ma_sound_is_playing(&sound) && !cancel.load())
+        while (!cancel.load() && play_pos < play_total)
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        if (cancel.load())
-            ma_sound_stop(&sound);
-        ma_sound_uninit(&sound);
-        ma_decoder_uninit(&decoder);
+        if (cancel.load()) {
+            // Let the callback switch to silence before releasing the buffer.
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        }
+        {
+            std::lock_guard<std::mutex> lock(play_mtx);
+            play_buf = nullptr;
+            play_total = 0;
+            play_pos = 0;
+        }
+        return true;
     }
 };
 
@@ -162,13 +208,9 @@ Tts::~Tts() = default;
 
 bool Tts::init()
 {
-    if (impl_->engine_ok)
-        return true;
-    impl_->engine_ok = (ma_engine_init(nullptr, &impl_->engine) == MA_SUCCESS);
-    if (!impl_->engine_ok)
-        std::fprintf(stderr,
-                     "tts: no audio output device — speech will be silent\n");
-    return true;  // synthesis itself still works
+    // The playback device opens lazily with the voice's sample rate (see
+    // Impl::ensure_out); synthesis itself always works.
+    return true;
 }
 
 bool Tts::speak(const std::string& text)
@@ -202,9 +244,9 @@ bool Tts::speak(const std::string& text)
 
     const double secs = audio->n / static_cast<double>(audio->sample_rate);
     const int rate = audio->sample_rate;
-    if (impl_->engine_ok && !impl_->cancel.load())
-        impl_->play(audio->samples, audio->n, audio->sample_rate);
-    const bool silent = !impl_->engine_ok;
+    const bool played = !impl_->cancel.load() &&
+                        impl_->play(audio->samples, audio->n, audio->sample_rate);
+    const bool silent = !played;
     SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio);
 
     std::printf("[tts] %s: %.1fs audio @%d Hz, generated in %lld ms%s\n",

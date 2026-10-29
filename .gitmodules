@@ -1,3 +1,9 @@
 [submodule "libs/lunasvg"]
 	path = libs/lunasvg
 	url = https://github.com/sammycage/lunasvg
+[submodule "libs/rnnoise"]
+	path = libs/rnnoise
+	url = https://github.com/xiph/rnnoise
+[submodule "libs/speexdsp"]
+	path = libs/speexdsp
+	url = https://github.com/xiph/speexdsp
