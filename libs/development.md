@@ -6,7 +6,7 @@ Development doc for this folder (see `../project.md` section 4.3).
 Source of third-party libraries vendored into the repo (small, permissive-licensed,
 must compile with MinGW GCC and MSVC on Windows and GCC on Linux).
 
-## Current state (Phase 4, 2026-10-26)
+## Current state (Phase 5, 2026-10-29)
 
 | Library | License | Form | Where |
 |---|---|---|---|

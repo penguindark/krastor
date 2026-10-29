@@ -16,7 +16,9 @@ Read this first. It is the entry point for any AI agent or developer working on 
 4. Python: always `C:\Python313` through `.venv` — never the system PATH python.
 5. Never commit models, binaries, build outputs or `.venv` (see `.gitignore`).
    Each model lives in its own `models/<role>-<name>/` subfolder with a README
-   (source, license, files).
+   (source, license, files). Full-source libraries enter as **git submodules**
+   (only URL + pinned SHA in the repo, see `libs/development.md`): clone with
+   `git clone --recursive` or let the build scripts auto-init them.
 6. Every tracked folder has a `development.md` — **every commit must update the
    `development.md` of every folder it touches** (src, libs, data, tools, scripts...).
 7. Keep `project.md` and `development_log.md` updated with every commit that changes
@@ -26,14 +28,15 @@ Read this first. It is the entry point for any AI agent or developer working on 
 
 ## Index of folder-level development docs
 - `src/development.md` — C++ sources
-- `data/development.md` — assets (fonts, images, shaders)
+- `data/development.md` — assets (fonts, icons, shaders)
 - `models/development.md` — local AI models policy and inventory (folder git-ignored)
 - `tools/development.md` — python prototypes and scripts
-- `libs/development.md` — vendored third-party libraries
+- `libs/development.md` — third-party libraries (vendored headers + git submodules)
 - `scripts/development.md` — build/dev scripts
 
 ## Quick start
 ```powershell
+git submodule update --init --recursive                # first clone only
 scripts\build.ps1 -Toolchain msvc2026 -Config Debug   # default MSVC
 scripts\build.ps1 -Toolchain mingw   -Config Debug   # MinGW GCC
 ```

@@ -6,7 +6,7 @@ Development doc for this folder (see `../project.md` for the master description)
 All C++20 source code of the Krastor agent. Built by the root `CMakeLists.txt`;
 executables are emitted to `../bin`, intermediates to `../obj`.
 
-## Current state (Phase 5, 2026-10-26) — GUI chat interface
+## Current state (Phase 5, 2026-10-29) — GUI chat interface
 | Module | Responsibility |
 |---|---|
 | `main.cpp` | CLI REPL: commands (`/help /voices /voice <id> /say <text> /listen [sec] [idx] /devices /mic [sec] [idx] /transcribe <file> /reset /config /exit`), everything else goes to the LLM; at startup resolves `llm.model_ref` against `llm_models.json` (prints `model: <ref> -> <base_url>`) before launching CLI or `--gui` |

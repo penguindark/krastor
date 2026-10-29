@@ -5,7 +5,7 @@ Development doc for this folder (see `../project.md`).
 ## Purpose
 Runtime assets: fonts, images, icons (SVG), and later GLSL shaders.
 
-## Current state (Phase 5, 2026-10-26)
+## Current state (Phase 5, 2026-10-29)
 - `fonts/jetbrains-mono.ttf` - JetBrains Mono variable TTF (OFL, see `LICENSES.md`).
   Loaded at runtime by `src/gui.cpp` as the UI/chat font (monospace + box-drawing
   glyphs for the terminal-style panel). Loaded from memory with a fallback to
@@ -22,7 +22,12 @@ Runtime assets: fonts, images, icons (SVG), and later GLSL shaders.
   `frag_color`. Active plugin hot-reloads on save.
   - `ring_spectrogram.frag` — circular mic spectrogram: cyan/magenta woven ribbons
     around a ring, driven by the 64-band spectrum history texture.
-- Still to come: `icons/` (SVG icons for UI).
+- `icons/` — UI icon sources: 5 monochrome SVGs from the Lucide set (ISC,
+  see `LICENSES.md` and `icons/README.md`): `send`, `paperclip`, `ear`,
+  `volume-2`, `square`. Rasterized at runtime into a white/alpha sprite atlas
+  by `src/icons.cpp` (LunaSVG) for the floating action buttons; the folder is
+  scanned at startup, so dropping a new `*.svg` here adds an icon with no code
+  change (name = file stem). Missing folder falls back to the emoji atlas.
 
 ## Conventions
 - English file names, lowercase, hyphen-separated (e.g. `jetbrains-mono.ttf`).
