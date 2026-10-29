@@ -81,6 +81,7 @@ add_executable(krastor
     src/emoji.cpp
     src/voices.cpp
     src/tts.cpp
+    src/tts_text.cpp
     src/stt.cpp
     src/audio_fx.cpp
     src/gui.cpp

@@ -913,3 +913,26 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
 - Verified: `--fx-test` + `--icon-test` PASS on both toolchains; GUI
   screenshot shows the two new checkboxes and Save/Close; TTS barge-in path
   unchanged. Both toolchains clean.
+
+---
+
+## 2026-10-29 (later) - TTS text filter (Markdown never reaches the voice)
+
+- New pure module `src/tts_text.h/.cpp` (`tts_filter()`): Markdown ->
+  plain-speech text, the voice-side mirror of `md_to_ansi`. Hooked once
+  inside `Tts::speak()` so GUI, CLI `/say` and the voice-test FAB all
+  speak only prose; conversation (raw to the LLM) and display (ANSI)
+  untouched.
+- Rules: fenced code blocks dropped silently (code-only reply -> silence),
+  inline-code backticks and heading/bold/italic/strike/quote/list markers
+  stripped (text kept), links keep their text and drop the URL, bare URLs
+  dropped, tables flattened to comma-separated cells, horizontal rules,
+  HTML tags, emoji (UTF-8-aware; Italian accents preserved) and ANSI
+  escapes removed; whitespace tidied. `snake_case` survives (word-boundary
+  `_` kept).
+- Self-test `krastor --tts-filter-test`: 20 table-driven cases, PASS on
+  both toolchains. End-to-end smoke: CLI `/say ## Titolo **Ciao** mondo`
+  speaks the filtered text.
+- Gotcha: the hand-rolled UTF-8 decoder mask (`0xFF >> len`, not
+  `0xFF >> (len+1)`) - wrong version mangled every ASCII byte, caught by
+  the test on first run.

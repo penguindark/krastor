@@ -16,6 +16,7 @@
 #include "config.h"
 #include "voices.h"
 #include "audio_fx.h"
+#include "tts_text.h"
 
 #ifdef _WIN32
 
@@ -215,7 +216,10 @@ bool Tts::init()
 
 bool Tts::speak(const std::string& text)
 {
-    if (text.empty())
+    // The speakers get the plain prose: Markdown markup, code blocks,
+    // tables, links and emoji are filtered out (see tts_text.h).
+    const std::string spoken = tts_filter(text);
+    if (spoken.empty())
         return false;
     impl_->cancel.store(false);
     if (!impl_->ensure_voice())
@@ -231,7 +235,7 @@ bool Tts::speak(const std::string& text)
 
     const auto t0 = std::chrono::steady_clock::now();
     const SherpaOnnxGeneratedAudio* audio = SherpaOnnxOfflineTtsGenerateWithConfig(
-        impl_->tts, text.c_str(), &gen, nullptr, nullptr);
+        impl_->tts, spoken.c_str(), &gen, nullptr, nullptr);
     const auto gen_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - t0)
                             .count();

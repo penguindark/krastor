@@ -192,6 +192,10 @@ action buttons, the compact top bar (hands-free mic/mic-off, speak
 volume-2/volume-x, settings), the attachment chips (x) and the Settings modal
 Save/Close (check/x); isolated behind `src/icons.cpp`, fallback chain
 SVG -> emoji atlas -> text; headless self-test via `krastor --icon-test`.
+**TTS text filter**: before synthesis every reply passes through
+`tts_filter()` (`src/tts_text.h/.cpp`), the voice-side mirror of the ANSI
+formatter: code blocks, tables, links, markup and emoji never reach the
+speakers (plain prose only); self-test via `krastor --tts-filter-test`.
 **Input audio DSP**: the microphone path runs echo cancellation (SpeexDSP AEC,
 far-end reference tapped from the TTS playback device callback) and noise
 suppression (RNNoise) before the VAD, so hands-free mode hears the user and

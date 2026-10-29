@@ -30,6 +30,7 @@
 #include "llm_models.h"
 #include "stt.h"
 #include "tts.h"
+#include "tts_text.h"
 #include "voices.h"
 
 namespace {
@@ -262,6 +263,55 @@ int run_fx_test()
 
 } // namespace
 
+// Headless self-test for the TTS text filter (see src/tts_text.h):
+// table-driven input -> expected plain-speech text. Exit 0 = all PASS.
+int run_tts_filter_test()
+{
+    struct Case {
+        const char* in;
+        const char* out;
+    };
+    static const Case cases[] = {
+        {"Hello world", "Hello world"},
+        {"Hello **bold** and *it* and `code`", "Hello bold and it and code"},
+        {"## Title\n### Sub", "Title\nSub"},
+        {"- one\n- two\n1. three", "one\ntwo\nthree"},
+        {"> quoted text", "quoted text"},
+        {"```python\nprint('hi')\n```\nDone.", "Done."},
+        {"```\nonly code\n```", ""},
+        {"~~~\ncode\n~~~\nok", "ok"},
+        {"[Krastor](https://example.com) rocks", "Krastor rocks"},
+        {"visit https://example.com today", "visit today"},
+        {"| a | b |\n|---|---|\n| 1 | 2 |", "a, b\n1, 2"},
+        {"---\ntext", "text"},
+        {"<b>bold</b> text", "bold text"},
+        {"Ciao \xF0\x9F\x8C\x8E!", "Ciao!"},
+        {"snake_case_name stays", "snake_case_name stays"},
+        {"![img](x.png) alt text", "alt text"},
+        {"multi\n\n\n\nblank", "multi\nblank"},
+        {"~~strike~~", "strike"},
+        {"1) first\n2) second", "first\nsecond"},
+        {"a < b stays ok", "a < b stays ok"},
+    };
+    int failures = 0;
+    for (const auto& c : cases) {
+        const std::string got = krastor::tts_filter(c.in);
+        const bool ok = got == c.out;
+        if (!ok)
+            ++failures;
+        std::printf("  %-42s %s\n", c.in, ok ? "OK" : "FAIL");
+        if (!ok)
+            std::printf("      expected [%s] got [%s]\n", c.out, got.c_str());
+    }
+    if (failures) {
+        std::cerr << "tts-filter-test: FAIL (" << failures << " case(s))\n";
+        return 1;
+    }
+    std::cout << "tts-filter-test: PASS (" << (sizeof(cases) / sizeof(cases[0]))
+              << " cases)\n";
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
 #ifdef _WIN32
@@ -295,7 +345,7 @@ int main(int argc, char** argv)
         std::abort();
     });
 
-    // Args: [--gui] [--icon-test] [--fx-test] [config.json]
+    // Args: [--gui] [--icon-test] [--fx-test] [--tts-filter-test] [config.json]
     bool use_gui = false;
     std::string config_path;  // empty -> default (exe dir, legacy CWD fallback)
     for (int i = 1; i < argc; ++i) {
@@ -303,6 +353,7 @@ int main(int argc, char** argv)
         if (a == "--gui") use_gui = true;
         else if (a == "--icon-test") return run_icon_test();
         else if (a == "--fx-test") return run_fx_test();
+        else if (a == "--tts-filter-test") return run_tts_filter_test();
         else config_path = a;
     }
     if (config_path.empty())
