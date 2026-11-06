@@ -1007,3 +1007,18 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   results). E2E via CLI: model deleted a workspace file only after the
   y-confirm; with DDG refusing it fell back to webfetch on Wikipedia on
   its own. Both toolchains clean.
+
+---
+
+## 2026-11-07 (later) - websearch: Bing-led engine chain (DDG was blocking)
+
+- Field report: every websearch call from the GUI returned "no results
+  parsed" - DuckDuckGo's key-free endpoints answer with an anti-bot
+  challenge page persistently from this IP (GET and POST, html and lite).
+- websearch now tries an engine chain: **Bing first** (reliable: b_algo
+  blocks parsed, result URLs unwrapped from the ``ck/a?...u=a1<base64>``
+  redirect via a small base64 decoder in ``html_util.h``), then the two
+  DDG endpoints as fallbacks. Verified with the exact Italian query from
+  the report: real results, decoded URLs.
+- ``--tool-test`` websearch check now PASSes (was SKIP); manifest net
+  allow-list gained ``https://www.bing.com/**``. Both toolchains clean.

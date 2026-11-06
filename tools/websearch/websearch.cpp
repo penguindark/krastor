@@ -81,6 +81,7 @@ std::string anchor_text(const std::string& html, size_t from)
 }
 
 // DuckDuckGo wraps result URLs: //duckduckgo.com/l/?uddg=<enc>&rut=...
+// Bing wraps them: https://www.bing.com/ck/a?...&u=a1<base64>&...
 std::string unwrap_url(const std::string& href)
 {
     const size_t u = href.find("uddg=");
@@ -91,6 +92,20 @@ std::string unwrap_url(const std::string& href)
                                    ? std::string::npos
                                    : e - u - 5));
     }
+    if (href.find("bing.com/ck/a") != std::string::npos) {
+        const size_t a = href.find("u=a1");
+        if (a != std::string::npos) {
+            size_t e = href.find('&', a + 4);
+            const std::string b64 =
+                href.substr(a + 4, e == std::string::npos
+                                       ? std::string::npos
+                                       : e - a - 4);
+            const std::string real = b64_decode(b64);
+            if (real.rfind("http", 0) == 0)
+                return real;
+        }
+        return {};  // wrapped but undecodable: drop the hit
+    }
     if (href.rfind("//", 0) == 0)
         return "https:" + href;
     return href;
@@ -99,6 +114,51 @@ std::string unwrap_url(const std::string& href)
 struct Hit {
     std::string title, url, snippet;
 };
+
+// bing.com/search: li.b_algo blocks with <h2><a href>Title</a></h2> and a
+// <p> caption. Result URLs arrive as ck/a?…u=a1<base64> redirects.
+std::vector<Hit> parse_bing(const std::string& html, size_t max_results)
+{
+    std::vector<Hit> hits;
+    size_t pos = 0;
+    while (hits.size() < max_results) {
+        const size_t b = html.find("class=\"b_algo\"", pos);
+        if (b == std::string::npos)
+            break;
+        const size_t next = html.find("class=\"b_algo\"", b + 10);
+        const size_t block_end = next == std::string::npos ? html.size() : next;
+        Hit h;
+        const size_t h2 = html.find("<h2", b);
+        if (h2 != std::string::npos && h2 < block_end) {
+            const size_t a = html.find("<a", h2);
+            const size_t href = a == std::string::npos
+                                    ? std::string::npos
+                                    : html.find("href=\"", a);
+            if (href != std::string::npos && href < block_end) {
+                const size_t hb = html.find('"', href + 6);
+                h.url = unwrap_url(decode_entities(
+                    html.substr(href + 6, hb - href - 6)));
+                h.title = anchor_text(html, a);
+            }
+            const size_t h2e = html.find("</h2>", h2);
+            const size_t p = h2e == std::string::npos
+                                 ? std::string::npos
+                                 : html.find("<p", h2e);
+            if (p != std::string::npos && p < block_end) {
+                const size_t gt = html.find('>', p);
+                const size_t pe = html.find("</p>", p);
+                if (gt != std::string::npos && pe != std::string::npos)
+                    h.snippet = text_of(html.substr(gt + 1, pe - gt - 1));
+            }
+        }
+        // skip undecodable wrappers and Bing's own links
+        if (!h.title.empty() && !h.url.empty() &&
+            h.url.find("bing.com/") == std::string::npos)
+            hits.push_back(std::move(h));
+        pos = b + 10;
+    }
+    return hits;
+}
 
 // html.duckduckgo.com/html/: a.result__a anchors + a.result__snippet anchors.
 std::vector<Hit> parse_ddg_html(const std::string& html, size_t max_results)
@@ -185,11 +245,13 @@ int main()
             {"Accept-Language", "en-US,en;q=0.8"},
         };
 
-        // Two engines, tried in order: full HTML page, then the lite page.
+        // Engine chain, tried in order. Bing is the reliable one; DuckDuckGo's
+        // key-free endpoints answer with an anti-bot challenge from many IPs.
         struct Engine {
             std::string url;
             std::vector<Hit> (*parse)(const std::string&, size_t);
         } engines[] = {
+            {"https://www.bing.com/search?q=" + q, parse_bing},
             {"https://html.duckduckgo.com/html/?q=" + q, parse_ddg_html},
             {"https://lite.duckduckgo.com/lite/?q=" + q, parse_ddg_lite},
         };

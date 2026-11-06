@@ -2,7 +2,7 @@
 // Returns title + URL + snippet per hit; pair it with webfetch to read a hit.
 {
   "name": "websearch",
-  "description": "Search the web and return a list of results (title, URL, snippet). Use to find pages, documentation or current information; then read a promising result with webfetch. Backed by DuckDuckGo, no API key.",
+  "description": "Search the web and return a list of results (title, URL, snippet). Use to find pages, documentation or current information; then read a promising result with webfetch. Backed by Bing with DuckDuckGo fallbacks, no API key.",
   "exe": "websearch.exe",
   "cwd": "tools",
   "enabled": true,
@@ -18,7 +18,11 @@
   },
   "permissions": {
     "net": {
-      "allow": ["https://html.duckduckgo.com/**", "https://lite.duckduckgo.com/**"]
+      "allow": [
+        "https://www.bing.com/**",
+        "https://html.duckduckgo.com/**",
+        "https://lite.duckduckgo.com/**"
+      ]
     },
     "deny_always": ["file://**"]
   }
