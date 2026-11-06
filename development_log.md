@@ -1022,3 +1022,15 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   the report: real results, decoded URLs.
 - ``--tool-test`` websearch check now PASSes (was SKIP); manifest net
   allow-list gained ``https://www.bing.com/**``. Both toolchains clean.
+
+---
+
+## 2026-11-07 (later) - chat selection fix: cumulative codepoint numbering
+
+- Field report: dragging a selection over a styled reply highlighted
+  scattered single words instead of the range. Root cause in
+  ``tokenize_runs``: the codepoint counter ``lcp`` restarted at 0 for every
+  ANSI run, so tokens of different runs (inline code, bold, colors) shared
+  the same offsets and any range matched one word per run. ``lcp`` is now
+  cumulative across all body runs (the role prefix stays unnumbered), which
+  is what ``rebuild_chat_doc``/``doc_resolve``/``chat_extract`` assume.

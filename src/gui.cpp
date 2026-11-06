@@ -1259,6 +1259,12 @@ std::vector<Word> tokenize_runs(const std::vector<AnsiRun>& runs)
 {
     std::vector<Word> toks;
     bool first_run = true;
+    // Cumulative codepoint counter across ALL body runs (the role prefix is
+    // not selectable and does not advance it): the selection maps document
+    // offsets onto these numbers, so numbering must be continuous - a
+    // per-run reset made styled replies (inline code, bold) highlight
+    // scattered words instead of the dragged range.
+    int lcp = 0;
     for (const auto& r : runs) {
         const bool prefix_run = first_run;
         first_run = false;
@@ -1271,20 +1277,21 @@ std::vector<Word> tokenize_runs(const std::vector<AnsiRun>& runs)
         const struct nk_color bg =
             r.has_bg ? nk_rgba(r.br, r.bg, r.bb, 255) : nk_rgba(0, 0, 0, 0);
         size_t i = 0;
-        int lcp = 0;  // codepoints consumed within this run
         while (i < r.text.size()) {
             const char ch = r.text[i];
             if (ch == '\n') {
                 toks.push_back({"", fg, bg, true, prefix_run ? -1 : lcp});
                 ++i;
-                ++lcp;
+                if (!prefix_run)
+                    ++lcp;
             } else if (ch == ' ') {
                 size_t j = i;
                 while (j < r.text.size() && r.text[j] == ' ')
                     ++j;
                 toks.push_back({r.text.substr(i, j - i), fg, bg, false,
                                 prefix_run ? -1 : lcp});
-                lcp += static_cast<int>(j - i);
+                if (!prefix_run)
+                    lcp += static_cast<int>(j - i);
                 i = j;
             } else {
                 size_t j = i;
@@ -1292,7 +1299,8 @@ std::vector<Word> tokenize_runs(const std::vector<AnsiRun>& runs)
                     ++j;
                 toks.push_back({r.text.substr(i, j - i), fg, bg, false,
                                 prefix_run ? -1 : lcp});
-                lcp += cp_count(r.text.substr(i, j - i));
+                if (!prefix_run)
+                    lcp += cp_count(r.text.substr(i, j - i));
                 i = j;
             }
         }
