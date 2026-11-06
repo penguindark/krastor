@@ -113,10 +113,11 @@ Krastor through OpenAI function calling. The repo-level `tools/` folder holds
 one JSONC manifest per tool (`tool_<name>.jsonc`, first level: description,
 input JSON Schema, permission policy) plus the tool exes and a dedicated
 `tools/python/venv` the agent can execute. Built-in tools: file/folder
-manager (`filetool`: read with byte ranges, write, edit, rename, mkdir — no
-delete), wget-like web text fetcher (`webfetch`: HTML → readable text),
-Python interpreter (`python/venv` + `runner.py`). Every call passes a
-two-layer permission gate (sandbox `~/Documents/KrastorWorkspace/` free for
+manager (`filetool`: read with byte ranges, write, edit, rename, mkdir,
+delete — permanent and always user-confirmed), wget-like web text fetcher
+(`webfetch`: HTML → readable text), web search (`websearch`: DuckDuckGo,
+title+URL+snippet, no API key), Python interpreter (`python/venv` +
+`runner.py`). Every call passes a two-layer permission gate (sandbox `~/Documents/KrastorWorkspace/` free for
 writes, everything else asks; deny floors not overridable, re-checked by the
 tools themselves). Core modules: `src/permissions`, `src/tool_registry`,
 `src/tool_runner`, `src/tool_loop`. Headless self-test `krastor --tool-test`;

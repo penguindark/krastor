@@ -59,6 +59,10 @@ bool parse_manifest(const fs::path& file, const nlohmann::json& j,
         for (const auto& a : j["net_args"])
             if (a.is_string())
                 out.net_args.push_back(a.get<std::string>());
+    if (j.contains("ask_actions") && j["ask_actions"].is_array())
+        for (const auto& a : j["ask_actions"])
+            if (a.is_string())
+                out.ask_actions.push_back(a.get<std::string>());
     if (j.contains("action_class") && j["action_class"].is_object())
         for (const auto& [k, v] : j["action_class"].items())
             if (v.is_string())

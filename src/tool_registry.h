@@ -25,6 +25,9 @@ struct ToolManifest {
     int timeout_ms = 15000;
     std::vector<std::string> path_args;    // args validated as fs paths
     std::vector<std::string> net_args;     // args validated as net targets (URLs)
+    // Actions that ALWAYS ask the user, even when the policy would allow them
+    // and even against session grants (e.g. file deletion).
+    std::vector<std::string> ask_actions;
     nlohmann::json input_schema;           // JSON Schema (forwarded to the LLM)
     nlohmann::json permissions;            // raw policy block (see permissions.h)
     std::map<std::string, std::string> action_class;  // action -> read/write/net/run

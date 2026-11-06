@@ -44,9 +44,13 @@ executables (built by CMake into `tools/`, git-ignored like all `*.exe`).
 
 | Tool | Manifest | Executable | What it does |
 |---|---|---|---|
-| `files` | `tool_files.jsonc` | `filetool.exe` (`filetool/filetool.cpp`) | list/stat/read (byte range)/write/edit/append/rename/mkdir; UTF-8 paths; binary sniff; no delete by design |
+| `files` | `tool_files.jsonc` | `filetool.exe` (`filetool/filetool.cpp`) | list/stat/read (byte range)/write/edit/append/rename/mkdir/delete; UTF-8 paths; binary sniff. `delete` is permanent and **always asks** (manifest `ask_actions`, never silenced by "Always allow"); directories need `recursive:true` unless empty |
 | `webfetch` | `tool_webfetch.jsonc` | `webfetch.exe` (`webfetch/webfetch.cpp`) | GET a http(s) URL, HTML -> readable text (scripts/styles stripped, entities decoded); refuses binary and non-http schemes |
+| `websearch` | `tool_websearch.jsonc` | `websearch.exe` (`websearch/websearch.cpp`) | DuckDuckGo search (no API key): html.duckduckgo.com with lite.duckduckgo.com fallback; returns title+URL+snippet per hit. DDG answers an anti-bot challenge intermittently -> the tool errors, the self-test SKIPs |
 | `python` | `tool_python.jsonc` | `python/venv/Scripts/python.exe` + `python/runner.py` | runs inline `code` or `script`+`args` in the agent venv; every run asks |
+
+Shared HTML helpers (entity decode, HTML->text, title/fragment extraction,
+URL decode) live in `html_util.h` (header-only, used by webfetch+websearch).
 
 - `python/venv/` is the agent's **dedicated** virtualenv (git-ignored), created
   by `python/setup.ps1` (uses PATH python 3.11, unlike the dev `.venv` on

@@ -402,6 +402,40 @@ json do_mkdir(Ctx&, const fs::path& p, std::string& err)
     return ok({{"path", S(p)}});
 }
 
+// Permanent delete (no recycle bin). Krastor forces a user confirmation for
+// this action (manifest ask_actions); the deny_always floor still applies.
+// Directories need recursive:true unless they are empty.
+json do_delete(Ctx& c, const fs::path& p, std::string& err)
+{
+    std::error_code ec;
+    if (!fs::exists(p, ec)) {
+        err = "does not exist: " + S(p);
+        return json();
+    }
+    if (fs::is_directory(p, ec)) {
+        const bool rec = c.args.value("recursive", false);
+        std::error_code eec;
+        const bool empty = fs::is_empty(p, eec);
+        if (!rec && !empty) {
+            err = "directory not empty - pass recursive:true to delete the "
+                  "whole tree: " + S(p);
+            return json();
+        }
+        const auto n = rec ? fs::remove_all(p, ec) : fs::remove(p, ec) ? 1 : 0;
+        if (ec) {
+            err = "delete failed: " + ec.message();
+            return json();
+        }
+        return ok({{"path", S(p)}, {"removed", n}, {"dir", true}});
+    }
+    fs::remove(p, ec);
+    if (ec) {
+        err = "delete failed: " + ec.message();
+        return json();
+    }
+    return ok({{"path", S(p)}, {"removed", 1}, {"dir", false}});
+}
+
 } // namespace
 
 int main()
@@ -456,6 +490,8 @@ int main()
                 out = do_rename(c, p, err);
             else if (action == "mkdir")
                 out = do_mkdir(c, p, err);
+            else if (action == "delete")
+                out = do_delete(c, p, err);
             else
                 err = "unknown action: " + action;
         }

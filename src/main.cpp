@@ -393,11 +393,13 @@ int run_tool_test()
 
     const auto* files = reg.find("files");
     const auto* web = reg.find("webfetch");
+    const auto* search = reg.find("websearch");
     const auto* py = reg.find("python");
     check("registry: files tool loaded", files != nullptr);
     check("registry: webfetch tool loaded", web != nullptr);
+    check("registry: websearch tool loaded", search != nullptr);
     check("registry: python tool loaded", py != nullptr);
-    if (!files || !web || !py) {
+    if (!files || !web || !search || !py) {
         std::cout << "tool-test: " << failed << " failed\n";
         return failed;
     }
@@ -428,6 +430,18 @@ int run_tool_test()
     r = fr("{\"action\":\"list\",\"path\":\".\"}");
     check("files: list workspace", r.ok && r.result.find(tag) != std::string::npos,
           r.error);
+    // --- files: delete always asks, even inside the sandbox --------------------
+    r = fr("{\"action\":\"delete\",\"path\":\"" + tag + "\"}", &ask_deny);
+    check("files: delete asks -> user deny honoured", !r.ok,
+          "delete must confirm even in the sandbox");
+    r = fr("{\"action\":\"delete\",\"path\":\"" + tag + "\"}");
+    check("files: delete after confirm", r.ok, r.error);
+    r = fr("{\"action\":\"stat\",\"path\":\"" + tag + "\"}");
+    check("files: deleted file is gone",
+          r.ok && r.result.find("\"exists\":false") != std::string::npos, r.error);
+    r = fr("{\"action\":\"delete\",\"path\":\"C:/Windows\"}");
+    check("files: deny floor blocks delete of C:/Windows", !r.ok,
+          "must be blocked before asking");
     // --- files: permission floors ----------------------------------------------
     r = fr("{\"action\":\"write\",\"path\":\"C:/Windows/evil_selftest.txt\","
            "\"content\":\"x\",\"overwrite\":true}");
@@ -451,6 +465,19 @@ int run_tool_test()
     r = runner.run(*web, "{\"url\":\"file:///c:/windows/win.ini\"}",
                    &ask_allow, nullptr);
     check("webfetch: file:// scheme blocked", !r.ok, "must be blocked");
+
+    // --- websearch ---------------------------------------------------------------
+    // DDG answers with an anti-bot challenge page intermittently (per IP):
+    // a refusal is a SKIP, not a FAIL - the protocol check runs when it works.
+    r = runner.run(*search, "{\"query\":\"C++ programming language\",\"max_results\":3}",
+                   &ask_allow, nullptr);
+    if (r.error.find("fetch failed") != std::string::npos ||
+        r.error.find("engine may have refused") != std::string::npos)
+        std::cout << "SKIP websearch (engine refused or no network)\n";
+    else
+        check("websearch: results with title+url",
+              r.ok && r.result.find("\"url\"") != std::string::npos,
+              r.error);
 
     // --- python -------------------------------------------------------------------
     r = runner.run(*py, "{\"code\":\"print(6*7)\"}", &ask_allow, nullptr);

@@ -6,6 +6,7 @@
 
 #include "tool_runner.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -365,9 +366,19 @@ ToolResult ToolRunner::run(const ToolManifest& tool,
         else if (d == Decision::Ask && decision != Decision::Deny)
             decision = Decision::Ask;
     }
-    // 2) class-level check without a path (net/run)
-    if (decision == Decision::Allow && paths.empty() && urls.empty())
+    // 2) class-level check without a target: only meaningful for "run"
+    //    (run.ask gates execution). Net rules match URLs (net_args); a net
+    //    tool without URL args is governed by its own self-enforcement.
+    if (decision == Decision::Allow && paths.empty() && urls.empty() &&
+        cls == PermClass::Run)
         decision = policy.check(cls, std::string());
+    // 3) ask_actions: these actions ALWAYS confirm - they override the policy
+    //    AND session grants (e.g. file deletion). Deny floors still win.
+    const bool forced_ask =
+        std::find(tool.ask_actions.begin(), tool.ask_actions.end(), action) !=
+        tool.ask_actions.end();
+    if (forced_ask && decision != Decision::Deny)
+        decision = Decision::Ask;
 
     if (decision == Decision::Ask) {
         if (!ask) {
@@ -385,7 +396,8 @@ ToolResult ToolRunner::run(const ToolManifest& tool,
             tr.error = "denied by user";
             return finish();
         }
-        if (answer == Decision::Always)
+        // "Always allow" never silences a forced-ask action.
+        if (answer == Decision::Always && !forced_ask)
             for (const auto& p : paths)
                 grants_.allow(cls, p);
     } else if (decision == Decision::Deny) {

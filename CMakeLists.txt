@@ -124,22 +124,35 @@ endforeach()
 if(WIN32)
     add_executable(webfetch tools/webfetch/webfetch.cpp src/permissions.cpp
                            src/http_client_winhttp.cpp)
+    add_executable(websearch tools/websearch/websearch.cpp src/permissions.cpp
+                             src/http_client_winhttp.cpp)
 else()
     add_executable(webfetch tools/webfetch/webfetch.cpp src/permissions.cpp
                            src/http_client_curl.cpp)
+    add_executable(websearch tools/websearch/websearch.cpp src/permissions.cpp
+                             src/http_client_curl.cpp)
 endif()
 target_compile_features(webfetch PRIVATE cxx_std_20)
+target_compile_features(websearch PRIVATE cxx_std_20)
 target_include_directories(webfetch PRIVATE
+    "${CMAKE_SOURCE_DIR}/libs" "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(websearch PRIVATE
     "${CMAKE_SOURCE_DIR}/libs" "${CMAKE_SOURCE_DIR}/src")
 if(WIN32)
     target_link_libraries(webfetch PRIVATE winhttp)
+    target_link_libraries(websearch PRIVATE winhttp)
 else()
     target_link_libraries(webfetch PRIVATE CURL::libcurl)
+    target_link_libraries(websearch PRIVATE CURL::libcurl)
 endif()
 set_target_properties(webfetch PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/tools")
+set_target_properties(websearch PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/tools")
 foreach(cfg DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
     set_target_properties(webfetch PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${cfg} "${CMAKE_SOURCE_DIR}/tools")
+    set_target_properties(websearch PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY_${cfg} "${CMAKE_SOURCE_DIR}/tools")
 endforeach()
 

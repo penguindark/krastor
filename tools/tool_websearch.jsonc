@@ -1,0 +1,25 @@
+// Krastor tool manifest: web search (DuckDuckGo HTML endpoints, no API key).
+// Returns title + URL + snippet per hit; pair it with webfetch to read a hit.
+{
+  "name": "websearch",
+  "description": "Search the web and return a list of results (title, URL, snippet). Use to find pages, documentation or current information; then read a promising result with webfetch. Backed by DuckDuckGo, no API key.",
+  "exe": "websearch.exe",
+  "cwd": "tools",
+  "enabled": true,
+  "timeout_ms": 20000,
+  "action_class": { "websearch": "net" },
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "query":       { "type": "string", "description": "the search query" },
+      "max_results": { "type": "integer", "description": "maximum results to return (default 8, max 15)" }
+    },
+    "required": ["query"]
+  },
+  "permissions": {
+    "net": {
+      "allow": ["https://html.duckduckgo.com/**", "https://lite.duckduckgo.com/**"]
+    },
+    "deny_always": ["file://**"]
+  }
+}

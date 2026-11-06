@@ -981,3 +981,29 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   file, asked permission for an outside-sandbox write (y honoured), ran
   python inline code. Docs synced: project.md 4.4 + roadmap, tools/ and
   src/ development.md, COLD_START (venv setup step, --tool-test).
+
+---
+
+## 2026-11-07 (later) - file delete (always confirmed) + websearch tool
+
+- Manifests gained ``ask_actions``: listed actions force the permission
+  dialog even when the policy allows them and even against session grants
+  ("Always allow" never silences them; deny floors still win). Used by
+  ``files.delete``: permanent removal, directories need ``recursive:true``
+  unless empty; filetool self-enforces the deny floor for it too.
+- New ``websearch`` tool (``websearch.exe`` + ``tool_websearch.jsonc``):
+  DuckDuckGo without API key - html.duckduckgo.com with
+  lite.duckduckgo.com fallback, results unwrapped from the ``uddg=``
+  redirect, title+URL+snippet per hit. DDG answers an anti-bot challenge
+  page intermittently per IP: the tool reports it, ``--tool-test`` SKIPs
+  on refusal (PASS verified when the engine cooperates).
+- Shared HTML helpers extracted to ``tools/html_util.h`` (entity decode,
+  html_to_text, title/fragment text, url_decode) - webfetch refactored
+  onto it, websearch reuses it.
+- Runner gate fix found by testing: the empty-target class check now runs
+  only for the ``run`` class (a net allow-list used to deny tools whose
+  args contain no URL, e.g. websearch).
+- ``--tool-test`` now 20 checks (delete asks/deny/floor, websearch
+  results). E2E via CLI: model deleted a workspace file only after the
+  y-confirm; with DDG refusing it fell back to webfetch on Wikipedia on
+  its own. Both toolchains clean.

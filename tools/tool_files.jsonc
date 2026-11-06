@@ -3,20 +3,21 @@
 // before spawning, and filetool re-checks the deny floor itself.
 {
   "name": "files",
-  "description": "Manage files and folders on disk. Actions: list (folder contents, optional recursive), stat (exists/size/mtime), read (text file, optional byte range start/end), write (create or overwrite with overwrite:true), edit (find/replace text; all:true replaces every occurrence), append, rename (move/rename to 'to'), mkdir. Reading is broadly allowed; writing is limited to the workspace sandbox unless the user approves.",
+  "description": "Manage files and folders on disk. Actions: list (folder contents, optional recursive), stat (exists/size/mtime), read (text file, optional byte range start/end), write (create or overwrite with overwrite:true), edit (find/replace text; all:true replaces every occurrence), append, rename (move/rename to 'to'), mkdir, delete (permanent removal; needs explicit user confirmation every time, directories need recursive:true unless empty). Reading is broadly allowed; writing is limited to the workspace sandbox unless the user approves.",
   "exe": "filetool.exe",
   "cwd": "workspace",
   "enabled": true,
   "timeout_ms": 15000,
   "path_args": ["path", "to"],
+  "ask_actions": ["delete"],
   "input_schema": {
     "type": "object",
     "properties": {
       "action": {
-        "enum": ["list", "stat", "read", "write", "edit", "append", "rename", "mkdir"]
+        "enum": ["list", "stat", "read", "write", "edit", "append", "rename", "mkdir", "delete"]
       },
       "path":      { "type": "string", "description": "file or folder path (relative paths resolve inside the workspace)" },
-      "recursive": { "type": "boolean", "description": "list: walk subfolders too" },
+      "recursive": { "type": "boolean", "description": "list: walk subfolders too; delete: remove a non-empty directory tree" },
       "start":     { "type": "integer", "description": "read: first byte (seek), default 0" },
       "end":       { "type": "integer", "description": "read: last byte excluded, default EOF" },
       "content":   { "type": "string", "description": "write/append: file content" },

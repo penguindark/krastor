@@ -11,7 +11,9 @@ Decisions already locked with the user:
   writes elsewhere always ask. Reads are free except a deny list.
 - Tool executables are C++20, built by the same CMake project (dual-toolchain
   MinGW + MSVC rule applies).
-- No delete/rmdir action in the first increment.
+- No delete/rmdir action in the first increment. **Update (2026-11-07):**
+  `delete` was added later, gated by a mandatory user confirmation
+  (`ask_actions` in the manifest: always asks, never silenced by grants).
 - The Python tool accepts both inline `code` and `script` + `args`.
 - Runtime tools folder is the repo-level `tools/` (sibling of `bin/`), NOT
   inside `bin/`. Manifests live at its first level and are named
@@ -183,8 +185,10 @@ Actions: `list` (entries, `recursive` flag, size+mtime per entry), `stat`,
 `read` (byte range `start`/`end`, returns text + total size + returned range;
 binary sniff → refuse with a hint), `write` (create/overwrite, parent dirs
 created inside the sandbox), `edit` (find/replace, first occurrence, reports
-replacements count), `append`, `rename` (also moves), `mkdir`. UTF-8 paths.
-No delete. Self-enforces `_policy`.
+replacements count), `append`, `rename` (also moves), `mkdir`, `delete`
+(permanent; added later with a mandatory confirmation - manifest
+`ask_actions: ["delete"]`, directories need `recursive:true` unless empty).
+UTF-8 paths. Self-enforces `_policy`.
 
 ### 6.2 `webfetch.exe` (tools/webfetch/)
 Args: `url` (http/https only), `max_bytes`. GET via the shared http client
