@@ -337,9 +337,18 @@ struct AppState : AskHandler {
             std::lock_guard<std::mutex> lk(ask_mtx);
             pending_ask = pa;
         }
-        std::unique_lock<std::mutex> lk(ask_mtx);
-        ask_cv.wait(lk, [&] { return pa->answered; });
-        return pa->answer;
+        Decision ans;
+        {
+            std::unique_lock<std::mutex> lk(ask_mtx);
+            ask_cv.wait(lk, [&] { return pa->answered; });
+            ans = pa->answer;
+            // Dismiss the modal: without this the dialog stays on screen
+            // (and keeps blocking the chat) even after the worker resumed.
+            if (pending_ask == pa)
+                pending_ask.reset();
+        }
+        ask_cv.notify_all();
+        return ans;
     }
     // Completed tool calls are queued by the worker and drained into chat
     // lines by poll() (main thread only touches `lines`).
@@ -881,7 +890,10 @@ void permission_modal(struct nk_context* ctx, AppState& app, int win_w, int win_
         std::lock_guard<std::mutex> lk(app.ask_mtx);
         pa = app.pending_ask;
     }
-    if (!pa)
+    // No request, or already answered: gone. (ask() clears pending_ask when
+    // it wakes up; the answered check hides the dialog immediately even
+    // while the worker is still busy running the approved tool.)
+    if (!pa || pa->answered)
         return;
 
     nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
@@ -896,8 +908,12 @@ void permission_modal(struct nk_context* ctx, AppState& app, int win_w, int win_
                          NK_LEFT, nk_rgb(235, 160, 70));
         nk_layout_row_dynamic(ctx, 20, 1);
         nk_label(ctx, pa->action.c_str(), NK_LEFT);
+        // Explicit row height: without it the group collapses to a sliver
+        // and the detail text is unreachable.
+        nk_layout_row_dynamic(ctx, mh - 130, 1);
         if (nk_group_begin(ctx, "##perm_detail", NK_WINDOW_BORDER)) {
-            nk_layout_row_dynamic(ctx, 18, 1);
+            // Tall row so the wrapped detail scrolls inside the group.
+            nk_layout_row_dynamic(ctx, 600, 1);
             nk_label_wrap(ctx, pa->detail.c_str());
             nk_group_end(ctx);
         }
