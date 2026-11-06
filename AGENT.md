@@ -30,7 +30,8 @@ Read this first. It is the entry point for any AI agent or developer working on 
 - `src/development.md` — C++ sources
 - `data/development.md` — assets (fonts, icons, shaders)
 - `models/development.md` — local AI models policy and inventory (folder git-ignored)
-- `tools/development.md` — python prototypes and scripts
+- `tools/development.md` — python prototypes/scripts + the agent tool system
+  (manifests `tool_*.jsonc`, filetool/webfetch/websearch/python)
 - `libs/development.md` — third-party libraries (vendored headers + git submodules)
 - `scripts/development.md` — build/dev scripts
 

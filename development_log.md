@@ -1034,3 +1034,19 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   the same offsets and any range matched one word per run. ``lcp`` is now
   cumulative across all body runs (the role prefix stays unnumbered), which
   is what ``rebuild_chat_doc``/``doc_resolve``/``chat_extract`` assume.
+
+---
+
+## 2026-11-07 (later) - permission modal: dismiss + visible detail
+
+- Field report: clicking a button in the tool-permission modal left it on
+  screen, frozen and blocking the chat, while the worker had already
+  resumed. Root cause: ``pending_ask`` was never cleared after the answer,
+  so every frame re-rendered the answered request. ``AppState::ask()`` now
+  clears it when it wakes up, and ``permission_modal`` skips an already
+  answered request (the dialog vanishes immediately even while the
+  approved tool is still running).
+- The detail group had no explicit layout row height and collapsed to a
+  sliver (Nuklear groups need their row sized): it now takes the free
+  window height with a tall wrapped row that scrolls.
+- Both toolchains clean; GUI smoke OK.

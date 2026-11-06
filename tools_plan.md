@@ -27,18 +27,23 @@ Decisions already locked with the user:
 tools/                          # repo root, sibling of bin/
   tool_files.jsonc              # manifest: file/folder manager
   tool_webfetch.jsonc           # manifest: wget-like web text fetcher
+  tool_websearch.jsonc          # manifest: web search (Bing + DDG fallbacks)
   tool_python.jsonc             # manifest: agent Python interpreter
+  html_util.h                   # shared HTML helpers (webfetch + websearch)
   filetool.exe                  # CMake post-build copies built exes here
   webfetch.exe
+  websearch.exe
   python/
     venv/                       # full virtualenv for the agent (git-ignored)
       Scripts/python.exe
     requirements.txt            # agent runtime packages (requests, bs4, ...)
     setup.ps1                   # creates venv + installs requirements
+    runner.py                   # protocol wrapper: JSON stdin -> exec -> JSON stdout
   filetool/                     # C++ sources of the files tool
     CMakeLists.txt (or listed in root CMakeLists)
     *.cpp/.h
   webfetch/                     # C++ sources of the webfetch tool
+  websearch/                    # C++ sources of the websearch tool
   development.md                # updated: tools system + how to add a tool
   <existing python dev scripts unchanged>
 ```
@@ -59,9 +64,15 @@ Parsed with nlohmann/json (comments allowed). Fields:
 | `name` | unique id; becomes the function name exposed to the LLM |
 | `description` | what the tool does — shown to the LLM (write it well!) |
 | `exe` | executable path relative to the tools dir |
+| `args` | fixed argv prefix passed to the exe (resolved against the tools dir) — e.g. the python `runner.py` |
+| `cwd` | `"workspace"` (sandbox) or `"tools"` (default): working directory of the tool |
 | `enabled` | master switch per tool (default true) |
 | `timeout_ms` | hard kill timeout for one invocation |
 | `path_args` | names of input args that are filesystem paths (validated by the supervisor) |
+| `net_args` | names of input args that are net targets (URLs), matched as strings against the `net` rules |
+| `ask_actions` | actions that ALWAYS open the permission dialog, even inside the policy allow-list and against session grants (e.g. `delete`) |
+| `action_class` | map action → `read`/`write`/`net`/`run` (fallback heuristic when absent) |
+| `setup_hint` | appended to the "executable missing" log line (e.g. "run tools/python/setup.ps1") |
 | `input_schema` | JSON Schema of the JSON object passed on stdin; forwarded verbatim in the `tools` array of the chat request |
 | `permissions` | default policy (overridable per tool in config.json) |
 
@@ -207,6 +218,15 @@ content-types pass through as text when plausible. Output capped.
   always the workspace sandbox. Timeout 60 s.
 - Policy: `run.ask = true` by default — every execution asks, and the dialog
   shows the code about to run. Users may relax it in config.json.
+
+### 6.4 `websearch.exe` (tools/websearch/) — added after the plan was locked
+- Key-free web search: engine chain **Bing first** (`b_algo` blocks, result
+  URLs unwrapped from the `ck/a?...u=a1<base64>` redirect), then
+  `html.duckduckgo.com` and `lite.duckduckgo.com` as fallbacks (DDG answers
+  an anti-bot challenge from many IPs). Input `query` + optional
+  `max_results` (≤15); output title+URL+snippet per hit.
+- Shares the HTML helpers with webfetch via header-only `tools/html_util.h`.
+- Manifest `net.allow` lists the three engine hosts.
 
 ---
 

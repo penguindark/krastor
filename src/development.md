@@ -9,7 +9,7 @@ executables are emitted to `../bin`, intermediates to `../obj`.
 ## Current state (Phase 5, 2026-10-29) — GUI chat interface
 | Module | Responsibility |
 |---|---|
-| `main.cpp` | CLI REPL: commands (`/help /voices /voice <id> /say <text> /listen [sec] [idx] /devices /mic [sec] [idx] /transcribe <file> /reset /config /exit`), everything else goes to the LLM; at startup resolves `llm.model_ref` against `llm_models.json` (prints `model: <ref> -> <base_url>`) and applies the `stt.denoise`/`stt.echo_cancel` toggles to `AudioFx` before launching CLI or `--gui`; headless self-test flags `--icon-test`, `--fx-test` and `--tts-filter-test` exit early with PASS/FAIL |
+| `main.cpp` | CLI REPL: commands (`/help /voices /voice <id> /say <text> /listen [sec] [idx] /devices /mic [sec] [idx] /transcribe <file> /reset /config /exit`), everything else goes to the LLM; at startup resolves `llm.model_ref` against `llm_models.json` (prints `model: <ref> -> <base_url>`) and applies the `stt.denoise`/`stt.echo_cancel` toggles to `AudioFx` before launching CLI or `--gui`; headless self-test flags `--icon-test`, `--fx-test`, `--tts-filter-test` and `--tool-test` exit early with PASS/FAIL, `--tool-run <tool> <json>` runs one tool call without the LLM |
 | `config.h/.cpp` | JSON config (`config.json`, see `config.example.json`); API key fallback `KRASTOR_API_KEY` -> `OPENAI_API_KEY`; `save()` used by the GUI. **Runtime config lives next to the executable** (`exe_dir()/config.json`, atomic tmp+rename write); a legacy `config.json` in the working directory is read as fallback and migrated on first launch. Sections: `llm` (incl. `context_size`, default 131072, and `model_ref` — the selected `llm_models.json` entry), `tts`, `stt`, `gui` (font_size, effect, effect_intensity, window_w/h), `agent` (name, continuous, ignore_while_speaking) |
 | `llm_models.h/.cpp` | **LlmModelRegistry**: parses `llm_models.json` (opencode.jsonc `provider` schema — `options|settings.baseURL/apiKey`, `models.<id>.name`, `limit.context/output`, `//` comments allowed) into `provider/model` refs; `apply_model_ref()` fills `LlmConfig` base_url/api_key/model/context_size from the selected ref. File lookup: exe dir, then working dir; missing/invalid file falls back to explicit config fields |
 | `md_format.h/.cpp` | **Markdown -> ANSI/SGR**: headings, bold/italic, inline code, lists (orange bullets), blockquotes, rules, links, tables (OpenCode-style box grid, violet header, GFM :---/---:/:---: alignment), fenced code blocks (dim language-label header bar + continuous dark block background incl. blank lines; optional `CodeHighlightFn` hook for the syntax highlighter). ESC-containing input passes through unchanged |
@@ -50,7 +50,7 @@ tools through OpenAI function calling; Krastor supervises every call.
 | `tool_loop.h/.cpp` | `agent_complete()`: complete() + agentic loop — tool_calls go through the runner, results are appended as `role:"tool"` messages and the model is asked again; hard cap 8 rounds, tool output capped at 8 KB per call, hooks (`on_call`/`on_done`) for UI/status rendering |
 | `llm_client` (tools) | `complete(conv, cancel, tools_json)` attaches the `tools` array; parses `finish_reason: tool_calls` replies (`content` may be null) into `LlmReply::tool_calls`; `Message` carries `tool_calls`/`tool_call_id` for serialization |
 | `config` (tools) | `ToolsConfig`: `tools.enabled` master switch + raw per-tool `overrides_json` round-trip; `LlmConfig::supports_tools` set from `llm_models.json` `capabilities.tools` — tools are only offered when the model declares function calling |
-| `gui.cpp` (tools) | `AppState : AskHandler` — worker blocks in `ask()` until the **permission modal** (Allow once / Always allow / Deny) answers; completed tool calls drain in `poll()` as collapsible `⚙ tool · action` chat blocks (reuses the Thought-block renderer via `think_label`); Settings checkbox "Enable external tools (restart)" |
+| `gui.cpp` (tools) | `AppState : AskHandler` — worker blocks in `ask()` until the **permission modal** (Allow once / Always allow / Deny) answers; the modal dismisses as soon as the request is answered (`ask()` clears `pending_ask` on wake, the modal also skips an answered request) and its detail box gets an explicit row height so the args/paths scroll visibly; completed tool calls drain in `poll()` as collapsible `⚙ tool · action` chat blocks (reuses the Thought-block renderer via `think_label`); Settings checkbox "Enable external tools (restart)" |
 | `main.cpp` (tools) | CLI `ConsoleAsk` (y/N/a prompt), tool system-prompt hint with the sandbox path, debug flags: `--tool-run <tool> <json>` single call (auto-allow), `--tool-test` headless self-test (20 checks: sandbox write/read/edit/list, delete confirm+deny+floor, deny floors, ask-deny honour, webfetch text + file:// block, websearch results [SKIP when DDG's anti-bot page answers], python run + traceback + ask gate) |
 
 ## Conventions
@@ -199,6 +199,17 @@ tools through OpenAI function calling; Krastor supervises every call.
   `_approved:true` into the args; a tool must apply `deny_always` **always**
   (even approved calls) and the full policy when `_approved` is absent (manual
   terminal run), so a compromised/buggy caller cannot bypass the floor.
+- Chat selection codepoint numbering must be **cumulative across all ANSI
+  runs** of a message body (`tokenize_runs`' `lcp`): a per-run restart makes
+  tokens of different runs (inline code, bold, colors) share offsets, so a
+  dragged range highlights one scattered word per run instead of the span.
+- A Nuklear `nk_group_begin` only gets space if a layout row was pushed
+  before it (`nk_layout_row_dynamic(ctx, h, 1)`) - without one a modal's
+  detail group collapses to a sliver with a useless scrollbar.
+- Blocking-dialog lifecycle: the asking worker must clear the pending-request
+  pointer when it wakes up (and the modal must skip an answered request) -
+  otherwise the dialog keeps re-rendering after the click and keeps blocking
+  input while the worker already resumed.
 
 ## Planned layout (roadmap)
 - `gui/` — GLSL effect passes, terminal I/O panel, attachments input (Phase 5)

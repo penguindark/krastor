@@ -121,8 +121,8 @@ working dir):
 Lo script mappa sul preset CMake (`mingw-release`, `msvc-2026-release`…),
 inizializza i submodule se mancano, configura e builda. Output:
 `bin\krastor.exe` (+ DLL sherpa copiate lì accanto) **più i tool eseguiti
-dell'agente** (`tools\filetool.exe`, `tools\webfetch.exe`, accanto ai loro
-manifest `tool_*.jsonc`).
+dell'agente** (`tools\filetool.exe`, `tools\webfetch.exe`,
+`tools\websearch.exe`, accanto ai loro manifest `tool_*.jsonc`).
 Usa `-Config Debug` per gli sviluppatori (entrambe le toolchain devono
 compilare pulite: è una regola del progetto).
 

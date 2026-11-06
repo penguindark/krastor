@@ -221,8 +221,9 @@ not Krastor's own voice or room noise; toggles `stt.denoise`/`stt.echo_cancel`
 (config + Settings checkboxes, applied live), isolated behind
 `src/audio_fx.cpp`, headless self-test via `krastor --fx-test`.
 - **Phase 6 - External tools system (built 2026-11-07).** Agent calls external
-  tools (file manager, web text fetcher, Python venv) through OpenAI function
-  calling, supervised by a JSONC-manifest + permission-policy system in
-  `tools/`. Detailed design in `tools_plan.md` (project root): phases A-D,
-  sandbox `~/Documents/KrastorWorkspace/`, ask-permission modals, headless
+  tools (file manager with confirmed delete, web text fetcher, web search,
+  Python venv) through OpenAI function calling, supervised by a JSONC-manifest
+  + permission-policy system in `tools/`. Detailed design in `tools_plan.md`
+  (project root): phases A-D, sandbox `~/Documents/KrastorWorkspace/`,
+  ask-permission modals, `ask_actions` forced confirmations, headless
   self-test `krastor --tool-test`.
