@@ -107,6 +107,18 @@ compile with MinGW + MSVC, Windows + Linux; see `libs/development.md`):
 
 Frame model: update -> GLSL background pass -> UI pass -> swap buffers.
 
+### 4.4 External tools system (planned — see `tools_plan.md`)
+The agent gains world-interaction tools as external executables supervised by
+Krastor through OpenAI function calling. The repo-level `tools/` folder holds
+one JSONC manifest per tool (`tool_<name>.jsonc`, first level: description,
+input JSON Schema, permission policy) plus the tool exes and a dedicated
+`tools/python/venv` the agent can execute. Built-in tools planned: file/folder
+manager (read with byte ranges, write, edit, rename, mkdir — no delete),
+wget-like web text fetcher, Python interpreter. Every call passes a two-layer
+permission gate (sandbox `~/Documents/KrastorWorkspace/` free for writes,
+everything else asks; deny floors not overridable). Full design, phases and
+self-test plan in **`tools_plan.md`** (project root).
+
 ## 5. Folder structure
 
 ```
@@ -115,7 +127,8 @@ data/      assets: fonts, images, shaders (.glsl later)
 obj/       build intermediates (CMake binary dirs) — git ignored
 bin/       executables — git ignored
 models/    local AI models, one subfolder per model — git ignored
-tools/     python prototypes/scripts (uses .venv)
+tools/     python prototypes/scripts (uses .venv) + agent tool system
+           (manifests tool_*.jsonc, tool exes, python/venv — see tools_plan.md)
 libs/      third-party libraries: vendored headers + git submodules
 scripts/   build/dev scripts
 .venv/     python virtual env (C:\Python313) — git ignored
@@ -202,3 +215,9 @@ suppression (RNNoise) before the VAD, so hands-free mode hears the user and
 not Krastor's own voice or room noise; toggles `stt.denoise`/`stt.echo_cancel`
 (config + Settings checkboxes, applied live), isolated behind
 `src/audio_fx.cpp`, headless self-test via `krastor --fx-test`.
+- **Phase 6 — External tools system (planned).** Agent calls external tools
+  (file manager, web text fetcher, Python venv) through OpenAI function
+  calling, supervised by a JSONC-manifest + permission-policy system in
+  `tools/`. Detailed design in `tools_plan.md` (project root): phases A-D,
+  sandbox `~/Documents/KrastorWorkspace/`, ask-permission modals, headless
+  self-test `krastor --tool-test`.
