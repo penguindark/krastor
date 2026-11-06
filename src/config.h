@@ -24,6 +24,9 @@ struct LlmConfig {
     double temperature = 0.7;
     int max_tokens = 1024;
     int context_size = 131072;      // model context window (footer usage %)
+    // Set from llm_models.json capabilities.tools by apply_model_ref():
+    // external tools are only offered to models that support function calling.
+    bool supports_tools = false;
 };
 
 struct TtsConfig {
@@ -57,12 +60,21 @@ struct AgentConfig {
     bool ignore_while_speaking = true;  // drop mic segments while thinking/speaking
 };
 
+struct ToolsConfig {
+    // Global switch for the external tools system (see tools_plan.md).
+    // Per-tool overrides (enabled/permissions) live in the tool manifests
+    // and can be patched here as "tools.<name>.{enabled,permissions}".
+    bool enabled = true;
+    std::string overrides_json;  // raw "tools" object minus "enabled"
+};
+
 struct Config {
     LlmConfig llm;
     TtsConfig tts;
     SttConfig stt;
     GuiConfig gui;
     AgentConfig agent;
+    ToolsConfig tools;
 
     // Directory containing the running executable ("." when undetectable).
     static std::string exe_dir();

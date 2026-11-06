@@ -60,6 +60,7 @@
             "output": 65536
           },
           "capabilities": {
+            "tools": true,
             "input": ["text", "image"],
             "output": ["text"]
           }

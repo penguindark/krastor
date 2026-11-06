@@ -26,6 +26,7 @@ struct LlmModelEntry {
     std::string api_key;
     int context = 0;      // limit.context (0 = not specified)
     int output = 0;       // limit.output (0 = not specified)
+    bool tools = false;   // capabilities.tools: supports function calling
 };
 
 class LlmModelRegistry {

@@ -936,3 +936,48 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
 - Gotcha: the hand-rolled UTF-8 decoder mask (`0xFF >> len`, not
   `0xFF >> (len+1)`) - wrong version mangled every ASCII byte, caught by
   the test on first run.
+
+---
+
+## 2026-11-07 — Phase 6: external tools system (files, webfetch, python)
+
+**Core (Phase A).** New modules (see `src/development.md`):
+- `permissions.h/.cpp` - `ToolPolicy` (read/write/net/run glob rules +
+  `deny_always` floor), glob matcher, `canonical_path`, sandbox
+  `~/Documents/KrastorWorkspace`, `GrantStore` (session always-allow),
+  `AskHandler`. Semantics fixed during testing: `ask:true` with an empty
+  allow list gates everything (that is what makes `run.ask` work).
+- `tool_registry.h/.cpp` - JSONC manifest loader (`tools/tool_*.jsonc`:
+  description/input_schema forwarded to the LLM, exe+fixed argv+cwd,
+  path_args/net_args/action_class, config overrides).
+- `tool_runner.h/.cpp` - CreateProcessW/fork-exec spawn with JSON stdin
+  (args + injected `_policy`/`_workspace`/`_approved`), stdout/stderr caps,
+  hard timeout, two-layer permission gate. Costly gotcha: Windows pipe
+  inheritance flags must be cleared on the PARENT ends, not the child's
+  (reversed -> ERROR_BROKEN_PIPE 232, "no output exit 0").
+- `tool_loop.h/.cpp` - `agent_complete()` agentic loop (tool_calls ->
+  runner -> `role:"tool"` messages -> re-ask; 8-round cap, 8 KB output cap).
+- `conversation`/`llm_client` carry `tool_calls` + role `"tool"`;
+  `llm_models.json` gained `capabilities.tools` (halogen verified: native
+  `finish_reason: tool_calls`); config gained `tools.enabled` + overrides.
+- GUI: permission modal (Allow once / Always allow / Deny) blocking the
+  worker via `AppState : AskHandler`; collapsible tool chat blocks reusing
+  the Thought renderer; Settings "Enable external tools" checkbox. CLI:
+  y/N/a prompt, `--tool-run` debug single call.
+
+**Tools (Phases B-D).**
+- `filetool` (files): list/stat/read byte-range/write/edit/append/rename/
+  mkdir, UTF-8 paths, binary sniff, self-enforces the deny floor even for
+  approved calls; no delete by design.
+- `webfetch`: WinHTTP/libcurl GET (`https_get` added to both http backends,
+  shared request core), HTML->text extractor (script/style strip, block tags
+  -> newlines, entity decode), 40 KB default cap.
+- `python`: dedicated `tools/python/venv` (`setup.ps1`, requests +
+  beautifulsoup4) + `runner.py` protocol wrapper (captures user stdout /
+  traceback, refuses without `_approved`); every run asks.
+- `--tool-test` headless self-test: 16 checks (sandbox IO, deny floors,
+  ask-deny honour, webfetch text + file:// block, python run/traceback/gate)
+  - PASS on both toolchains. E2E via CLI: model wrote+read back a workspace
+  file, asked permission for an outside-sandbox write (y honoured), ran
+  python inline code. Docs synced: project.md 4.4 + roadmap, tools/ and
+  src/ development.md, COLD_START (venv setup step, --tool-test).

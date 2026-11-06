@@ -1,4 +1,4 @@
-// Windows implementation of https_post using WinHTTP.
+// Windows implementation of https_post/https_get using WinHTTP.
 // TLS is provided by the OS (Schannel), so no third-party crypto ships with us.
 
 #define WIN32_LEAN_AND_MEAN
@@ -45,24 +45,21 @@ struct RequestGuard {
     }
 };
 
-} // namespace
+std::wstring wstr(const std::string& s)
+{
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    std::wstring w(static_cast<size_t>(n ? n - 1 : 0), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, n ? &w[0] : nullptr, n);
+    return w;
+}
 
-HttpResponse https_post(const std::string& url,
-                        const std::map<std::string, std::string>& headers,
-                        const std::string& body,
-                        const std::string& content_type,
-                        CancelToken* cancel)
+// Shared POST/GET core. Empty body + null content_type => plain GET.
+HttpResponse request(const wchar_t* method, const std::string& url,
+                     const std::map<std::string, std::string>& headers,
+                     const std::string& body, const std::string& content_type,
+                     CancelToken* cancel)
 {
     HttpResponse out;
-
-    // WinHTTP wants wide strings.
-    auto wstr = [](const std::string& s) {
-        const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
-        std::wstring w(static_cast<size_t>(n ? n - 1 : 0), L'\0');
-        MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1,
-                            n ? &w[0] : nullptr, n);
-        return w;
-    };
 
     const std::wstring wurl = wstr(url);
 
@@ -92,7 +89,7 @@ HttpResponse https_post(const std::string& url,
 
     DWORD flags = https ? WINHTTP_FLAG_SECURE : 0;
     RequestGuard guard;
-    guard.h = WinHttpOpenRequest(connect.get(), L"POST", path,
+    guard.h = WinHttpOpenRequest(connect.get(), method, path,
                                  nullptr, WINHTTP_NO_REFERER,
                                  WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!guard.h) { out.error = "WinHttpOpenRequest failed"; return out; }
@@ -115,11 +112,13 @@ HttpResponse https_post(const std::string& url,
     std::wstring header_blob;
     for (const auto& [name, value] : headers)
         header_blob += wstr(name) + L": " + wstr(value) + L"\r\n";
-    header_blob += L"Content-Type: " + wstr(content_type) + L"\r\n";
+    if (!content_type.empty())
+        header_blob += L"Content-Type: " + wstr(content_type) + L"\r\n";
 
     if (!WinHttpSendRequest(guard.h, header_blob.c_str(),
                             static_cast<DWORD>(header_blob.size()),
-                            const_cast<char*>(body.data()),
+                            body.empty() ? nullptr
+                                         : const_cast<char*>(body.data()),
                             static_cast<DWORD>(body.size()),
                             static_cast<DWORD>(body.size()), 0)) {
         out.error = cancel && cancel->load()
@@ -144,6 +143,19 @@ HttpResponse https_post(const std::string& url,
                         WINHTTP_NO_HEADER_INDEX);
     out.status = status;
 
+    wchar_t ctype[256]{};
+    size = sizeof(ctype);
+    if (WinHttpQueryHeaders(guard.h, WINHTTP_QUERY_CONTENT_TYPE,
+                            WINHTTP_HEADER_NAME_BY_INDEX, ctype, &size,
+                            WINHTTP_NO_HEADER_INDEX)) {
+        const int n = WideCharToMultiByte(CP_UTF8, 0, ctype, -1, nullptr, 0,
+                                          nullptr, nullptr);
+        out.content_type.resize(n > 1 ? static_cast<size_t>(n) - 1 : 0);
+        if (n > 1)
+            WideCharToMultiByte(CP_UTF8, 0, ctype, -1, out.content_type.data(),
+                                n, nullptr, nullptr);
+    }
+
     for (;;) {
         if (cancel && cancel->load()) {
             out.error = "cancelled";
@@ -166,6 +178,24 @@ HttpResponse https_post(const std::string& url,
         out.error = "cancelled";
     }
     return out;
+}
+
+} // namespace
+
+HttpResponse https_post(const std::string& url,
+                        const std::map<std::string, std::string>& headers,
+                        const std::string& body,
+                        const std::string& content_type,
+                        CancelToken* cancel)
+{
+    return request(L"POST", url, headers, body, content_type, cancel);
+}
+
+HttpResponse https_get(const std::string& url,
+                       const std::map<std::string, std::string>& headers,
+                       CancelToken* cancel)
+{
+    return request(L"GET", url, headers, std::string(), std::string(), cancel);
 }
 
 } // namespace krastor

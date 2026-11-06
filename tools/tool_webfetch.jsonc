@@ -1,0 +1,27 @@
+// Krastor tool manifest: web text fetcher (tools_plan.md section 2).
+// wget-like: fetch one URL and return its readable text to the LLM.
+{
+  "name": "webfetch",
+  "description": "Fetch a web page or URL and return its text content (HTML is converted to readable plain text, scripts and styles dropped). Use for reading documentation, articles or API responses. Returns status, page title and text (truncated to a few tens of KB). Only http/https URLs; binary files are refused.",
+  "exe": "webfetch.exe",
+  "cwd": "tools",
+  "enabled": true,
+  "timeout_ms": 30000,
+  "net_args": ["url"],
+  "action_class": { "webfetch": "net" },
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "url":       { "type": "string", "description": "the http(s) URL to fetch" },
+      "max_chars": { "type": "integer", "description": "maximum characters of text to return (default 40000)" }
+    },
+    "required": ["url"]
+  },
+  "permissions": {
+    "net": {
+      "allow": ["http://**", "https://**"],
+      "deny": ["http://169.254.**", "http://metadata.google.internal.**"]
+    },
+    "deny_always": ["file://**"]
+  }
+}

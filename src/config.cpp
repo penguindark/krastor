@@ -112,6 +112,14 @@ Config Config::load(const std::string& path)
             cfg.agent.ignore_while_speaking =
                 j.value("ignore_while_speaking", cfg.agent.ignore_while_speaking);
         }
+        if (root.contains("tools") && root["tools"].is_object()) {
+            const auto& j = root["tools"];
+            cfg.tools.enabled = j.value("enabled", cfg.tools.enabled);
+            nlohmann::json ov = j;  // per-tool overrides = everything else
+            ov.erase("enabled");
+            if (!ov.empty())
+                cfg.tools.overrides_json = ov.dump();
+        }
     }
 
     if (cfg.llm.api_key.empty()) {
@@ -158,6 +166,14 @@ void Config::save(const std::string& path) const
         {"continuous", agent.continuous},
         {"ignore_while_speaking", agent.ignore_while_speaking},
     };
+    root["tools"] = {{"enabled", tools.enabled}};
+    if (!tools.overrides_json.empty()) {
+        // Re-embed the per-tool overrides verbatim (round-trip via load()).
+        auto ov = nlohmann::json::parse(tools.overrides_json, nullptr, false);
+        if (!ov.is_discarded() && ov.is_object())
+            for (const auto& [k, v] : ov.items())
+                root["tools"][k] = v;
+    }
 
     // Atomic write: serialize to a temp file, then rename over the target
     // (std::filesystem::rename replaces an existing file on both toolchains).

@@ -19,6 +19,8 @@ struct LlmReply {
     std::string reasoning;    // model thinking text (reasoning_content /
                               //  tags), "" when the model does not reason
     std::string error;        // human-readable failure reason when not ok
+    // Function calls requested by the model (empty for plain replies).
+    std::vector<ToolCall> tool_calls;
     // Usage stats. Servers that follow the OpenAI
     // schema report them in the `usage` block; otherwise they are estimated
     // from character counts and tokens_estimated is set.
@@ -37,8 +39,11 @@ public:
     // Never throws: transport and protocol errors come back as LlmReply::error.
     // `cancel` (optional) aborts the in-flight HTTP request immediately when
     // cancel() is called from another thread (the GUI's Stop button).
+    // `tools_json` (optional): serialized OpenAI `tools` array; when non-empty
+    // it is attached to the request and tool_calls in the reply are surfaced.
     LlmReply complete(const Conversation& conversation,
-                      CancelToken* cancel = nullptr) const;
+                      CancelToken* cancel = nullptr,
+                      const std::string& tools_json = {}) const;
 
 private:
     LlmConfig config_;

@@ -21,6 +21,7 @@ CMakeUserPresets.json
 
 # Python virtual environment
 .venv/
+tools/python/venv/
 __pycache__/
 *.pyc
 

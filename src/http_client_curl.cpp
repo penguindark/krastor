@@ -1,4 +1,4 @@
-// Linux implementation of https_post using libcurl.
+// Linux implementation of https_post/https_get using libcurl.
 
 #include <curl/curl.h>
 
@@ -30,28 +30,35 @@ int progress_callback(void* clientp, curl_off_t, curl_off_t, curl_off_t,
     return token && token->load() ? 1 : 0;
 }
 
-} // namespace
-
-HttpResponse https_post(const std::string& url,
-                        const std::map<std::string, std::string>& headers,
-                        const std::string& body,
-                        const std::string& content_type,
-                        CancelToken* cancel)
+// Shared POST/GET core. Empty body + null content_type => plain GET.
+HttpResponse request(const char* method, const std::string& url,
+                     const std::map<std::string, std::string>& headers,
+                     const std::string& body, const std::string& content_type,
+                     CancelToken* cancel)
 {
     HttpResponse out;
-    std::call_once(curl_global_init_flag, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+    std::call_once(curl_global_init_flag,
+                   [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
 
     using CurlHandle = std::unique_ptr<CURL, decltype(&curl_easy_cleanup)>;
     CurlHandle curl(curl_easy_init(), &curl_easy_cleanup);
     if (!curl) { out.error = "curl_easy_init failed"; return out; }
 
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl.get(), CURLOPT_POST, 1L);
-    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, body.c_str());
-    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDSIZE,
-                     static_cast<long>(body.size()));
+    if (body.empty() && content_type.empty()) {
+        curl_easy_setopt(curl.get(), CURLOPT_HTTPGET, 1L);
+    } else {
+        curl_easy_setopt(curl.get(), CURLOPT_POST, 1L);
+        curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, body.c_str());
+        curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDSIZE,
+                         static_cast<long>(body.size()));
+    }
+    if (method && std::string(method) != "POST")
+        curl_easy_setopt(curl.get(), CURLOPT_CUSTOMREQUEST, method);
     curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 120L);
+    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_MAXREDIRS, 5L);
     curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &out.body);
     if (cancel) {
@@ -63,7 +70,8 @@ HttpResponse https_post(const std::string& url,
     auto add_header = [&header_list](const std::string& line) {
         header_list = curl_slist_append(header_list, line.c_str());
     };
-    add_header("Content-Type: " + content_type);
+    if (!content_type.empty())
+        add_header("Content-Type: " + content_type);
     for (const auto& [name, value] : headers)
         add_header(name + ": " + value);
     curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, header_list);
@@ -82,7 +90,29 @@ HttpResponse https_post(const std::string& url,
     long status = 0;
     curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &status);
     out.status = status;
+    char* ctype = nullptr;
+    curl_easy_getinfo(curl.get(), CURLINFO_CONTENT_TYPE, &ctype);
+    if (ctype)
+        out.content_type = ctype;
     return out;
+}
+
+} // namespace
+
+HttpResponse https_post(const std::string& url,
+                        const std::map<std::string, std::string>& headers,
+                        const std::string& body,
+                        const std::string& content_type,
+                        CancelToken* cancel)
+{
+    return request("POST", url, headers, body, content_type, cancel);
+}
+
+HttpResponse https_get(const std::string& url,
+                       const std::map<std::string, std::string>& headers,
+                       CancelToken* cancel)
+{
+    return request("GET", url, headers, std::string(), std::string(), cancel);
 }
 
 } // namespace krastor

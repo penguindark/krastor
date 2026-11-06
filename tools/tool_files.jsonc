@@ -1,0 +1,49 @@
+// Krastor tool manifest: file/folder management (tools_plan.md section 2).
+// The LLM sees name/description/input_schema; Krastor enforces permissions
+// before spawning, and filetool re-checks the deny floor itself.
+{
+  "name": "files",
+  "description": "Manage files and folders on disk. Actions: list (folder contents, optional recursive), stat (exists/size/mtime), read (text file, optional byte range start/end), write (create or overwrite with overwrite:true), edit (find/replace text; all:true replaces every occurrence), append, rename (move/rename to 'to'), mkdir. Reading is broadly allowed; writing is limited to the workspace sandbox unless the user approves.",
+  "exe": "filetool.exe",
+  "cwd": "workspace",
+  "enabled": true,
+  "timeout_ms": 15000,
+  "path_args": ["path", "to"],
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "enum": ["list", "stat", "read", "write", "edit", "append", "rename", "mkdir"]
+      },
+      "path":      { "type": "string", "description": "file or folder path (relative paths resolve inside the workspace)" },
+      "recursive": { "type": "boolean", "description": "list: walk subfolders too" },
+      "start":     { "type": "integer", "description": "read: first byte (seek), default 0" },
+      "end":       { "type": "integer", "description": "read: last byte excluded, default EOF" },
+      "content":   { "type": "string", "description": "write/append: file content" },
+      "overwrite": { "type": "boolean", "description": "write: replace an existing file" },
+      "find":      { "type": "string", "description": "edit: text to find" },
+      "replace":   { "type": "string", "description": "edit: replacement text" },
+      "all":       { "type": "boolean", "description": "edit: replace every occurrence" },
+      "to":        { "type": "string", "description": "rename: destination path" }
+    },
+    "required": ["action", "path"]
+  },
+  "permissions": {
+    "read": {
+      "allow": ["**"],
+      "deny": ["**/.git/**", "**/.venv/**", "C:/Users/*/AppData/Local/Temp/**"]
+    },
+    "write": {
+      "allow": ["~/Documents/KrastorWorkspace/**"],
+      "ask": true
+    },
+    "deny_always": [
+      "C:/Windows/**",
+      "C:/Program Files/**",
+      "C:/Program Files (x86)/**",
+      "**/.git/**",
+      "**/boot/**",
+      "C:/boot/**"
+    ]
+  }
+}

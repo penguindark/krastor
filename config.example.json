@@ -31,5 +31,8 @@
     "name": "Krastor",
     "continuous": false,
     "ignore_while_speaking": true
+  },
+  "tools": {
+    "enabled": true
   }
 }

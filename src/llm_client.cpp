@@ -49,7 +49,8 @@ void extract_inline_thinking(std::string& content, std::string& reasoning)
 LlmClient::LlmClient(LlmConfig config) : config_(std::move(config)) {}
 
 LlmReply LlmClient::complete(const Conversation& conversation,
-                             CancelToken* cancel) const
+                             CancelToken* cancel,
+                             const std::string& tools_json) const
 {
     LlmReply reply;
     if (cancel && cancel->load()) {
@@ -65,8 +66,25 @@ LlmReply LlmClient::complete(const Conversation& conversation,
 
     nlohmann::json messages = nlohmann::json::array();
     for (const auto& m : conversation.messages()) {
+        if (m.role == "tool") {
+            messages.push_back({{"role", "tool"},
+                                {"tool_call_id", m.tool_call_id},
+                                {"content", m.content}});
+            continue;
+        }
+        nlohmann::json jm{{"role", m.role}, {"content", m.content}};
+        if (!m.tool_calls.empty()) {
+            nlohmann::json calls = nlohmann::json::array();
+            for (const auto& tc : m.tool_calls)
+                calls.push_back({{"id", tc.id},
+                                 {"type", "function"},
+                                 {"function",
+                                  {{"name", tc.name},
+                                   {"arguments", tc.arguments}}}});
+            jm["tool_calls"] = std::move(calls);
+        }
         if (m.images.empty()) {
-            messages.push_back({{"role", m.role}, {"content", m.content}});
+            messages.push_back(std::move(jm));
             continue;
         }
         // OpenAI-style multimodal content: text part + one image_url part per
@@ -78,7 +96,8 @@ LlmReply LlmClient::complete(const Conversation& conversation,
             parts.push_back({{"type", "image_url"},
                              {"image_url",
                               {{"url", "data:image/png;base64," + img}}}});
-        messages.push_back({{"role", m.role}, {"content", parts}});
+        jm["content"] = std::move(parts);
+        messages.push_back(std::move(jm));
     }
 
     nlohmann::json body = {
@@ -87,6 +106,13 @@ LlmReply LlmClient::complete(const Conversation& conversation,
         {"temperature", config_.temperature},
         {"max_tokens", config_.max_tokens},
     };
+    if (!tools_json.empty() && tools_json != "[]") {
+        try {
+            body["tools"] = nlohmann::json::parse(tools_json);
+        } catch (const nlohmann::json::exception&) {
+            // malformed registry JSON: send the request without tools
+        }
+    }
 
     const std::map<std::string, std::string> headers = {
         {"Authorization", "Bearer " + config_.api_key},
@@ -107,7 +133,10 @@ LlmReply LlmClient::complete(const Conversation& conversation,
     try {
         const auto json = nlohmann::json::parse(res.body);
         const auto& msg = json.at("choices").at(0).at("message");
-        reply.content = msg.value("content", std::string());
+        // content can be null on pure tool_calls replies: treat as empty.
+        reply.content = msg.contains("content") && msg["content"].is_string()
+                            ? msg["content"].get<std::string>()
+                            : std::string();
         // Reasoning models expose their thinking through the DeepSeek-style
         // reasoning_content field (LM Studio, vLLM, ...) or a reasoning field;
         // some others inline it into content between think/thought tags.
@@ -117,6 +146,24 @@ LlmReply LlmClient::complete(const Conversation& conversation,
         else if (msg.contains("reasoning") && msg["reasoning"].is_string())
             reply.reasoning = msg["reasoning"].get<std::string>();
         extract_inline_thinking(reply.content, reply.reasoning);
+        // Function calls requested by the model (finish_reason "tool_calls").
+        if (msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
+            for (const auto& c : msg["tool_calls"]) {
+                if (!c.is_object() || !c.contains("function"))
+                    continue;
+                ToolCall tc;
+                tc.id = c.value("id", std::string());
+                const auto& fn = c["function"];
+                tc.name = fn.value("name", std::string());
+                // arguments arrive as a JSON string (some servers send an object)
+                if (fn.contains("arguments"))
+                    tc.arguments = fn["arguments"].is_string()
+                                       ? fn["arguments"].get<std::string>()
+                                       : fn["arguments"].dump();
+                if (!tc.id.empty())  // servers always assign ids; skip junk
+                    reply.tool_calls.push_back(std::move(tc));
+            }
+        }
         reply.model = json.value("model", config_.model);
         // OpenAI usage block; some servers omit it or report zeros.
         if (json.contains("usage") && json["usage"].is_object()) {

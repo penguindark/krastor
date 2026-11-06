@@ -1,0 +1,27 @@
+// Krastor tool manifest: the agent's dedicated Python interpreter
+// (tools_plan.md section 6.3). Runs code in tools/python/venv, created by
+// tools/python/setup.ps1. Every execution asks for permission by default:
+// the dialog shows the code about to run.
+{
+  "name": "python",
+  "description": "Run Python code in the agent's dedicated virtualenv (packages: requests, beautifulsoup4). Provide either inline 'code' or a 'script' file path with optional 'args'. The working directory is the workspace sandbox. Returns the program's stdout and, on failure, the traceback. Every run needs user approval.",
+  "exe": "python/venv/Scripts/python.exe",
+  "args": ["python/runner.py"],
+  "cwd": "workspace",
+  "enabled": true,
+  "timeout_ms": 60000,
+  "path_args": ["script"],
+  "setup_hint": "run tools/python/setup.ps1 to create the venv",
+  "action_class": { "python": "run" },
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "code":   { "type": "string", "description": "inline Python source to execute" },
+      "script": { "type": "string", "description": "path to a .py file (relative paths resolve inside the workspace)" },
+      "args":   { "type": "array", "items": { "type": "string" }, "description": "command-line arguments for the script (sys.argv)" }
+    }
+  },
+  "permissions": {
+    "run": { "ask": true }
+  }
+}

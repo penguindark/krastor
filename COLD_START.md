@@ -105,7 +105,8 @@ working dir):
    in alternativa `llm.base_url`/`api_key`/`model` per un endpoint one-off,
    con fallback env `KRASTOR_API_KEY` → `OPENAI_API_KEY`),
    `tts.default_voice` (`it-it-paola`), `stt.input_device` (-1 = default),
-   `gui.*` (font, effetto sfondo, dimensione finestra), `agent.*`.
+   `gui.*` (font, effetto sfondo, dimensione finestra), `agent.*`,
+   `tools.enabled` (master switch dei tool esterni, vedi `tools_plan.md`).
    La GUI salva qui le proprie modifiche (Settings, zoom font, resize).
 
 ## 6. Compilare
@@ -119,9 +120,21 @@ working dir):
 
 Lo script mappa sul preset CMake (`mingw-release`, `msvc-2026-release`…),
 inizializza i submodule se mancano, configura e builda. Output:
-`bin\krastor.exe` (+ DLL sherpa copiate lì accanto).
+`bin\krastor.exe` (+ DLL sherpa copiate lì accanto) **più i tool eseguiti
+dell'agente** (`tools\filetool.exe`, `tools\webfetch.exe`, accanto ai loro
+manifest `tool_*.jsonc`).
 Usa `-Config Debug` per gli sviluppatori (entrambe le toolchain devono
 compilare pulite: è una regola del progetto).
+
+### 6b. Virtualenv Python dell'agente (opzionale)
+
+Il tool `python` esegue codice in un virtualenv dedicato, `tools\python\venv`
+(git-ignored). Senza, il tool resta disabilitato (lo dice il log all'avvio);
+per attivarlo:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\python\setup.ps1
+```
 
 ## 7. Eseguire
 
@@ -147,6 +160,9 @@ Senza argomenti parte la modalità CLI (stessa chat, testuale).
 # l'coverage e scrive icon_atlas_test.png da ispezionare
 .\bin\krastor.exe --icon-test
 .\bin\krastor.exe --fx-test
+# sistema dei tool esterni: gira i 3 tool senza LLM (scrittura nel sandbox,
+# deny floor, webfetch, python) e stampa PASS/FAIL per riga
+.\bin\krastor.exe --tool-test
 ```
 
 - Icone mancanti/emoji al posto delle SVG → sei partito da una cartella che

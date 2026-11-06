@@ -69,6 +69,9 @@ bool LlmModelRegistry::load(const std::string& path)
                 e.context = m["limit"].value("context", 0);
                 e.output = m["limit"].value("output", 0);
             }
+            if (m.is_object() && m.contains("capabilities") &&
+                m["capabilities"].is_object())
+                e.tools = m["capabilities"].value("tools", false);
             if (e.base_url.empty())
                 continue;  // unusable without an endpoint
             entries_.push_back(std::move(e));
@@ -101,6 +104,7 @@ bool apply_model_ref(LlmConfig& llm, const LlmModelRegistry& reg)
     llm.model = llm.model_ref.substr(llm.model_ref.find('/') + 1);
     if (e->context > 0)
         llm.context_size = e->context;
+    llm.supports_tools = e->tools;
     return true;
 }
 

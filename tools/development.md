@@ -37,6 +37,31 @@ product. Never part of the shipped agent.
   `data/fonts/emoji_atlas.png` + `emoji_atlas.json` (committed). Needs Pillow.
   `.venv\Scripts\python.exe tools\gen_emoji_atlas.py`
 
+## Agent tools system (Phase 6, 2026-11-07)
+Since Phase 6 this folder is ALSO the runtime tools folder of the agent (see
+`../tools_plan.md`): first-level `tool_<name>.jsonc` manifests + the tool
+executables (built by CMake into `tools/`, git-ignored like all `*.exe`).
+
+| Tool | Manifest | Executable | What it does |
+|---|---|---|---|
+| `files` | `tool_files.jsonc` | `filetool.exe` (`filetool/filetool.cpp`) | list/stat/read (byte range)/write/edit/append/rename/mkdir; UTF-8 paths; binary sniff; no delete by design |
+| `webfetch` | `tool_webfetch.jsonc` | `webfetch.exe` (`webfetch/webfetch.cpp`) | GET a http(s) URL, HTML -> readable text (scripts/styles stripped, entities decoded); refuses binary and non-http schemes |
+| `python` | `tool_python.jsonc` | `python/venv/Scripts/python.exe` + `python/runner.py` | runs inline `code` or `script`+`args` in the agent venv; every run asks |
+
+- `python/venv/` is the agent's **dedicated** virtualenv (git-ignored), created
+  by `python/setup.ps1` (uses PATH python 3.11, unlike the dev `.venv` on
+  3.13); packages in `python/requirements.txt` (requests, beautifulsoup4).
+  `runner.py` speaks the tool protocol: JSON stdin -> `{"ok":...}` stdout,
+  user-code stdout/traceback captured inside the envelope, refuses to run
+  without Krastor's `_approved` stamp.
+- Protocol + permission model (sandbox `~/Documents/KrastorWorkspace`,
+  `deny_always` floors re-checked by the tools themselves): see
+  `../tools_plan.md` and `../src/development.md`.
+- Debug without the LLM: `..\bin\krastor.exe --tool-run files '{"action":"list","path":"."}'`
+  (pwsh: single-quote the JSON, no backslash escapes); full suite:
+  `..\bin\krastor.exe --tool-test`. `FILETOOL_DEBUG=<logfile>` makes filetool
+  log its raw stdin.
+
 ## Current state (Phase 2, 2026-10-25)
 Stack chosen: **Vosk** streaming STT + **Piper via sherpa-onnx** TTS (see
 `../models/development.md` for the model inventory).

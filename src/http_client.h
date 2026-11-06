@@ -39,6 +39,7 @@ struct HttpResponse {
     long status = 0;            // HTTP status code (0 = transport failure)
     std::string body;
     std::string error;          // transport-level error text when status == 0
+    std::string content_type;   // response Content-Type ("" when absent)
 };
 
 // Blocking HTTPS POST. `url` must be https:// (or http:// for local servers).
@@ -50,5 +51,10 @@ HttpResponse https_post(const std::string& url,
                         const std::string& body,
                         const std::string& content_type = "application/json",
                         CancelToken* cancel = nullptr);
+
+// Blocking HTTPS GET (used by the webfetch tool). Same contract as POST.
+HttpResponse https_get(const std::string& url,
+                       const std::map<std::string, std::string>& headers,
+                       CancelToken* cancel = nullptr);
 
 } // namespace krastor

@@ -84,6 +84,10 @@ add_executable(krastor
     src/tts_text.cpp
     src/stt.cpp
     src/audio_fx.cpp
+    src/permissions.cpp
+    src/tool_registry.cpp
+    src/tool_runner.cpp
+    src/tool_loop.cpp
     src/gui.cpp
     src/icons.cpp
     src/clipboard.cpp
@@ -103,6 +107,41 @@ target_include_directories(krastor PRIVATE
 )
 
 target_link_libraries(krastor PRIVATE glfw lunasvg::lunasvg rnnoise speexdsp)
+
+# --- Agent tools (tools_plan.md) ----------------------------------------
+# Small standalone exes built into tools/ next to their tool_*.jsonc
+# manifests. filetool reuses src/permissions.cpp (glob matcher + policy).
+add_executable(filetool tools/filetool/filetool.cpp src/permissions.cpp)
+target_compile_features(filetool PRIVATE cxx_std_20)
+target_include_directories(filetool PRIVATE "${CMAKE_SOURCE_DIR}/libs")
+set_target_properties(filetool PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/tools")
+foreach(cfg DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set_target_properties(filetool PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${cfg} "${CMAKE_SOURCE_DIR}/tools")
+endforeach()
+
+if(WIN32)
+    add_executable(webfetch tools/webfetch/webfetch.cpp src/permissions.cpp
+                           src/http_client_winhttp.cpp)
+else()
+    add_executable(webfetch tools/webfetch/webfetch.cpp src/permissions.cpp
+                           src/http_client_curl.cpp)
+endif()
+target_compile_features(webfetch PRIVATE cxx_std_20)
+target_include_directories(webfetch PRIVATE
+    "${CMAKE_SOURCE_DIR}/libs" "${CMAKE_SOURCE_DIR}/src")
+if(WIN32)
+    target_link_libraries(webfetch PRIVATE winhttp)
+else()
+    target_link_libraries(webfetch PRIVATE CURL::libcurl)
+endif()
+set_target_properties(webfetch PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/tools")
+foreach(cfg DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set_target_properties(webfetch PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${cfg} "${CMAKE_SOURCE_DIR}/tools")
+endforeach()
 
 if(WIN32)
     # HTTPS via WinHTTP (built into Windows) — identical behavior on MinGW and MSVC.

@@ -7,12 +7,23 @@
 
 namespace krastor {
 
+// One function call requested by the assistant (OpenAI tool_calls).
+struct ToolCall {
+    std::string id;          // server-assigned call id
+    std::string name;        // tool/function name
+    std::string arguments;   // raw JSON text of the arguments object
+};
+
 struct Message {
-    std::string role;     // "system" | "user" | "assistant"
+    std::string role;     // "system" | "user" | "assistant" | "tool"
     std::string content;
     // Base64-encoded PNG images attached to this message (vision input).
     // When non-empty, content is sent as an OpenAI-style multimodal parts array.
     std::vector<std::string> images;
+    // Assistant messages may request tool calls; "tool" messages answer one
+    // (tool_call_id = the call being answered, content = the tool output).
+    std::vector<ToolCall> tool_calls;
+    std::string tool_call_id;
 };
 
 class Conversation {
@@ -22,6 +33,10 @@ public:
     void add_user(const std::string& text);
     void add_user(const std::string& text, std::vector<std::string> images);
     void add_assistant(const std::string& text);
+    // Assistant turn that requests tool calls (content may be empty).
+    void add_assistant(const std::string& text, std::vector<ToolCall> calls);
+    // Result of one tool call, fed back to the model.
+    void add_tool(const std::string& tool_call_id, const std::string& content);
 
     // Clears the history but keeps the system prompt.
     void reset();

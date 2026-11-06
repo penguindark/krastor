@@ -28,7 +28,11 @@
 #include "icons.h"
 #include "llm_client.h"
 #include "llm_models.h"
+#include "permissions.h"
 #include "stt.h"
+#include "tool_loop.h"
+#include "tool_registry.h"
+#include "tool_runner.h"
 #include "tts.h"
 #include "tts_text.h"
 #include "voices.h"
@@ -312,6 +316,159 @@ int run_tts_filter_test()
     return 0;
 }
 
+// Debug/self-test helper: run one tool call directly (no LLM involved),
+// printing everything the runner saw. Usage:
+//   krastor --tool-run <tool> <json-args>
+int run_tool_run(int argc, char** argv, int& i)
+{
+    if (i + 2 >= argc) {
+        std::cerr << "usage: --tool-run <tool> <json-args>\n";
+        return 2;
+    }
+    const std::string name = argv[++i];
+    const std::string args = argv[++i];
+    krastor::GrantStore grants;
+    krastor::ToolRegistry reg;
+    std::vector<std::string> log;
+    reg.load_dir(krastor::tools_dir(), nlohmann::json{}, log);
+    for (auto& l : log)
+        std::cout << l << "\n";
+    const krastor::ToolManifest* m = reg.find(name);
+    if (!m) {
+        std::cerr << "tool not found: " << name << "\n";
+        return 1;
+    }
+    struct AutoAsk : krastor::AskHandler {
+        krastor::Decision ask(const std::string&, const std::string&,
+                              const std::string&) override
+        {
+            return krastor::Decision::Allow;  // debug mode: always allow
+        }
+    } ask;
+    krastor::ToolRunner runner(grants, nlohmann::json{});
+    const auto r = runner.run(*m, args, &ask, nullptr);
+    std::cout << "ok=" << (r.ok ? "true" : "false") << " ms=" << r.ms << "\n"
+              << "result: " << r.result << "\n"
+              << "error: " << r.error << "\n"
+              << "stderr: " << r.stderr_text << "\n";
+    return r.ok ? 0 : 1;
+}
+
+// Headless self-test of the external tools system (no LLM involved):
+// exercises the runner + permission gate + every built-in tool. Exit code =
+// number of failed checks. Usage: krastor --tool-test
+int run_tool_test()
+{
+    int failed = 0;
+    auto check = [&](const std::string& name, bool pass,
+                     const std::string& info = {}) {
+        std::cout << (pass ? "PASS " : "FAIL ") << name
+                  << (pass || info.empty() ? "" : " - " + info) << "\n";
+        if (!pass)
+            ++failed;
+    };
+
+    krastor::GrantStore grants;
+    krastor::ToolRegistry reg;
+    std::vector<std::string> log;
+    reg.load_dir(krastor::tools_dir(), nlohmann::json{}, log);
+    for (auto& l : log)
+        std::cout << l << "\n";
+
+    struct AutoAsk : krastor::AskHandler {
+        krastor::Decision ask(const std::string&, const std::string&,
+                              const std::string&) override
+        {
+            return krastor::Decision::Allow;
+        }
+    } ask_allow;
+    struct DenyAsk : krastor::AskHandler {
+        krastor::Decision ask(const std::string&, const std::string&,
+                              const std::string&) override
+        {
+            return krastor::Decision::Deny;
+        }
+    } ask_deny;
+    krastor::ToolRunner runner(grants, nlohmann::json{});
+
+    const auto* files = reg.find("files");
+    const auto* web = reg.find("webfetch");
+    const auto* py = reg.find("python");
+    check("registry: files tool loaded", files != nullptr);
+    check("registry: webfetch tool loaded", web != nullptr);
+    check("registry: python tool loaded", py != nullptr);
+    if (!files || !web || !py) {
+        std::cout << "tool-test: " << failed << " failed\n";
+        return failed;
+    }
+
+    // --- files: sandbox write / read / edit / list ----------------------------
+    const std::string tag =
+        "selftest_" +
+        std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::system_clock::now().time_since_epoch())
+                           .count()) +
+        ".txt";
+    auto fr = [&](const std::string& args, krastor::AskHandler* ah = nullptr) {
+        return runner.run(*files, args, ah ? ah : &ask_allow, nullptr);
+    };
+    auto r = fr("{\"action\":\"write\",\"path\":\"" + tag +
+                "\",\"content\":\"ciao mondo\",\"overwrite\":true}");
+    check("files: write in sandbox", r.ok, r.error);
+    r = fr("{\"action\":\"read\",\"path\":\"" + tag + "\"}");
+    check("files: read back", r.ok && r.result.find("ciao mondo") != std::string::npos,
+          r.error);
+    r = fr("{\"action\":\"edit\",\"path\":\"" + tag +
+           "\",\"find\":\"mondo\",\"replace\":\"pianeta\"}");
+    check("files: edit", r.ok && r.result.find("\"replacements\":1") != std::string::npos,
+          r.error);
+    r = fr("{\"action\":\"read\",\"path\":\"" + tag + "\",\"start\":5,\"end\":12}");
+    check("files: byte-range read", r.ok && r.result.find("pianeta") != std::string::npos,
+          r.error);
+    r = fr("{\"action\":\"list\",\"path\":\".\"}");
+    check("files: list workspace", r.ok && r.result.find(tag) != std::string::npos,
+          r.error);
+    // --- files: permission floors ----------------------------------------------
+    r = fr("{\"action\":\"write\",\"path\":\"C:/Windows/evil_selftest.txt\","
+           "\"content\":\"x\",\"overwrite\":true}");
+    check("files: deny floor blocks C:/Windows", !r.ok, "write must be blocked");
+    r = fr("{\"action\":\"read\",\"path\":\"" +
+           krastor::Config::exe_dir() + "/../.git/config\"}");
+    check("files: deny floor blocks .git", !r.ok, "read must be blocked");
+    r = fr("{\"action\":\"write\",\"path\":\"../outside_selftest.txt\","
+           "\"content\":\"x\",\"overwrite\":true}", &ask_deny);
+    check("files: ask outside sandbox -> user deny", !r.ok,
+          "must ask and honour the deny");
+
+    // --- webfetch ----------------------------------------------------------------
+    r = runner.run(*web, "{\"url\":\"https://example.com\"}", &ask_allow, nullptr);
+    if (r.error.rfind("fetch failed", 0) == 0)
+        std::cout << "SKIP webfetch (no network)\n";
+    else
+        check("webfetch: example.com text",
+              r.ok && r.result.find("Example Domain") != std::string::npos,
+              r.error);
+    r = runner.run(*web, "{\"url\":\"file:///c:/windows/win.ini\"}",
+                   &ask_allow, nullptr);
+    check("webfetch: file:// scheme blocked", !r.ok, "must be blocked");
+
+    // --- python -------------------------------------------------------------------
+    r = runner.run(*py, "{\"code\":\"print(6*7)\"}", &ask_allow, nullptr);
+    check("python: inline code", r.ok && r.result.find("42") != std::string::npos,
+          r.error);
+    r = runner.run(*py, "{\"code\":\"raise RuntimeError('boom')\"}",
+                   &ask_allow, nullptr);
+    check("python: traceback captured",
+          r.ok && r.result.find("boom") != std::string::npos, r.error);
+    r = runner.run(*py, "{\"code\":\"print(1)\"}", &ask_deny, nullptr);
+    check("python: run asks -> user deny honoured", !r.ok,
+          "run.ask must gate execution");
+
+    std::cout << "tool-test: " << (failed ? std::to_string(failed) : "0")
+              << " failed" << (failed ? "" : " - PASS") << "\n";
+    return failed;
+}
+
 int main(int argc, char** argv)
 {
 #ifdef _WIN32
@@ -354,6 +511,8 @@ int main(int argc, char** argv)
         else if (a == "--icon-test") return run_icon_test();
         else if (a == "--fx-test") return run_fx_test();
         else if (a == "--tts-filter-test") return run_tts_filter_test();
+        else if (a == "--tool-run") return run_tool_run(argc, argv, i);
+        else if (a == "--tool-test") return run_tool_test();
         else config_path = a;
     }
     if (config_path.empty())
@@ -416,6 +575,43 @@ int main(int argc, char** argv)
                      "KRASTOR_API_KEY) — LLM calls will fail\n";
 
     krastor::LlmClient llm(cfg.llm);
+    // External tools (see tools_plan.md): the CLI asks interactively on stdin.
+    krastor::GrantStore tool_grants;
+    krastor::ToolRegistry tool_registry;
+    krastor::ToolRunner tool_runner(tool_grants, nlohmann::json{});
+    struct ConsoleAsk : krastor::AskHandler {
+        krastor::Decision ask(const std::string& tool, const std::string& action,
+                              const std::string& detail) override
+        {
+            std::cout << "\n[tool] '" << tool << "' wants to " << action
+                      << ":\n" << detail << "\nAllow once? [y/N/a] "
+                      << std::flush;
+            std::string a;
+            if (!std::getline(std::cin, a))
+                return krastor::Decision::Deny;
+            if (a == "y" || a == "Y")
+                return krastor::Decision::Allow;
+            if (a == "a" || a == "A")
+                return krastor::Decision::Always;
+            return krastor::Decision::Deny;
+        }
+    } tool_ask;
+    if (cfg.tools.enabled && cfg.llm.supports_tools) {
+        nlohmann::json ov = nlohmann::json::parse(
+            cfg.tools.overrides_json.empty() ? "{}" : cfg.tools.overrides_json,
+            nullptr, false);
+        std::vector<std::string> tlog;
+        tool_registry.load_dir(krastor::tools_dir(),
+                               ov.is_object() ? ov : nlohmann::json(), tlog);
+        for (auto& l : tlog)
+            std::cout << l << "\n";
+        if (!tool_registry.empty())
+            cfg.llm.system_prompt +=
+                "\nYou can call the provided tools to inspect and change the "
+                "machine. Writable sandbox: " + krastor::workspace_dir() +
+                " (other locations need user approval). Prefer small, "
+                "reversible steps and report what a tool did.";
+    }
     krastor::OutputFormatter fmt(cfg);
     krastor::Highlighter hl;
     if (hl.load_default())
@@ -509,7 +705,21 @@ int main(int argc, char** argv)
 
         conversation.add_user(line);
         std::cout << "...thinking..." << std::flush;
-        auto reply = llm.complete(conversation);
+        krastor::ToolLoopHooks hooks;
+        hooks.on_call = [](const krastor::ToolCallInfo& info) {
+            std::cout << "\r[tool] " << info.tool << " - " << info.action
+                      << "..." << std::string(20, ' ') << "\n" << std::flush;
+        };
+        hooks.on_done = [](const krastor::ToolCallInfo& info,
+                           const krastor::ToolResult& tr) {
+            std::cout << "[tool] " << info.tool << " - " << info.action << ": "
+                      << (tr.ok ? "ok (" + std::to_string(tr.ms) + " ms)"
+                                : "FAILED - " + tr.error)
+                      << "\n" << std::flush;
+        };
+        auto reply = krastor::agent_complete(llm, conversation, tool_registry,
+                                             tool_runner, &tool_ask, nullptr,
+                                             hooks);
         std::cout << "\r" << std::string(40, ' ') << "\r";  // clear the placeholder
         if (reply.ok) {
             conversation.add_assistant(reply.content);

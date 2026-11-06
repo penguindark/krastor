@@ -53,6 +53,10 @@
 #include "effects.h"
 #include "audio_analysis.h"
 #include "audio_fx.h"
+#include "permissions.h"
+#include "tool_registry.h"
+#include "tool_runner.h"
+#include "tool_loop.h"
 
 namespace krastor {
 
@@ -76,8 +80,11 @@ struct ChatLine {
     std::string meta;  // optional dim stats sub-line (assistant replies)
     // Reasoning ("Thought") block shown above the reply, opencode-style:
     // a clickable "+ Thought · 5.4s" header toggles the dim body.
+    // Tool calls reuse the same collapsible with a custom label
+    // ("⚙ files · read"), so think_label defaults to "Thought".
     std::string thinking;    // raw reasoning text ("" = no block)
     std::string think_meta;  // duration suffix, e.g. "5.4s"
+    std::string think_label; // "" = "Thought"
     bool thought_open = false;
     ChatLine() = default;
     ChatLine(std::string w, std::string t, std::string m = {})
@@ -257,7 +264,7 @@ struct SettingsState {
     }
 };
 
-struct AppState {
+struct AppState : AskHandler {
     Config& cfg;
     VoiceRegistry& voices;
     Conversation conv;
@@ -306,6 +313,42 @@ struct AppState {
     std::mutex heard_mtx;
     std::vector<std::string> heard;
 
+    // ---- External tools (see tools_plan.md) ----
+    GrantStore tool_grants;      // session-scoped "always allow" answers
+    ToolRegistry tool_registry;  // tools/tool_*.jsonc (loaded in the ctor)
+    ToolRunner tool_runner;
+    // AskHandler: the LLM worker blocks in ask() until the GUI modal answers.
+    struct PendingAsk {
+        std::string tool, action, detail;
+        Decision answer = Decision::Deny;
+        bool answered = false;
+    };
+    std::mutex ask_mtx;
+    std::condition_variable ask_cv;
+    std::shared_ptr<PendingAsk> pending_ask;
+    Decision ask(const std::string& tool, const std::string& action,
+                 const std::string& detail) override
+    {
+        auto pa = std::make_shared<PendingAsk>();
+        pa->tool = tool;
+        pa->action = action;
+        pa->detail = detail;
+        {
+            std::lock_guard<std::mutex> lk(ask_mtx);
+            pending_ask = pa;
+        }
+        std::unique_lock<std::mutex> lk(ask_mtx);
+        ask_cv.wait(lk, [&] { return pa->answered; });
+        return pa->answer;
+    }
+    // Completed tool calls are queued by the worker and drained into chat
+    // lines by poll() (main thread only touches `lines`).
+    struct ToolEvent {
+        std::string label, meta, body;
+    };
+    std::mutex tev_mtx;
+    std::vector<ToolEvent> tev_ready;
+
     // Multiline chat input (Enter sends, Shift+Enter inserts a newline).
     // Large buffer so pasted code/long prompts are never silently truncated.
     char input[16384] = {0};
@@ -334,11 +377,29 @@ struct AppState {
 
     AppState(Config& c, VoiceRegistry& v)
         : cfg(c), voices(v), conv(c.llm.system_prompt), llm(c.llm), tts(v, c), stt(c),
-          fmt(c)
+          fmt(c), tool_runner(tool_grants, nlohmann::json{})
     {
         name = c.agent.name;
         // Model list for the Settings combo (URL/key/context come from this file).
         models.load(LlmModelRegistry::default_path());
+        // External tools: manifests load only when the system is enabled and
+        // the selected model declares capabilities.tools (function calling).
+        if (c.tools.enabled && c.llm.supports_tools) {
+            nlohmann::json ov = nlohmann::json::parse(
+                c.tools.overrides_json.empty() ? "{}" : c.tools.overrides_json,
+                nullptr, false);
+            std::vector<std::string> tlog;
+            tool_registry.load_dir(tools_dir(),
+                                   ov.is_object() ? ov : nlohmann::json(), tlog);
+            for (auto& l : tlog)
+                lines.push_back({"sys", l});
+            if (!tool_registry.empty())
+                c.llm.system_prompt +=
+                    "\nYou can call the provided tools to inspect and change "
+                    "the machine. Writable sandbox: " + workspace_dir() +
+                    " (other locations need user approval). Prefer small, "
+                    "reversible steps and report what a tool did.";
+        }
         // Syntax highlighting for fenced code blocks (data/languages/*.json).
         if (hl.load_default())
             fmt.set_highlighter([this](const std::string& code,
@@ -465,12 +526,40 @@ struct AppState {
         attachments.clear();
         worker = Worker::Thinking;
         const LlmClient client(llm);          // snapshot: survives settings changes
-        const Conversation snapshot = conv;   // copy for the worker thread
         llm_cancel = std::make_shared<CancelToken>();
         auto cancel = llm_cancel;
-        llm_fut = std::async(std::launch::async, [client, snapshot, cancel] {
+        llm_fut = std::async(std::launch::async, [this, client, cancel] {
             const auto t_start = std::chrono::steady_clock::now();
-            LlmReply r = client.complete(snapshot, cancel.get());
+            // Tool calls become collapsible chat blocks (⚙ label, args+output
+            // body); they are queued here and drained into `lines` by poll().
+            ToolLoopHooks hooks;
+            hooks.on_done = [this](const ToolCallInfo& info,
+                                   const ToolResult& tr) {
+                ToolEvent ev;
+                ev.label = "\xE2\x9A\x99 " + info.tool + " \xC2\xB7 " + info.action;
+                if (tr.ok) {
+                    char m[48];
+                    std::snprintf(m, sizeof(m), "%s - %zu B",
+                                  fmt_elapsed(static_cast<double>(tr.ms)).c_str(),
+                                  tr.result.size());
+                    ev.meta = m;
+                } else {
+                    ev.meta = tr.error.size() > 60
+                                  ? tr.error.substr(0, 60) + "..."
+                                  : tr.error;
+                }
+                ev.body = "args: " + info.args_json + "\n" +
+                          (tr.ok ? "result: " + tr.result
+                                 : "error: " + tr.error);
+                if (!tr.stderr_text.empty())
+                    ev.body += "\nlog: " + tr.stderr_text;
+                std::lock_guard<std::mutex> lk(tev_mtx);
+                tev_ready.push_back(std::move(ev));
+            };
+            // The worker owns `conv` while worker != None (send() is guarded),
+            // so the loop can append assistant/tool messages directly.
+            LlmReply r = agent_complete(client, conv, tool_registry,
+                                        tool_runner, this, cancel.get(), hooks);
             r.elapsed_ms = std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - t_start).count();
             return r;
@@ -499,7 +588,19 @@ struct AppState {
                              [&stt_ref, idx] { return stt_ref.listen(10.0, idx); });
     }
 
-    ~AppState() { stop_hands_free(); }
+    ~AppState()
+    {
+        stop_hands_free();
+        // Never let a worker hang on a permission dialog at shutdown.
+        {
+            std::lock_guard<std::mutex> lk(ask_mtx);
+            if (pending_ask) {
+                pending_ask->answer = Decision::Deny;
+                pending_ask->answered = true;
+            }
+        }
+        ask_cv.notify_all();
+    }
 
     bool hands_free() const { return pipe_run.load(); }
 
@@ -579,6 +680,21 @@ struct AppState {
     // Polls finished worker tasks once per frame.
     void poll()
     {
+        // Tool calls completed by the worker -> collapsible chat blocks.
+        {
+            std::vector<ToolEvent> evs;
+            {
+                std::lock_guard<std::mutex> lk(tev_mtx);
+                evs.swap(tev_ready);
+            }
+            for (auto& e : evs) {
+                ChatLine cl{"sys", "", ""};
+                cl.thinking = std::move(e.body);
+                cl.think_label = std::move(e.label);
+                cl.think_meta = std::move(e.meta);
+                lines.push_back(std::move(cl));
+            }
+        }
         if (worker == Worker::Thinking &&
             llm_fut.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
             const bool stopped = llm_cancel && llm_cancel->load();
@@ -755,6 +871,62 @@ void word_range(const AppState& app, int line, int cp, int& lo, int& hi)
 }
 
 // ------------------------------------------------------------- settings modal
+// Permission request modal for external tools (tools_plan.md section 4):
+// the LLM worker is blocked in AppState::ask() until one of the three
+// buttons answers the pending request.
+void permission_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
+{
+    std::shared_ptr<AppState::PendingAsk> pa;
+    {
+        std::lock_guard<std::mutex> lk(app.ask_mtx);
+        pa = app.pending_ask;
+    }
+    if (!pa)
+        return;
+
+    nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
+                             nk_style_item_color(nk_rgba(24, 14, 10, 245)));
+    const int mw = 500, mh = 380;
+    bool answered = false;
+    if (nk_begin(ctx, "Tool permission",
+                 nk_rect((win_w - mw) / 2.0f, (win_h - mh) / 2.0f, mw, mh),
+                 NK_WINDOW_TITLE | NK_WINDOW_BORDER)) {
+        nk_layout_row_dynamic(ctx, 26, 1);
+        nk_label_colored(ctx, ("Tool '" + pa->tool + "' asks permission").c_str(),
+                         NK_LEFT, nk_rgb(235, 160, 70));
+        nk_layout_row_dynamic(ctx, 20, 1);
+        nk_label(ctx, pa->action.c_str(), NK_LEFT);
+        if (nk_group_begin(ctx, "##perm_detail", NK_WINDOW_BORDER)) {
+            nk_layout_row_dynamic(ctx, 18, 1);
+            nk_label_wrap(ctx, pa->detail.c_str());
+            nk_group_end(ctx);
+        }
+        nk_layout_row_dynamic(ctx, 32, 3);
+        if (nk_button_label(ctx, "Allow once")) {
+            pa->answer = Decision::Allow;
+            answered = true;
+        }
+        if (nk_button_label(ctx, "Always allow")) {
+            pa->answer = Decision::Always;
+            answered = true;
+        }
+        if (nk_button_label(ctx, "Deny")) {
+            pa->answer = Decision::Deny;
+            answered = true;
+        }
+    }
+    nk_end(ctx);
+    nk_style_pop_style_item(ctx);
+
+    if (answered) {
+        {
+            std::lock_guard<std::mutex> lk(app.ask_mtx);
+            pa->answered = true;
+        }
+        app.ask_cv.notify_all();
+    }
+}
+
 bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
                     SettingsState& s, int win_w, int win_h, EffectEngine& fx,
                     const LlmModelRegistry& models, const IconAtlas& icons)
@@ -892,6 +1064,22 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
             }
             s.status = std::string("ignore while busy: ") +
                        (cfg.agent.ignore_while_speaking ? "on" : "off");
+        }
+    }
+
+    // External tools master switch (see tools_plan.md). The manifest scan
+    // happens at startup, so toggling takes effect after a restart.
+    nk_layout_row_dynamic(ctx, 24, 1);
+    {
+        nk_bool tools = cfg.tools.enabled ? nk_true : nk_false;
+        if (nk_checkbox_label(ctx, "Enable external tools (restart)", &tools)) {
+            cfg.tools.enabled = tools != 0;
+            try {
+                cfg.save();
+            } catch (const std::exception&) {
+            }
+            s.status = std::string("external tools: ") +
+                       (cfg.tools.enabled ? "on (after restart)" : "off");
         }
     }
 
@@ -1302,7 +1490,12 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
 
         // The Settings modal overlaps the chat but is a separate window: while
         // it is open, mouse input on it must not register as chat input.
-        const bool modal_blocks = app.settings.open;
+        bool perm_pending = false;
+        {
+            std::lock_guard<std::mutex> lk(app.ask_mtx);
+            perm_pending = static_cast<bool>(app.pending_ask);
+        }
+        const bool modal_blocks = app.settings.open || perm_pending;
 
         // Mouse wheel over the chat: leave follow-bottom mode and scroll
         // manually (3 text lines per notch). The delta is consumed so
@@ -1451,10 +1644,12 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
             struct nk_color col = nk_rgb(160, 160, 160);
             if (l.who == "you") col = nk_rgb(120, 180, 255);
             else if (l.who == "krastor") col = nk_rgb(130, 220, 150);
-            // Collapsible reasoning block (opencode-style "Thought · Ns").
+            // Collapsible block (opencode-style "Thought · Ns"; tool calls
+            // reuse it with a "⚙ tool · action" label).
             if (!l.thinking.empty()) {
                 std::string head = std::string(l.thought_open ? "- " : "+ ") +
-                                   "Thought";
+                                   (l.think_label.empty() ? "Thought"
+                                                          : l.think_label);
                 if (!l.think_meta.empty())
                     head += " \xC2\xB7 " + l.think_meta;
                 content_h += draw_chat_line(ctx, "", head, nk_rgb(230, 150, 60),
@@ -1468,10 +1663,12 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                         text_w, -1, nullptr, nullptr, &app.emoji) +
                                  spacing;
             }
-            content_h += draw_chat_line(ctx, prefix, l.text, col, text_w, src,
-                                        &app.chat_hits, has_sel ? &sel : nullptr,
-                                        &app.emoji) +
-                         spacing;
+            // Pure tool blocks carry no text line of their own.
+            if (!l.text.empty() || l.thinking.empty())
+                content_h += draw_chat_line(ctx, prefix, l.text, col, text_w, src,
+                                            &app.chat_hits, has_sel ? &sel : nullptr,
+                                            &app.emoji) +
+                             spacing;
             // Dim stats sub-line under the reply (model - time - tok/s).
             if (!l.meta.empty())
                 content_h += draw_chat_line(ctx, "  \xC2\xB7 ", l.meta,
@@ -2210,6 +2407,8 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
 
         settings_modal(ctx, cfg, voices, app.settings, w, h, fx, app.models,
                        app.icons);
+        // External-tool permission dialog (blocks the worker until answered).
+        permission_modal(ctx, app, w, h);
 
         // A saved name change propagates to the top bar and the window title.
         if (cfg.agent.name != app.name) {

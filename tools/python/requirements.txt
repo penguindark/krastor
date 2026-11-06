@@ -1,0 +1,3 @@
+# Agent runtime packages (installed into tools/python/venv by setup.ps1).
+requests
+beautifulsoup4
