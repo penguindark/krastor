@@ -156,7 +156,8 @@ allega un'immagine, drag & drop di file nel box.
 Le chat sono **salvate automaticamente** in `sessions\` (una cartella per
 sessione): `Ctrl+O` apre il gestore sessioni, `Ctrl+Shift+O` cicla le
 recenti, `/compact` riassume la sessione con il modello attivo, `/clean`
-(pulsante gomma) pulisce lo schermo senza toccare la sessione.
+(pulsante gomma) pulisce lo schermo senza toccare la sessione, `F1` o
+`/help` apre l'elenco di comandi e scorciatoie.
 
 Senza argomenti parte la CLI (stessa chat, testuale): comandi `/sessions`,
 `/session new|open|delete|rename`, `/compact`; flag `--session <id>`,

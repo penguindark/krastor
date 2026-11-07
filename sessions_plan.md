@@ -154,6 +154,7 @@ leading `/` as a command instead of sending to the LLM).
 | Command | Effect |
 |---|---|
 | `/sessions` | list sessions: `#`, id, updated, title, msg count |
+| `/session list` | alias for `/sessions` (GUI: text listing in the chat, ids copyable) |
 | `/session` | show current session (id, title, turns, compactions) |
 | `/session new [title]` | start a fresh session (current one stays saved) |
 | `/session open <id or #>` | load that session (id prefix accepted) |

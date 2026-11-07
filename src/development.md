@@ -230,16 +230,27 @@ session switching and LLM-driven compaction.
 - Session autosave ordering: always flush the OUTGOING session (autosave)
   BEFORE loading/creating another one - after `conv` was replaced the pending
   tail belongs to the wrong session and would be appended to the new folder.
-- Modal scrollable groups must size from the LIVE layout: after the top rows,
-  `remaining = nk_window_get_content_region(ctx).y + .h - ctx->current->layout->at_y`
-  and the group gets `remaining - footer row - 2*spacing`. Two traps:
-  `nk_window_get_content_region` returns `layout->clip` (the window's WHOLE
-  content rect, NOT the remaining space - fixed `mh - K` formulas and naive
-  uses of it overflow once the title bar and row spacing are counted, and the
-  footer buttons end up below the window with a second scrollbar), and groups
-  KEEP their scroll offset across frames, so call `nk_window_set_scroll(ctx,0,0)`
-  right after `nk_group_begin` (a group IS a window; `nk_group_set_scroll_id`
-  does not exist in 4.13.3) or a previously-scrolled box opens looking empty.
+- Modal scrollable groups must size from the LIVE layout, and the exact
+  formula is: after the top rows, `remaining = nk_window_get_content_region(ctx).y
+  + .h - (layout->at_y + layout->row.height)`, group gets `remaining - footer
+  row - 3*spacing`. Three traps found the hard way:
+  1. `nk_window_get_content_region` returns `layout->clip` (the window's WHOLE
+     content rect, NOT the remaining space); fixed `mh - K` formulas overflow
+     once title bar and spacing are counted.
+  2. `nk_panel_layout` advances `at_y` only when the NEXT row is declared, so
+     the just-drawn row is missing from `at_y` - subtract `layout->row.height`
+     too (it already includes the row spacing). Missing this overestimated the
+     space by exactly one row: outer scrollbar + footer buttons cut off.
+  3. groups KEEP their scroll offset across frames, so call
+     `nk_window_set_scroll(ctx,0,0)` right after `nk_group_begin` (a group IS a
+     window; `nk_group_set_scroll_id` does not exist in 4.13.3) or a
+     previously-scrolled box opens looking empty.
+  Belt-and-braces: modals also pass `NK_WINDOW_NO_SCROLLBAR`, so the only
+  scrollbar that can ever appear is the group's own inner one.
+- Nuklear `nk_button_label`/`nk_label` do NOT clip their text: a string wider
+  than its layout column bleeds over neighbouring widgets and past the window
+  border. Truncate to the column width first (`fit_text` in gui.cpp: UTF-8
+  codepoint-safe, appends "..", measures with `text_w_px`).
 
 ## Planned layout (roadmap)
 - `gui/` — GLSL effect passes, terminal I/O panel, attachments input (Phase 5)

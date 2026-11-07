@@ -30,6 +30,7 @@
 #include <cstring>
 #include <fstream>
 #include <future>
+#include <initializer_list>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -217,6 +218,32 @@ bool button_icon_only(nk_context* ctx, const IconAtlas& icons, const char* icon,
     return clicked;
 }
 
+// Truncate s so it renders within max_w pixels (UTF-8 codepoint safe),
+// appending ".." when shortened. Nuklear label buttons do NOT clip their
+// text: a long session title used to bleed over the neighbouring columns
+// and past the window border.
+std::string fit_text(const struct nk_user_font* f, const std::string& s,
+                     float max_w)
+{
+    if (!f || !f->width ||
+        text_w_px(f, s.c_str(), (int)s.size()) <= max_w)
+        return s;
+    std::string out;
+    size_t i = 0;
+    while (i < s.size()) {
+        size_t j = i + 1;  // next UTF-8 codepoint boundary
+        while (j < s.size() &&
+               (static_cast<unsigned char>(s[j]) & 0xC0) == 0x80)
+            ++j;
+        const std::string trial = s.substr(0, j) + "..";
+        if (text_w_px(f, trial.c_str(), (int)trial.size()) > max_w)
+            break;
+        out = s.substr(0, j);
+        i = j;
+    }
+    return out + "..";
+}
+
 // ---- UTF-8 codepoint helpers (selection maps on codepoints, not bytes, so
 // Italian accents and emoji stay one position each) ----
 int cp_len(unsigned char c)
@@ -399,6 +426,7 @@ struct AppState : AskHandler {
     std::string session_id, session_title;
     size_t saved_count = 0;      // messages persisted so far (autosave cursor)
     bool sessions_open = false;  // session manager modal
+    bool help_open = false;      // help overlay (F1 or /help)
     int delete_confirm = -1;     // list row awaiting a delete confirmation
     char rename_buf[128] = {0};  // rename field in the session modal
 
@@ -862,7 +890,23 @@ struct AppState : AskHandler {
             const auto sub = [&](const char* s) {
                 return rest.rfind(s, 0) == 0;
             };
-            if (rest == "new" || sub("new ")) {
+            if (rest == "list") {
+                // Text listing in the chat: ids are copyable, so the user can
+                // follow with /session delete <id> or /session open <id>.
+                const auto all = store.list();
+                if (all.empty())
+                    lines.push_back({"sys", "no saved sessions"});
+                int i = 0;
+                for (const auto& s : all)
+                    lines.push_back({"sys", std::to_string(++i) + "  " + s.id +
+                                            "  " + s.title + "  (" +
+                                            std::to_string(s.messages) + " msgs, " +
+                                            (s.updated.size() >= 16
+                                                 ? s.updated.substr(0, 16)
+                                                 : s.updated) + ")" +
+                                            (s.id == session_id ? "  <- current"
+                                                                : "")});
+            } else if (rest == "new" || sub("new ")) {
                 new_session(rest.size() > 4 ? trim(rest.substr(4)) : std::string());
             } else if (sub("open ")) {
                 const std::string arg = trim(rest.substr(5));
@@ -885,8 +929,8 @@ struct AppState : AskHandler {
                 if (!t.empty() && store.rename(session_id, t))
                     session_title = t;
             } else {
-                lines.push_back({"sys", "usage: /session [new|open <x>|delete "
-                                        "<x>|rename <t>] - list: /sessions"});
+                lines.push_back({"sys", "usage: /session [list|new|open <x>|delete "
+                                        "<x>|rename <t>] - modal: /sessions"});
             }
             return true;
         }
@@ -921,8 +965,12 @@ struct AppState : AskHandler {
                 session_title = t;
             return true;
         }
+        if (line == "/help") {
+            help_open = true;
+            return true;
+        }
         lines.push_back({"sys", "unknown command: " + line +
-                                "  (try /sessions, /compact, /clean)"});
+                                "  (try /help)"});
         return true;
     }
 
@@ -1277,22 +1325,23 @@ void permission_modal(struct nk_context* ctx, AppState& app, int win_w, int win_
     if (nk_begin(ctx, "Tool permission",
                  nk_rect((win_w - mw) / 2.0f, (win_h - mh) / 2.0f,
                          (float)mw, (float)mh),
-                 NK_WINDOW_TITLE | NK_WINDOW_BORDER)) {
+                 NK_WINDOW_TITLE | NK_WINDOW_BORDER | NK_WINDOW_NO_SCROLLBAR)) {
         nk_layout_row_dynamic(ctx, 26, 1);
         nk_label_colored(ctx, ("Tool '" + pa->tool + "' asks permission").c_str(),
                          NK_LEFT, nk_rgb(235, 160, 70));
         nk_layout_row_dynamic(ctx, 20, 1);
         nk_label(ctx, pa->action.c_str(), NK_LEFT);
         // The detail group gets EXACTLY the space left after the labels and
-        // the button row. NOTE: nk_window_get_content_region returns the
-        // window's whole clip rect, NOT the remaining space - the consumed
-        // height must be subtracted via layout->at_y, or the group overflows
-        // the window (outer scrollbar + buttons pushed off-screen).
+        // the button row. Layout accounting (nk_panel_layout): at_y advances
+        // only when the NEXT row is declared, so the just-drawn row must be
+        // subtracted through layout->row.height as well (it already includes
+        // the row spacing). Ignoring that overestimated the space by one row:
+        // outer scrollbar + buttons pushed off-screen.
         const struct nk_rect clip = nk_window_get_content_region(ctx);
-        const float remaining =
-            clip.y + clip.h - ctx->current->layout->at_y;
+        const struct nk_panel* lay = ctx->current->layout;
+        const float remaining = clip.y + clip.h - (lay->at_y + lay->row.height);
         const float detail_h = (std::max)(
-            60.0f, remaining - 32.0f - 2.0f * ctx->style.window.spacing.y);
+            60.0f, remaining - 32.0f - 3.0f * ctx->style.window.spacing.y);
         nk_layout_row_dynamic(ctx, detail_h, 1);
         if (nk_group_begin(ctx, "##perm_detail", NK_WINDOW_BORDER)) {
             // The scrollbar must live only inside this box: start each new
@@ -1341,6 +1390,91 @@ void permission_modal(struct nk_context* ctx, AppState& app, int win_w, int win_
     }
 }
 
+// Help overlay: every GUI command and keyboard shortcut (F1 or /help).
+// Same sizing discipline as the other modals: NO_SCROLLBAR on the window,
+// the scrollable group gets exactly the remaining content height.
+void help_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
+{
+    if (!app.help_open)
+        return;
+    nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
+                             nk_style_item_color(nk_rgba(16, 18, 24, 240)));
+    const int mw = (std::max)(420, (std::min)(680, win_w - 60));
+    const int mh = (std::max)(300, (std::min)(520, win_h - 80));
+    if (!nk_begin(ctx, "Help",
+                  nk_rect((win_w - mw) / 2.0f, (win_h - mh) / 2.0f,
+                          (float)mw, (float)mh),
+                  NK_WINDOW_TITLE | NK_WINDOW_BORDER | NK_WINDOW_CLOSABLE |
+                      NK_WINDOW_NO_SCROLLBAR)) {
+        nk_end(ctx);
+        nk_window_show(ctx, "Help", NK_SHOWN);  // X-close quirk, see session_modal
+        app.help_open = false;
+        nk_style_pop_style_item(ctx);
+        return;
+    }
+    const struct nk_rect clip = nk_window_get_content_region(ctx);
+    const struct nk_panel* lay = ctx->current->layout;
+    const float list_h = (std::max)(
+        80.0f, clip.y + clip.h - (lay->at_y + lay->row.height) -
+                   3.0f * ctx->style.window.spacing.y);
+    nk_layout_row_dynamic(ctx, list_h, 1);
+    if (nk_group_begin(ctx, "##help", NK_WINDOW_BORDER)) {
+        nk_window_set_scroll(ctx, 0, 0);
+        struct Row {
+            const char* key;
+            const char* desc;
+        };
+        const nk_color k = nk_rgb(110, 160, 220), d = nk_rgb(200, 200, 205);
+        auto section = [&](const char* t) {
+            nk_layout_row_dynamic(ctx, 24, 1);
+            nk_label_colored(ctx, t, NK_LEFT, nk_rgb(235, 160, 70));
+        };
+        auto rows = [&](std::initializer_list<Row> v) {
+            for (const auto& r : v) {
+                nk_layout_row_begin(ctx, NK_DYNAMIC, 22, 2);
+                nk_layout_row_push(ctx, 0.34f);
+                nk_label_colored(ctx, r.key, NK_LEFT, k);
+                nk_layout_row_push(ctx, 0.66f);
+                nk_label_colored(ctx, r.desc, NK_LEFT, d);
+                nk_layout_row_end(ctx);
+            }
+        };
+        section("Chat");
+        rows({{"Enter", "send the message"},
+              {"Shift+Enter", "newline in the input box"},
+              {"Ctrl+V", "paste text / attach clipboard image"},
+              {"drag & drop", "attach an image file"},
+              {"click + drag in chat", "select text (Ctrl+C copies it)"},
+              {"Ctrl++ / Ctrl+-", "font zoom in / out"}});
+        section("Sessions");
+        rows({{"Ctrl+O", "open the session manager"},
+              {"Ctrl+Shift+O", "cycle to the next recent session"},
+              {"/sessions", "open the session manager"},
+              {"/session list", "list sessions with their ids"},
+              {"/session open <x>", "load a session (index, id or id prefix)"},
+              {"/session delete <x>", "delete a session permanently"},
+              {"/session new [title]", "start a new session"},
+              {"/session rename <t>", "rename the current session"},
+              {"/title [title]", "show or set the current title"},
+              {"/compact [focus]", "summarize + shrink the session (LLM)"}});
+        section("Voice & screen");
+        rows({{"/voice", "toggle voice output (TTS)"},
+              {"/mic", "toggle microphone capture (hands-free)"},
+              {"/clean", "clear the screen, session untouched (eraser button)"},
+              {"/help or F1", "this window"}});
+        section("Floating buttons");
+        rows({{"send", "send the input box text"},
+              {"paperclip", "attach the clipboard image"},
+              {"ear", "listen once from the mic (max 10 s)"},
+              {"speaker", "test the TTS voice"},
+              {"eraser", "clear the screen (keeps the session)"},
+              {"stop", "cancel the running request + silence"}});
+        nk_group_end(ctx);
+    }
+    nk_end(ctx);
+    nk_style_pop_style_item(ctx);
+}
+
 // Session manager: list / switch / new / rename / delete (sessions_plan.md §5).
 void session_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
 {
@@ -1360,7 +1494,8 @@ void session_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
     if (!nk_begin(ctx, "Sessions",
                   nk_rect((win_w - mw) / 2.0f, (win_h - mh) / 2.0f,
                           (float)mw, (float)mh),
-                  NK_WINDOW_TITLE | NK_WINDOW_BORDER | NK_WINDOW_CLOSABLE)) {
+                  NK_WINDOW_TITLE | NK_WINDOW_BORDER | NK_WINDOW_CLOSABLE |
+                  NK_WINDOW_NO_SCROLLBAR)) {
         nk_end(ctx);
         nk_window_show(ctx, "Sessions", NK_SHOWN);
         nk_style_pop_style_item(ctx);
@@ -1376,31 +1511,39 @@ void session_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
     nk_layout_row_dynamic(ctx, row_h + 4, 1);
     nk_label_colored(ctx, "Sessions - click a row to open it", NK_LEFT,
                      nk_rgb(110, 160, 220));
-    // Exact remaining space (see the permission modal note): the footer row
-    // stays inside the window, so only the list itself scrolls.
+    // Exact remaining space (see the permission modal note about at_y +
+    // row.height): the footer row stays inside the window, so only the list
+    // itself scrolls.
     const struct nk_rect clip = nk_window_get_content_region(ctx);
-    const float remaining = clip.y + clip.h - ctx->current->layout->at_y;
+    const struct nk_panel* lay = ctx->current->layout;
+    const float remaining = clip.y + clip.h - (lay->at_y + lay->row.height);
     const float list_h = (std::max)(
-        80.0f, remaining - 30.0f - 2.0f * ctx->style.window.spacing.y);
+        80.0f, remaining - 30.0f - 3.0f * ctx->style.window.spacing.y);
     nk_layout_row_dynamic(ctx, list_h, 1);
     if (nk_group_begin(ctx, "##sess_list", NK_WINDOW_BORDER)) {
         nk_window_set_scroll(ctx, 0, 0);  // always open at the top
         const auto sessions = app.store.list();
         int idx = 0;
         for (const auto& s : sessions) {
-            nk_layout_row_begin(ctx, NK_DYNAMIC, row_h + 8, 3);
+            // Two columns only: the id column overflowed the window (labels
+            // do not clip); the full ids are available via /session list.
+            nk_layout_row_begin(ctx, NK_DYNAMIC, row_h + 8, 2);
             const bool cur = s.id == app.session_id;
-            nk_layout_row_push(ctx, 0.70f);
+            nk_layout_row_push(ctx, 0.80f);
             const std::string label =
                 (cur ? "> " : "  ") + s.title + "   " +
                 (s.updated.size() >= 10 ? s.updated.substr(0, 10) : s.updated) +
                 "  " + std::to_string(s.messages) + " msgs" +
                 (s.compactions ? "  compacted x" + std::to_string(s.compactions)
                                : "");
-            if (nk_button_label(ctx, label.c_str()) && !cur)
+            const float col_w = nk_window_get_content_region(ctx).w * 0.80f -
+                                4.0f * ctx->style.button.padding.x;
+            if (nk_button_label(
+                    ctx, fit_text(ctx->style.font, label, col_w).c_str()) &&
+                !cur)
                 if (app.switch_to_session(s.id))
                     close = true;  // refused while the worker is busy
-            nk_layout_row_push(ctx, 0.13f);
+            nk_layout_row_push(ctx, 0.20f);
             const bool confirm = app.delete_confirm == idx;
             if (nk_button_label(ctx, confirm ? "sure?" : "delete")) {
                 if (confirm) {
@@ -1410,9 +1553,6 @@ void session_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
                     app.delete_confirm = idx;
                 }
             }
-            nk_layout_row_push(ctx, 0.17f);
-            nk_label_colored(ctx, cur ? "current" : s.id.c_str(), NK_LEFT,
-                             nk_rgb(110, 110, 120));
             nk_layout_row_end(ctx);
             ++idx;
         }
@@ -2540,6 +2680,12 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 }
             }
             prev_o = o;
+            // F1 toggles the help overlay (edge-detected like the others).
+            static bool prev_f1 = false;
+            const bool f1 = glfwGetKey(win, GLFW_KEY_F1) != 0;
+            if (f1 && !prev_f1)
+                app.help_open = !app.help_open;
+            prev_f1 = f1;
         }
 
         // ---- chat selection & scroll hotkeys (only while the chat has focus,
@@ -2997,6 +3143,8 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                        app.icons);
         // Session manager (list/switch/new/rename/delete, sessions_plan.md).
         session_modal(ctx, app, w, h);
+        // Help overlay (F1 or /help): commands + shortcuts.
+        help_modal(ctx, app, w, h);
         // External-tool permission dialog (blocks the worker until answered).
         permission_modal(ctx, app, w, h);
 

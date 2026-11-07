@@ -1137,7 +1137,31 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   previous request left the box looking empty (scrolled past the text):
   ``nk_window_set_scroll(ctx, 0, 0)`` right after ``nk_group_begin`` resets
   it (a group IS a window; ``nk_group_set_scroll_id`` does not exist here).
+- STILL overflowing after that: found the real accounting bug in the Nuklear
+  sources - ``nk_panel_layout`` advances ``at_y`` only when the NEXT row is
+  declared, so the just-drawn row must be subtracted via ``layout->row.height``
+  too (it already includes the row spacing). Correct formula now used by both
+  modals: ``remaining = clip.y + clip.h - (at_y + row.height)``, group =
+  ``remaining - footer - 3*spacing``. As a guarantee, both modal windows pass
+  ``NK_WINDOW_NO_SCROLLBAR``: the only scrollbar that can appear is the
+  group's own inner one (user requirement).
 - New GUI slash commands: ``/voice`` toggles TTS output (same flag as the
   top-bar speaker button) and ``/mic`` toggles microphone capture
   (hands-free pipeline). The CLI keeps its existing ``/voice <id>`` (voice
   selection) and ``/mic [sec]`` (level meter) semantics untouched.
+
+---
+
+## 2026-11-07 (later) - session rows fixed + help overlay
+
+- Session-modal rows bled over each other: Nuklear label buttons and labels
+  do NOT clip their text, so a long title ran over the delete button and the
+  id column ran past the window border. Rows are now two columns (title 0.80
+  + delete 0.20) and the title is truncated to the column width with the new
+  ``fit_text`` helper (UTF-8 codepoint safe, appends ".."); the full ids are
+  available via ``/session list``.
+- **Help overlay** (``F1`` or ``/help``): scrollable modal listing every GUI
+  command and keyboard shortcut (chat, sessions, voice & screen, floating
+  buttons), same sizing discipline as the other modals (NO_SCROLLBAR +
+  remaining-height group + scroll reset). Unknown commands now point to
+  ``/help``.

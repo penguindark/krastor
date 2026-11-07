@@ -63,6 +63,7 @@ void print_help()
         "  /transcribe <file> transcribe an audio file (wav/mp3/flac)\n"
         "  /reset             clear the conversation (starts a new session)\n"
         "  /sessions          list saved sessions\n"
+        "  /session list      same as /sessions\n"
         "  /session           show the current session\n"
         "  /session new [t]   start a new session (optional title)\n"
         "  /session open <x>  load a session (list index, id or id prefix)\n"
@@ -1029,6 +1030,8 @@ int main(int argc, char** argv)
                               << "\n  compactions: " << sm.compactions << "\n";
                 else
                     std::cout << "no current session\n";
+            } else if (sub == "list") {
+                print_sessions(store);
             } else if (sub == "new") {
                 const std::string title = trim_arg(rest.substr(rest.find("new") + 3));
                 autosave();  // flush the outgoing session first
