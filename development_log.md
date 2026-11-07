@@ -1554,3 +1554,23 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
 - Three new `--session-test` checks: predicted paths match the next
   slots, and they are exactly the files `append()` writes.
 - Both toolchains clean; all `--*-test` PASS.
+
+---
+
+## 2026-11-08 (later) - 1px dark seams on colored chat lines
+
+- Report: zooming into a line with an ANSI background showed a grid of
+  dark lines - every space (and every row boundary) had a black border.
+- Cause: Nuklear's `nk_fill_rect` truncates x/y/w/h to integers
+  (`cmd->x = (short)rect.x`). Chat rows sit on fractional coordinates
+  (fractional font metrics at 150% DPI), so each per-token background
+  fill lost up to ~1px on the right and bottom: adjacent token fills no
+  longer touched and the dark window background showed through.
+- Fix: `fill_px()` rounds the rect outward (`floor` origin, `ceil` end)
+  so each fill covers the region's exact pixel extent; later fills draw
+  over the <=1px overlap. Applied to the uniform line background, the
+  per-token backgrounds, the selection highlight and the diff row/pane
+  backgrounds.
+- Verified with a crafted green-background session + 4x zoom
+  screenshot: the background is continuous across spaces and rows.
+- Both toolchains clean; all `--*-test` PASS.

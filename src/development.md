@@ -104,6 +104,12 @@ session switching and LLM-driven compaction.
   - **`nk_glfw3_render` buffer args are BYTES, not vertex counts.** The small default
     (4096) holds ~200 vertices and silently drops every command after them — the
     classic "only the first row renders" symptom. Use `512*1024, 128*1024`.
+  - **`nk_fill_rect` truncates x/y/w/h to integers** (`cmd->x = (short)rect.x`).
+    With fractional layout coordinates (fractional font metrics, DPI scaling)
+    adjacent per-token background fills lose up to ~1px right/bottom each and
+    leave 1px dark seams — the "black border around spaces" on colored chat
+    lines. Round the rect **outward** (`floor(x)`, `ceil(x+w)`) before filling
+    (`fill_px()` in gui.cpp); later fills draw over the ≤1px overlap.
 - glad 0.1.36 CLI: `--api "gl=3.3" --profile core`, and it reads `gl.xml` from the
   CWD when present (downloaded from Khronos if absent).
 - sherpa-onnx: use the **C API** (`c_api.h`) — the MSVC-built import lib links fine

@@ -2203,6 +2203,18 @@ float text_w_px(const struct nk_user_font* f, const char* s, int n)
     return f && f->width ? f->width(f->userdata, f->height, s, n) : 0.0f;
 }
 
+// nk_fill_rect truncates x/y/w/h to integers, so with fractional layout
+// coordinates (fractional font metrics, DPI scaling) adjacent fills leave
+// 1px dark seams - the "black border around spaces" on colored lines.
+// Round the rect outward so it covers the region's exact pixel extent.
+void fill_px(struct nk_command_buffer* cv, float x, float y, float w, float h,
+             struct nk_color c)
+{
+    const float x0 = std::floor(x), y0 = std::floor(y);
+    const float x1 = std::ceil(x + w), y1 = std::ceil(y + h);
+    nk_fill_rect(cv, nk_rect(x0, y0, x1 - x0, y1 - y0), 0, c);
+}
+
 // Decodes the UTF-8 codepoint at `i` (len receives its byte length).
 char32_t utf8_next(const std::string& s, size_t i, size_t& len)
 {
@@ -2469,7 +2481,7 @@ float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
         if (!bg.a)
             uniform = false;
         if (uniform)
-            nk_fill_rect(canvas, nk_rect(area.x, y, text_w, row_h), 0, bg);
+            fill_px(canvas, area.x, y, text_w, row_h, bg);
         ChatHitLine hit_line;
         hit_line.y = y;
         hit_line.h = row_h;
@@ -2479,7 +2491,7 @@ float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
             const float ww = text_w_px(f, w.text.data(), (int)w.text.size());
             const int ncp = w.cp_begin >= 0 ? cp_count(w.text) : 0;
             if (!uniform && w.bg.a)
-                nk_fill_rect(canvas, nk_rect(tx, y, ww, row_h), 0, w.bg);
+                fill_px(canvas, tx, y, ww, row_h, w.bg);
             // Selection highlight: translucent accent behind the selected
             // portion of this token (monospace: cp->x is linear).
             if (sel && src_line >= 0 && ncp > 0) {
@@ -2495,10 +2507,8 @@ float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
                                        ? sel->hi_cp : b;
                     if (hb > ha) {
                         const float px = ww / ncp;
-                        nk_fill_rect(canvas,
-                                     nk_rect(tx + (ha - a) * px, y,
-                                             (hb - ha) * px, row_h),
-                                     0, nk_rgba(60, 110, 200, 115));
+                        fill_px(canvas, tx + (ha - a) * px, y, (hb - ha) * px,
+                                row_h, nk_rgba(60, 110, 200, 115));
                     }
                 }
             }
@@ -2679,7 +2689,7 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
         nk_layout_row_dynamic(ctx, row_h, 1);
         const struct nk_rect a = nk_widget_bounds(ctx);
         if (bg.a)
-            nk_fill_rect(cv, nk_rect(a.x, a.y, text_w, row_h), 0, bg);
+            fill_px(cv, a.x, a.y, text_w, row_h, bg);
         const std::string ns = no ? std::to_string(no) : std::string();
         const float nw = text_w_px(f, ns.data(), (int)ns.size());
         draw_token_mixed(cv, a.x + 2, a.y, row_h, std::string(1, mark), f, fg,
@@ -2717,9 +2727,9 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
         const struct nk_rect a = nk_widget_bounds(ctx);
         const float rx = a.x + pane_w + gap_w;
         if (r.kind == '-' || r.kind == '~')
-            nk_fill_rect(cv, nk_rect(a.x, a.y, pane_w, row_h), 0, bg_del);
+            fill_px(cv, a.x, a.y, pane_w, row_h, bg_del);
         if (r.kind == '+' || r.kind == '~')
-            nk_fill_rect(cv, nk_rect(rx, a.y, pane_w, row_h), 0, bg_add);
+            fill_px(cv, rx, a.y, pane_w, row_h, bg_add);
         const std::string ons = r.old_no ? std::to_string(r.old_no) : "";
         const std::string nns = r.new_no ? std::to_string(r.new_no) : "";
         draw_token_mixed(cv, a.x + gutter - 6 -
