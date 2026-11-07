@@ -1285,3 +1285,40 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   catches JSON errors (sys line + cursor not advanced, so the turn is
   retried next save) instead of dying. ``utf8_clean`` covered by
   ``--tool-test``.
+
+---
+
+## 2026-11-07 (later) - compaction v2 (opencode style) + file-edit diff blocks
+
+- **Compactor rewrite** (``compactor.cpp``, following opencode v2
+  ``compaction.ts``): the summarization prompt is now the fixed structured
+  template (Objective / Requirements / Decisions / Work State
+  Completed·Active·Blocked / Next Move / Relevant Files / Important Context,
+  terse bullets, exact paths/commands/identifiers preserved, summary in the
+  conversation's language); the transcript handed to the model escalates
+  through 5 clipping levels (full → tool outputs clipped to 2k head+tail →
+  outputs dropped → user text only → omitted) until it fits the chunk
+  budget; **update mode**: a history starting with the summary marker folds
+  the newer messages into that checkpoint instead of re-summarizing from
+  scratch. Rolling map-reduce, tail-verbatim and the archive are unchanged.
+- **Auto-compact + overflow retry** (GUI): new config
+  ``sessions.auto_compact`` (default true) and ``sessions.compact_buffer``
+  (``"NN%"`` or raw tokens, floored at ``min(16k, ctx/2)`` via
+  ``compact_buffer_tokens()``). After each completed turn
+  ``maybe_auto_compact()`` compacts when the last prompt came within the
+  buffer of ``context_size``; on a provider "context too long" error
+  ``is_context_overflow()`` triggers one compact + turn retry per user
+  message (``launch_llm()`` extracted from ``send()`` for the retry).
+- **File-edit diff**: ``filetool`` ``edit``/``write`` results now carry a
+  structured line ``diff`` (LCS with prefix/suffix trim + huge-file
+  fallback, 3-line context hunks, capped at 600 ops). The GUI renders it as
+  a clickable ``← Edit path +N −M`` block (``draw_diff_block``): side-by-side
+  old|new panes with red/green row backgrounds and dim line numbers, unified
+  single-column fallback under 640 px, hunk-gap separators, 240-row view
+  cap, rows clipped (never wrapped); the diff is **stripped from the model's
+  context** (``strip_diff_for_model`` in tool_loop - the GUI reads it from
+  the ``on_done`` hook). ``KRASTOR_UITEST`` seeds a sample diff block.
+- Tests: ``--tool-test`` gained edit/write diff assertions, ``--session-test``
+  covers the prompt template/update mode, the 5 transcript levels and the
+  buffer math. Both toolchains clean; ``--tool-test``/``--session-test``/
+  ``--media-test`` all PASS; GUI smoke with the seeded diff block OK.

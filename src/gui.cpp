@@ -95,6 +95,12 @@ struct ChatLine {
     std::string think_label; // "" = "Thought"
     bool thought_open = false;
     MediaRef media;          // image/sound block shown in the chat flow
+    // File edit diff (files edit/write tool results): flat ops from
+    // filetool + counts, rendered as a collapsible side-by-side block.
+    nlohmann::json diff;     // null = no diff
+    std::string diff_path;
+    int diff_added = 0, diff_removed = 0;
+    bool diff_open = true;
     ChatLine() = default;
     ChatLine(std::string w, std::string t, std::string m = {})
         : who(std::move(w)), text(std::move(t)), meta(std::move(m)) {}
@@ -379,6 +385,10 @@ struct AppState : AskHandler {
     float chat_bottom = 0.0f;    // last frame's max scroll offset (wheel clamp)
                                  // scrolled back up (wheel/keys clear the flag)
 
+    // ---- auto-compaction (opencode v2 style) ----
+    bool overflow_retried = false;     // one compact+retry per turn on overflow
+    bool retry_after_compact = false;  // re-run the turn after overflow compact
+
     // ---- Inline media (see media.h) ----
     SoundPlayer player;  // mini sound player (own output device)
     // Loaded image textures in load order (oldest first) for LRU eviction;
@@ -439,6 +449,11 @@ struct AppState : AskHandler {
     // lines by poll() (main thread only touches `lines`).
     struct ToolEvent {
         std::string label, meta, body;
+        // filetool edit/write results carry a structured diff: render it as
+        // a side-by-side block instead of a plain collapsible (opencode-style).
+        nlohmann::json diff;  // null = no diff
+        std::string path;
+        int added = 0, removed = 0;
     };
     std::mutex tev_mtx;
     std::vector<ToolEvent> tev_ready;
@@ -477,6 +492,8 @@ struct AppState : AskHandler {
     // Clickable "Thought" header rects recorded during the last frame:
     // (ChatLine index, header rect in window coords). Clicking one toggles.
     std::vector<std::pair<int, struct nk_rect>> thought_rects;
+    // Same for the "← Edit path" diff headers (click toggles the diff).
+    std::vector<std::pair<int, struct nk_rect>> diff_rects;
     // Image blocks drawn last frame: (ChatLine index, image rect). A click
     // inside copies the image to the clipboard (like text selection copies).
     std::vector<std::pair<int, struct nk_rect>> image_rects;
@@ -560,6 +577,23 @@ struct AppState : AskHandler {
                 E + "[48;2;20;60;30m+  full-width green diff line" + E + "[0m"});
             lines.push_back({"krastor",
                 E + "[48;2;80;20;20m-  full-width red diff line" + E + "[0m"});
+            // Sample file-edit diff block (side-by-side renderer test).
+            {
+                ChatLine dl{"sys", "", ""};
+                dl.diff_path = "C:\\dev\\demo\\app.cpp";
+                dl.diff_added = 2;
+                dl.diff_removed = 1;
+                dl.diff = nlohmann::json::parse(
+                    "{\"ops\":["
+                    "{\"op\":\" \",\"old\":10,\"new\":10,\"text\":\"int main() {\"},"
+                    "{\"op\":\"-\",\"old\":11,\"new\":0,\"text\":\"  return 0;\"},"
+                    "{\"op\":\"+\",\"old\":0,\"new\":11,\"text\":\"  int x = compute(42);\"},"
+                    "{\"op\":\"+\",\"old\":0,\"new\":12,\"text\":\"  return x;\"},"
+                    "{\"op\":\" \",\"old\":12,\"new\":13,\"text\":\"}\"},"
+                    "{\"op\":\" \",\"old\":30,\"new\":31,\"text\":\"// next hunk\"}"
+                    "],\"added\":2,\"removed\":1,\"truncated\":false}");
+                lines.push_back(std::move(dl));
+            }
             // Filler so the panel is scrollable (wheel/keyboard scroll tests).
             for (int i = 1; i <= 40; ++i) {
                 char buf[80];
@@ -662,6 +696,14 @@ struct AppState : AskHandler {
         lines.push_back({"you", shown});
         conv.add_user(text, std::move(b64));
         attachments.clear();
+        overflow_retried = false;  // fresh turn: the retry budget resets
+        launch_llm();
+    }
+
+    // Starts the LLM worker on the CURRENT conversation (used by send() and
+    // by the overflow-retry path after an automatic compaction).
+    void launch_llm()
+    {
         worker = Worker::Thinking;
         const LlmClient client(llm);          // snapshot: survives settings changes
         llm_cancel = std::make_shared<CancelToken>();
@@ -691,6 +733,20 @@ struct AppState : AskHandler {
                                  : "error: " + tr.error);
                 if (!tr.stderr_text.empty())
                     ev.body += "\nlog: " + tr.stderr_text;
+                // edit/write results: pull out the structured diff for the
+                // side-by-side renderer (parse never throws: discarded on
+                // malformed/truncated JSON, which just keeps the text block).
+                if (tr.ok) {
+                    const auto j = nlohmann::json::parse(tr.result, nullptr, false);
+                    if (!j.is_discarded() && j.is_object() &&
+                        j.contains("diff") && j["diff"].is_object() &&
+                        j["diff"].contains("ops")) {
+                        ev.diff = j["diff"];
+                        ev.path = j.value("path", std::string());
+                        ev.added = j["diff"].value("added", 0);
+                        ev.removed = j["diff"].value("removed", 0);
+                    }
+                }
                 std::lock_guard<std::mutex> lk(tev_mtx);
                 tev_ready.push_back(std::move(ev));
             };
@@ -799,6 +855,28 @@ struct AppState : AskHandler {
                     }
                 }
             } else if (m.role == "tool") {
+                // edit/write results carry a structured diff: re-render it
+                // as a diff block. The stored content may be truncated by
+                // cap_text, so parse must not throw; on failure the result
+                // simply folds into the tool block below as plain text.
+                const auto j = nlohmann::json::parse(m.content, nullptr, false);
+                const nlohmann::json* res = nullptr;
+                if (!j.is_discarded() && j.is_object()) {
+                    if (j.contains("diff") && j["diff"].is_object())
+                        res = &j;
+                    else if (j.contains("result") && j["result"].is_object() &&
+                             j["result"].contains("diff"))
+                        res = &j["result"];
+                }
+                if (res) {
+                    ChatLine dl{"sys", "", ""};
+                    dl.diff = (*res)["diff"];
+                    dl.diff_path = res->value("path", std::string());
+                    dl.diff_added = dl.diff.value("added", 0);
+                    dl.diff_removed = dl.diff.value("removed", 0);
+                    lines.push_back(std::move(dl));
+                    continue;
+                }
                 // Fold the result into the last tool block above it.
                 for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
                     if (it->who == "sys" && !it->think_label.empty()) {
@@ -902,6 +980,37 @@ struct AppState : AskHandler {
             return compact_conversation(client, conv, cfg.llm.context_size,
                                         cfg.llm.max_tokens, focus, cancel.get());
         });
+    }
+
+    // opencode v2 auto-compaction: after a completed turn, if the last
+    // request came within `compact_buffer` of the model's window, compact
+    // automatically (the buffer is max(NN% of window, 16k), see compactor.h).
+    void maybe_auto_compact()
+    {
+        if (!cfg.sessions.auto_compact || worker != Worker::None)
+            return;
+        const int ctx = cfg.llm.context_size;
+        if (ctx <= 0 || last_prompt_tokens <= 0)
+            return;
+        const int buf = compact_buffer_tokens(cfg.sessions.compact_buffer, ctx);
+        if (last_prompt_tokens > ctx - buf) {
+            lines.push_back({"sys", "auto-compacting (context " +
+                                    std::to_string(last_prompt_tokens) + "/" +
+                                    std::to_string(ctx) + ")"});
+            run_compact("auto");
+        }
+    }
+
+    // Provider rejected the context as too long (wording varies per vendor).
+    static bool is_context_overflow(const std::string& e)
+    {
+        std::string s = e;
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c) { return (char)std::tolower(c); });
+        const auto has = [&](const char* sub) { return s.find(sub) != std::string::npos; };
+        return (has("context") && (has("too long") || has("exceed") ||
+                                   has("length") || has("maximum"))) ||
+               has("too many tokens") || has("prompt is too long");
     }
 
     // Clears the visible chat WITHOUT touching the session or the LLM
@@ -1231,6 +1340,15 @@ struct AppState : AskHandler {
                 evs.swap(tev_ready);
             }
             for (auto& e : evs) {
+                if (!e.diff.is_null()) {
+                    ChatLine cl{"sys", "", ""};
+                    cl.diff = std::move(e.diff);
+                    cl.diff_path = std::move(e.path);
+                    cl.diff_added = e.added;
+                    cl.diff_removed = e.removed;
+                    lines.push_back(std::move(cl));
+                    continue;
+                }
                 ChatLine cl{"sys", "", ""};
                 cl.thinking = std::move(e.body);
                 cl.think_label = std::move(e.label);
@@ -1304,6 +1422,18 @@ struct AppState : AskHandler {
             // Turn complete (user + tool traffic + reply, or just the user
             // turn on error): persist it to the session folder.
             autosave_turn();
+            if (reply.ok) {
+                maybe_auto_compact();
+            } else if (!overflow_retried && is_context_overflow(reply.error) &&
+                       conv.turn_count() > 1) {
+                // Overflow recovery (opencode v2): compact and re-run the
+                // turn once; a second rejection is reported as a real error.
+                overflow_retried = true;
+                lines.push_back({"sys", "context overflow - compacting and "
+                                        "retrying the turn..."});
+                retry_after_compact = true;
+                run_compact("overflow");
+            }
         }
         if (worker == Worker::Compacting &&
             compact_fut.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
@@ -1326,8 +1456,17 @@ struct AppState : AskHandler {
                                 " messages (~" + std::to_string(cr.est_tokens_before) +
                                 " -> ~" + std::to_string(cr.est_tokens_after) +
                                 " tokens)"});
+                if (retry_after_compact) {
+                    // Overflow recovery: re-run the turn on the compacted
+                    // context (the user message is already in the history).
+                    retry_after_compact = false;
+                    launch_llm();
+                }
             } else if (cr.error != "cancelled") {
                 lines.push_back({"sys", "compact failed: " + cr.error});
+                retry_after_compact = false;
+            } else {
+                retry_after_compact = false;
             }
             follow_bottom = true;
         }
@@ -2325,6 +2464,231 @@ float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
     return total_h;
 }
 
+// ---------------------------------------------------------------- diff block
+// opencode-style collapsible file-edit block: a clickable header
+// ("← Edit path +N −M") over a side-by-side diff (old | new) when the chat
+// is wide enough, otherwise a unified single-column diff. Diff rows never
+// wrap: long lines are clipped with an ellipsis so every row is exactly one
+// line tall (cheap to render, easy to scan).
+
+// Clip one line to `max_w` pixels (UTF-8 aware), appending "..." when cut.
+std::string clip_line_w(const struct nk_user_font* f, const std::string& s,
+                        float max_w)
+{
+    if (max_w < 8.0f || text_w_px(f, s.data(), (int)s.size()) <= max_w)
+        return s;
+    std::string out;
+    float w = 0.0f;
+    const float dots = text_w_px(f, "...", 3);
+    size_t i = 0;
+    while (i < s.size()) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        size_t n = 1;
+        if ((c & 0xE0) == 0xC0) n = 2;
+        else if ((c & 0xF0) == 0xE0) n = 3;
+        else if ((c & 0xF8) == 0xF0) n = 4;
+        if (i + n > s.size())
+            break;
+        const std::string ch = s.substr(i, n);
+        const float cw = text_w_px(f, ch.data(), (int)ch.size());
+        if (w + cw + dots > max_w)
+            break;
+        w += cw;
+        out += ch;
+        i += n;
+    }
+    return out + "...";
+}
+
+// One rendered diff row: left/right cells; kind drives the backgrounds.
+struct DiffRow {
+    int old_no = 0, new_no = 0;
+    std::string old_text, new_text;
+    char kind = ' ';  // ' ' context | '-' del | '+' add | '~' changed pair
+    bool gap = false;  // hunk separator (line numbers jumped)
+};
+
+// Build display rows from filetool's flat op list: a run of '-'/'+' ops is
+// paired row-by-row into the side-by-side view; a context line whose numbers
+// jump over untouched lines inserts a gap separator.
+std::vector<DiffRow> diff_rows(const nlohmann::json& diff)
+{
+    std::vector<DiffRow> rows;
+    std::vector<const nlohmann::json*> dels, adds;
+    int last_old = 0, last_new = 0;
+    bool first = true;
+    auto flush = [&]() {
+        const size_t n = (std::max)(dels.size(), adds.size());
+        for (size_t k = 0; k < n; ++k) {
+            DiffRow r;
+            if (k < dels.size()) {
+                r.old_no = (*dels[k]).value("old", 0);
+                r.old_text = (*dels[k]).value("text", std::string());
+                last_old = r.old_no;
+            }
+            if (k < adds.size()) {
+                r.new_no = (*adds[k]).value("new", 0);
+                r.new_text = (*adds[k]).value("text", std::string());
+                last_new = r.new_no;
+            }
+            r.kind = (k < dels.size() && k < adds.size())
+                         ? '~'
+                         : (k < dels.size() ? '-' : '+');
+            rows.push_back(std::move(r));
+        }
+        dels.clear();
+        adds.clear();
+    };
+    for (const auto& op : diff["ops"]) {
+        const std::string o = op.value("op", std::string(" "));
+        if (o == "-") {
+            dels.push_back(&op);
+            continue;
+        }
+        if (o == "+") {
+            adds.push_back(&op);
+            continue;
+        }
+        flush();
+        const int on = op.value("old", 0), nn = op.value("new", 0);
+        if (!first && ((last_old > 0 && on > last_old + 1) ||
+                       (last_new > 0 && nn > last_new + 1))) {
+            DiffRow g;
+            g.gap = true;
+            rows.push_back(g);
+        }
+        first = false;
+        DiffRow r;
+        r.old_no = on;
+        r.new_no = nn;
+        r.old_text = r.new_text = op.value("text", std::string());
+        last_old = on;
+        last_new = nn;
+        rows.push_back(std::move(r));
+    }
+    flush();
+    return rows;
+}
+
+// Header + (when open) the diff panes. Returns the pixel height consumed;
+// the header rect is recorded into `rects` so a click can toggle it.
+float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
+                      int src_line, const EmojiAtlas* em,
+                      std::vector<std::pair<int, struct nk_rect>>* rects)
+{
+    const struct nk_user_font* f = ctx->style.font;
+    const float row_h = f && f->height > 0.0f ? f->height : 18.0f;
+    text_w = text_w < 40.0f ? 40.0f : text_w;
+
+    // Keep at most the last two path components so the header stays short.
+    std::string path = l.diff_path;
+    const size_t s1 = path.find_last_of("/\\");
+    if (s1 != std::string::npos && s1 > 0) {
+        const size_t s2 = path.find_last_of("/\\", s1 - 1);
+        if (s2 != std::string::npos)
+            path = "..." + path.substr(s2);
+    }
+    const std::string head =
+        std::string(l.diff_open ? "- " : "+ ") +
+        "\x1b[33mEdit \x1b[0m" + path + " \x1b[32m+" +
+        std::to_string(l.diff_added) + " \x1b[31m\xE2\x88\x92" +
+        std::to_string(l.diff_removed) + "\x1b[0m";
+    float total = draw_chat_line(ctx, "\xE2\x86\x90 ", head,
+                                 nk_rgb(230, 150, 60), text_w, -1, nullptr,
+                                 nullptr, em);
+    rects->push_back({src_line, nk_widget_bounds(ctx)});
+    if (!l.diff_open || !l.diff.is_object() || !l.diff.contains("ops") ||
+        !l.diff["ops"].is_array())
+        return total;
+
+    const auto rows = diff_rows(l.diff);
+    const bool side = text_w >= 640.0f;
+    const float gutter = 4.0f * text_w_px(f, "0", 1) + 6.0f;
+    const float gap_w = 10.0f;
+    const float pane_w = side ? (text_w - gap_w) / 2.0f : text_w;
+    const struct nk_color c_ctx = nk_rgb(170, 170, 175);
+    const struct nk_color c_del = nk_rgb(246, 142, 142);
+    const struct nk_color c_add = nk_rgb(140, 227, 158);
+    const struct nk_color c_num = nk_rgb(95, 95, 105);
+    const struct nk_color bg_del = nk_rgba(110, 36, 40, 120);
+    const struct nk_color bg_add = nk_rgba(24, 84, 44, 120);
+    constexpr int kMaxViewRows = 240;
+
+    struct nk_command_buffer* cv = nk_window_get_canvas(ctx);
+    auto dim_note = [&](const std::string& s) {
+        nk_layout_row_dynamic(ctx, row_h, 1);
+        const struct nk_rect a = nk_widget_bounds(ctx);
+        draw_token_mixed(cv, a.x + 6, a.y, row_h, s, f, c_num, em);
+        total += row_h;
+    };
+    // Unified row: mark + dim line number + clipped text on a full-width bg.
+    auto uni_row = [&](char mark, int no, const std::string& text,
+                       struct nk_color fg, struct nk_color bg) {
+        nk_layout_row_dynamic(ctx, row_h, 1);
+        const struct nk_rect a = nk_widget_bounds(ctx);
+        if (bg.a)
+            nk_fill_rect(cv, nk_rect(a.x, a.y, text_w, row_h), 0, bg);
+        const std::string ns = no ? std::to_string(no) : std::string();
+        const float nw = text_w_px(f, ns.data(), (int)ns.size());
+        draw_token_mixed(cv, a.x + 2, a.y, row_h, std::string(1, mark), f, fg,
+                         em);
+        draw_token_mixed(cv, a.x + 18 + gutter - nw, a.y, row_h, ns, f, c_num,
+                         em);
+        draw_token_mixed(cv, a.x + 18 + gutter, a.y, row_h,
+                         clip_line_w(f, text, text_w - gutter - 24), f, fg, em);
+        total += row_h;
+    };
+
+    int shown = 0;
+    for (const auto& r : rows) {
+        if (shown >= kMaxViewRows) {
+            dim_note("... " + std::to_string(rows.size() - kMaxViewRows) +
+                     " more lines");
+            break;
+        }
+        ++shown;
+        if (r.gap) {
+            dim_note("\xC2\xB7 \xC2\xB7 \xC2\xB7");  // · · ·
+            continue;
+        }
+        if (!side) {
+            // unified: a changed pair becomes a del row followed by an add row
+            if (r.kind == '-' || r.kind == '~')
+                uni_row('-', r.old_no, r.old_text, c_del, bg_del);
+            if (r.kind == '+' || r.kind == '~')
+                uni_row('+', r.new_no, r.new_text, c_add, bg_add);
+            if (r.kind == ' ')
+                uni_row(' ', r.old_no, r.old_text, c_ctx, nk_rgba(0, 0, 0, 0));
+            continue;
+        }
+        nk_layout_row_dynamic(ctx, row_h, 1);
+        const struct nk_rect a = nk_widget_bounds(ctx);
+        const float rx = a.x + pane_w + gap_w;
+        if (r.kind == '-' || r.kind == '~')
+            nk_fill_rect(cv, nk_rect(a.x, a.y, pane_w, row_h), 0, bg_del);
+        if (r.kind == '+' || r.kind == '~')
+            nk_fill_rect(cv, nk_rect(rx, a.y, pane_w, row_h), 0, bg_add);
+        const std::string ons = r.old_no ? std::to_string(r.old_no) : "";
+        const std::string nns = r.new_no ? std::to_string(r.new_no) : "";
+        draw_token_mixed(cv, a.x + gutter - 6 -
+                                 text_w_px(f, ons.data(), (int)ons.size()),
+                         a.y, row_h, ons, f, c_num, em);
+        draw_token_mixed(cv, rx + gutter - 6 -
+                                 text_w_px(f, nns.data(), (int)nns.size()),
+                         a.y, row_h, nns, f, c_num, em);
+        draw_token_mixed(cv, a.x + gutter, a.y, row_h,
+                         clip_line_w(f, r.old_text, pane_w - gutter - 6), f,
+                         (r.kind == '-' || r.kind == '~') ? c_del : c_ctx, em);
+        draw_token_mixed(cv, rx + gutter, a.y, row_h,
+                         clip_line_w(f, r.new_text, pane_w - gutter - 6), f,
+                         (r.kind == '+' || r.kind == '~') ? c_add : c_ctx, em);
+        total += row_h;
+    }
+    if (l.diff.value("truncated", false))
+        dim_note("... diff too large, showing the first part");
+    return total;
+}
+
 // ------------------------------------------------------------- media blocks
 // Image textures are uploaded lazily on the render thread at first draw (the
 // bytes come from disk, the clipboard or a base64 token; workers never touch
@@ -2582,6 +2946,17 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                     break;
                 }
             }
+            // Same for the "← Edit path" diff headers.
+            for (const auto& dr : app.diff_rects) {
+                const struct nk_rect& r = dr.second;
+                if (in->mouse.pos.x >= r.x && in->mouse.pos.x < r.x + r.w &&
+                    in->mouse.pos.y >= r.y && in->mouse.pos.y < r.y + r.h) {
+                    app.lines[dr.first].diff_open =
+                        !app.lines[dr.first].diff_open;
+                    toggled = true;
+                    break;
+                }
+            }
             if (toggled) {
                 app.sel_dragging = false;
             } else {
@@ -2670,6 +3045,7 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         float content_h = 0.0f;
         int src = 0;
         app.thought_rects.clear();
+        app.diff_rects.clear();
         app.image_rects.clear();
         // Images are always contained inside the chat text area: the max
         // block height is the visible group height (no scroll needed to see
@@ -2682,6 +3058,15 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
             struct nk_color col = nk_rgb(160, 160, 160);
             if (l.who == "you") col = nk_rgb(120, 180, 255);
             else if (l.who == "krastor") col = nk_rgb(130, 220, 150);
+            // File-edit diff (files edit/write): its own collapsible block,
+            // no plain text row of its own.
+            if (!l.diff.is_null()) {
+                content_h += draw_diff_block(ctx, l, text_w, src, &app.emoji,
+                                             &app.diff_rects) +
+                             spacing;
+                ++src;
+                continue;
+            }
             // Collapsible block (opencode-style "Thought · Ns"; tool calls
             // reuse it with a "⚙ tool · action" label).
             if (!l.thinking.empty()) {

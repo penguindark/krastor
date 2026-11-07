@@ -68,6 +68,18 @@ std::string cap_text(std::string s)
     return utf8_clean(std::move(s));
 }
 
+// filetool edit/write results carry a structured diff for the GUI renderer;
+// the model already knows what it changed, so the bulky op list must not
+// bloat its context. The GUI grabs the diff from the on_done hook instead.
+std::string strip_diff_for_model(const std::string& result)
+{
+    auto j = nlohmann::json::parse(result, nullptr, false);
+    if (j.is_discarded() || !j.is_object() || !j.contains("diff"))
+        return result;
+    j.erase("diff");
+    return j.dump();
+}
+
 } // namespace
 
 LlmReply agent_complete(const LlmClient& client, Conversation& conv,
@@ -113,7 +125,7 @@ LlmReply agent_complete(const LlmClient& client, Conversation& conv,
                 hooks.on_done(info, tr);
 
             conv.add_tool(tc.id,
-                           tr.ok ? cap_text(tr.result)
+                           tr.ok ? cap_text(strip_diff_for_model(tr.result))
                                  : "ERROR: " + cap_text(tr.error));
         }
         reply = client.complete(conv, cancel, tools);

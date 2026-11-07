@@ -130,12 +130,31 @@ Token estimate reuses the existing heuristic in `llm_client.cpp`
    Otherwise **rolling map-reduce**: summarize chunk 1, then
    `summary_so_far + chunk 2` → new summary, and so on. Each call is a plain
    `LlmClient::complete()` with the *current* model/config — no tools attached.
-3. Summarization prompt (fixed, English): preserve goals, decisions, file
-   paths/commands run, open questions, and anything the user asked to remember;
-   `focus` argument from the user is appended as extra instruction.
+3. Summarization prompt (fixed, English): **opencode v2 structured template**
+   (Objective / Requirements / Decisions / Work State Completed·Active·Blocked /
+   Next Move / Relevant Files / Important Context), terse bullets preserving
+   exact paths/commands/identifiers, summary written in the conversation's
+   language. **Update mode**: when the history already starts with a summary
+   marker, the prompt folds the newer history into that checkpoint instead of
+   summarizing from scratch. The transcript handed to the model escalates
+   through clipping levels (tool outputs clipped to 2k head+tail → dropped →
+   user text only → omitted) until it fits the chunk budget. `focus` argument
+   from the user is appended as extra instruction.
 4. Optional tail: the last messages whose total fits `budget * 0.2` are kept
    **verbatim after** the summary (recency beats fidelity).
 5. New history = system prompt + summary message + kept tail.
+
+### 3.4 Auto-compaction & overflow recovery (GUI)
+
+- **Auto**: after each completed turn, if the last request's `prompt_tokens`
+  came within `sessions.compact_buffer` of `llm.context_size` the compactor
+  runs by itself (`sessions.auto_compact`, default on). The buffer is
+  `"NN%"` of the window or a raw token count, floored at
+  `min(16k, ctx/2)` — opencode v2's reserve rule.
+- **Overflow**: if the provider rejects the request as context-too-long
+  (`is_context_overflow()` matches the usual wordings), Krastor compacts and
+  re-runs the turn **once** (`overflow_retried` budget resets on each new
+  user message). A second rejection is shown as a normal error.
 
 ### 3.3 On-disk effect
 
@@ -238,5 +257,6 @@ session folder** so the cleared state is persisted, matching user intent.
   replayed from `archive/` manually.
 - Attachments today are only pasted/dropped **images**; the file-ref format
   already supports arbitrary files if non-image attachments come later.
-- No automatic compaction yet (only explicit `/compact`); a "compact when
-  context > 85%" auto-prompt is a follow-up candidate.
+- Auto-compaction is on by default (`sessions.auto_compact`) with the
+  overflow retry above; pre-computing summaries in the background before the
+  limit (opencode's precompute) is a follow-up candidate.

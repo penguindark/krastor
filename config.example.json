@@ -40,6 +40,8 @@
   "sessions": {
     "dir": "",
     "autosave": true,
-    "continue_last": true
+    "continue_last": true,
+    "auto_compact": true,
+    "compact_buffer": "15%"
   }
 }

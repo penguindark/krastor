@@ -234,6 +234,15 @@ not Krastor's own voice or room noise; toggles `stt.denoise`/`stt.echo_cancel`
   LLM-driven context compaction tuned to the active model's context window,
   headless self-test `krastor --session-test`. Detailed design in
   `sessions_plan.md` (project root).
+- **Compaction v2 + edit diffs (built 2026-11-07).** The compactor follows
+  opencode v2: fixed structured summary template, progressive transcript
+  clipping, update mode over an existing checkpoint, **auto-compact** near the
+  context limit (`sessions.auto_compact`, buffer `max(NN%, 16k)`) and
+  automatic compact-and-retry on provider context-overflow errors. The
+  `files edit/write` tools return a structured line diff that the GUI renders
+  as a clickable side-by-side block (`← Edit path +N −M`, red/green panes,
+  unified fallback on narrow windows); the diff is stripped from the model's
+  context.
 - **Inline media (built 2026-11-07).** Images and sounds shown as blocks in
   the chat flow (`src/media.h/.cpp`): `/image <file|clipboard|base64:> [w [h]]`
   and `/play <file|beep>` commands plus reply tokens `[image: src | w | h]`

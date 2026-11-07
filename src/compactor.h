@@ -40,4 +40,15 @@ CompactResult compact_conversation(const LlmClient& client, Conversation& conv,
                                    const std::function<void(const std::string&)>&
                                        progress = {});
 
+// Free tokens that must stay available before auto-compaction triggers:
+// `buf` is "NN%" of the window or a raw token count (default "15%"),
+// floored at min(16k, window/2) - opencode v2's reserve rule.
+int compact_buffer_tokens(const std::string& buf, int context_size);
+
+// Exposed for --session-test (not for production use):
+std::string compactor_test_prompt(bool update);
+std::string compactor_test_transcript(const std::vector<Message>& msgs,
+                                      int level);  // 0..4 clip levels
+int compactor_test_est(const Message& m);
+
 } // namespace krastor

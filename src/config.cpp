@@ -128,6 +128,10 @@ Config Config::load(const std::string& path)
             cfg.sessions.autosave = j.value("autosave", cfg.sessions.autosave);
             cfg.sessions.continue_last =
                 j.value("continue_last", cfg.sessions.continue_last);
+            cfg.sessions.auto_compact =
+                j.value("auto_compact", cfg.sessions.auto_compact);
+            cfg.sessions.compact_buffer =
+                j.value("compact_buffer", cfg.sessions.compact_buffer);
         }
     }
 
@@ -189,6 +193,8 @@ void Config::save(const std::string& path) const
         {"dir", sessions.dir},
         {"autosave", sessions.autosave},
         {"continue_last", sessions.continue_last},
+        {"auto_compact", sessions.auto_compact},
+        {"compact_buffer", sessions.compact_buffer},
     };
 
     // Atomic write: serialize to a temp file, then rename over the target

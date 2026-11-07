@@ -75,6 +75,8 @@ struct SessionsConfig {
     std::string dir;                  // "" -> sessions/ next to the executable
     bool autosave = true;             // persist every completed turn
     bool continue_last = true;        // startup resumes the most recent session
+    bool auto_compact = true;         // compact automatically near the limit
+    std::string compact_buffer = "15%";  // free room kept ("NN%" or tokens)
 };
 
 struct Config {

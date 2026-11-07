@@ -186,6 +186,149 @@ json fail(const std::string& error)
     return {{"ok", false}, {"error", error}};
 }
 
+// ---------------------------------------------------------------- line diff
+// Line-based diff (LCS with common prefix/suffix trimming) so edit/write
+// results carry a renderable diff: Krastor's GUI draws it side-by-side like
+// opencode, the CLI prints it as colored unified lines.
+std::vector<std::string> split_lines(const std::string& s)
+{
+    std::vector<std::string> out;
+    size_t start = 0;
+    while (start <= s.size()) {
+        size_t nl = s.find('\n', start);
+        if (nl == std::string::npos) {
+            if (start < s.size())
+                out.push_back(s.substr(start));
+            break;
+        }
+        out.push_back(s.substr(start, nl - start));
+        start = nl + 1;
+    }
+    return out;
+}
+
+struct DiffOp {
+    char op;  // ' ' | '-' | '+'
+    int old_no;
+    int new_no;
+    std::string text;
+};
+
+std::vector<DiffOp> diff_lines(const std::vector<std::string>& a,
+                               const std::vector<std::string>& b)
+{
+    std::vector<DiffOp> ops;
+    size_t pre = 0;
+    while (pre < a.size() && pre < b.size() && a[pre] == b[pre])
+        ++pre;
+    size_t suf = 0;
+    while (suf + pre < a.size() && suf + pre < b.size() &&
+           a[a.size() - 1 - suf] == b[b.size() - 1 - suf])
+        ++suf;
+    const size_t na = a.size() - pre - suf, nb = b.size() - pre - suf;
+    for (size_t i = 0; i < pre; ++i)
+        ops.push_back({' ', (int)i + 1, (int)i + 1, a[i]});
+    if (na * nb > 4000000 || na > 4000 || nb > 4000) {
+        // huge middle: plain replace-all hunk (LCS would blow up)
+        for (size_t i = 0; i < na; ++i)
+            ops.push_back({'-', (int)(pre + i) + 1, 0, a[pre + i]});
+        for (size_t i = 0; i < nb; ++i)
+            ops.push_back({'+', 0, (int)(pre + i) + 1, b[pre + i]});
+    } else {
+        // classic LCS DP over the middle, then walk it back
+        std::vector<uint16_t> dp((na + 1) * (nb + 1), 0);
+        auto at = [&](size_t i, size_t j) -> uint16_t& { return dp[i * (nb + 1) + j]; };
+        for (size_t i = na; i-- > 0;)
+            for (size_t j = nb; j-- > 0;)
+                at(i, j) = a[pre + i] == b[pre + j]
+                               ? static_cast<uint16_t>(at(i + 1, j + 1) + 1)
+                               : (std::max)(at(i + 1, j), at(i, j + 1));
+        size_t i = 0, j = 0;
+        while (i < na && j < nb) {
+            if (a[pre + i] == b[pre + j]) {
+                ops.push_back({' ', (int)(pre + i) + 1, (int)(pre + j) + 1,
+                               a[pre + i]});
+                ++i;
+                ++j;
+            } else if (at(i + 1, j) >= at(i, j + 1)) {
+                ops.push_back({'-', (int)(pre + i) + 1, 0, a[pre + i]});
+                ++i;
+            } else {
+                ops.push_back({'+', 0, (int)(pre + j) + 1, b[pre + j]});
+                ++j;
+            }
+        }
+        while (i < na) {
+            ops.push_back({'-', (int)(pre + i) + 1, 0, a[pre + i]});
+            ++i;
+        }
+        while (j < nb) {
+            ops.push_back({'+', 0, (int)(pre + j) + 1, b[pre + j]});
+            ++j;
+        }
+    }
+    for (size_t k = 0; k < suf; ++k)
+        ops.push_back({' ', (int)(a.size() - suf + k) + 1,
+                       (int)(b.size() - suf + k) + 1, a[a.size() - suf + k]});
+    return ops;
+}
+
+// Keep 3 context lines around every change; drop the rest.
+std::vector<DiffOp> diff_hunks(const std::vector<DiffOp>& ops)
+{
+    std::vector<char> keep(ops.size(), 0);
+    for (size_t i = 0; i < ops.size(); ++i) {
+        if (ops[i].op == ' ')
+            continue;
+        const size_t lo = i > 3 ? i - 3 : 0;
+        const size_t hi = (std::min)(ops.size(), i + 4);
+        for (size_t k = lo; k < hi; ++k)
+            keep[k] = 1;
+    }
+    std::vector<DiffOp> out;
+    for (size_t i = 0; i < ops.size(); ++i)
+        if (keep[i])
+            out.push_back(ops[i]);
+    return out;
+}
+
+// JSON diff for the result: flat ops + counts (capped for message size).
+json diff_json(const std::string& before, const std::string& after)
+{
+    const auto ops = diff_hunks(diff_lines(split_lines(before),
+                                           split_lines(after)));
+    json arr = json::array();
+    int added = 0, removed = 0;
+    bool truncated = false;
+    constexpr size_t kMaxOps = 600;
+    for (size_t i = 0; i < ops.size(); ++i) {
+        if (ops[i].op == '-')
+            ++removed;
+        else if (ops[i].op == '+')
+            ++added;
+        if (arr.size() >= kMaxOps) {
+            truncated = true;
+            continue;
+        }
+        arr.push_back({{"op", std::string(1, ops[i].op)},
+                       {"old", ops[i].old_no},
+                       {"new", ops[i].new_no},
+                       {"text", ops[i].text}});
+    }
+    return {{"ops", std::move(arr)},
+            {"added", added},
+            {"removed", removed},
+            {"truncated", truncated}};
+}
+
+std::string read_text(const fs::path& p)
+{
+    std::ifstream f(p, std::ios::binary);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+
 // ------------------------------------------------------------------ actions
 
 json do_list(Ctx& c, const fs::path& p, std::string& err)
@@ -317,6 +460,7 @@ json do_write(Ctx& c, const fs::path& p, std::string& err)
         err = "file exists - pass overwrite:true to replace it";
         return json();
     }
+    const std::string before = exists ? read_text(p) : std::string();
     fs::create_directories(p.parent_path(), ec);
     std::ofstream f(p, std::ios::binary | std::ios::trunc);
     if (!f) {
@@ -329,7 +473,10 @@ json do_write(Ctx& c, const fs::path& p, std::string& err)
         err = "write failed on " + S(p);
         return json();
     }
-    return ok({{"path", S(p)}, {"written", data.size()}, {"created", !exists}});
+    return ok({{"path", S(p)},
+               {"written", data.size()},
+               {"created", !exists},
+               {"diff", diff_json(before, data)}});
 }
 
 json do_edit(Ctx& c, const fs::path& p, std::string& err)
@@ -349,6 +496,7 @@ json do_edit(Ctx& c, const fs::path& p, std::string& err)
     std::stringstream ss;
     ss << in.rdbuf();
     std::string data = ss.str();
+    const std::string before = data;
     int count = 0;
     size_t pos = 0;
     const bool all = c.args.value("all", false);
@@ -369,7 +517,9 @@ json do_edit(Ctx& c, const fs::path& p, std::string& err)
         return json();
     }
     out.write(data.data(), static_cast<std::streamsize>(data.size()));
-    return ok({{"path", S(p)}, {"replacements", count}});
+    return ok({{"path", S(p)},
+               {"replacements", count},
+               {"diff", diff_json(before, data)}});
 }
 
 json do_rename(Ctx& c, const fs::path& from, std::string& err)

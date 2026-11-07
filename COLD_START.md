@@ -108,7 +108,8 @@ working dir):
    `gui.*` (font, effetto sfondo, dimensione finestra), `agent.*`,
    `tools.enabled` (master switch dei tool esterni, vedi `tools_plan.md`),
     `sessions.*` (`dir` vuoto = `sessions\` accanto a `bin\`, `autosave`,
-    `continue_last` — vedi `sessions_plan.md`).
+    `continue_last`, `auto_compact` (default true) e `compact_buffer`
+     (default `"15%"`) — vedi `sessions_plan.md`).
    La GUI salva qui le proprie modifiche (Settings, zoom font, resize).
 
 ## 6. Compilare
@@ -158,6 +159,14 @@ sessione): `Ctrl+O` apre il gestore sessioni, `Ctrl+Shift+O` cicla le
 recenti, `/compact` riassume la sessione con il modello attivo, `/clean`
 (pulsante gomma) pulisce lo schermo senza toccare la sessione, `F1` o
 `/help` apre l'elenco di comandi e scorciatoie.
+Il compact è in stile opencode: template strutturato (Objective/Requirements/
+Decisions/Work State/Next Move/Relevant Files), modalità *update* quando
+esiste già un checkpoint, e **auto-compact** a fine turno quando il contesto
+supera `context_size − compact_buffer` (default 15%, minimo 16k token); se
+il provider rifiuta il contesto troppo lungo, Krastor compatta e **ritenta
+il turno una volta**. Le modifiche ai file dei tool `files edit/write`
+rendono un blocco diff cliccabile (`← Edit path +N −M`): side-by-side
+vecchio/nuovo con righe rosse/verdi, unified su finestre strette.
 Media nel chat: `/image <file|clipboard|base64:...> [w [h]]` mostra
 un'immagine (dimensioni opzionali, `-` = automatica; l'immagine è sempre
 contenuta nell'area testo), `/play <file|beep>` riproduce un audio con un

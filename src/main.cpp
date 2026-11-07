@@ -503,12 +503,46 @@ int run_tool_test()
            "\",\"find\":\"mondo\",\"replace\":\"pianeta\"}");
     check("files: edit", r.ok && r.result.find("\"replacements\":1") != std::string::npos,
           r.error);
+    // edit results carry a structured diff for the GUI side-by-side renderer.
+    {
+        const auto j = nlohmann::json::parse(r.result, nullptr, false);
+        const bool has_diff = !j.is_discarded() && j.contains("diff") &&
+                              j["diff"].is_object() &&
+                              j["diff"].contains("ops");
+        check("files: edit result carries diff", has_diff);
+        if (has_diff) {
+            int minus = 0, plus = 0;
+            for (const auto& op : j["diff"]["ops"]) {
+                if (op.value("op", "") == "-")
+                    ++minus;
+                else if (op.value("op", "") == "+")
+                    ++plus;
+            }
+            check("files: edit diff counts one -/+ pair",
+                  minus == 1 && plus == 1 &&
+                      j["diff"].value("added", 0) == 1 &&
+                      j["diff"].value("removed", 0) == 1,
+                  "-" + std::to_string(minus) + " +" + std::to_string(plus));
+        }
+    }
     r = fr("{\"action\":\"read\",\"path\":\"" + tag + "\",\"start\":5,\"end\":12}");
     check("files: byte-range read", r.ok && r.result.find("pianeta") != std::string::npos,
           r.error);
     r = fr("{\"action\":\"list\",\"path\":\".\"}");
     check("files: list workspace", r.ok && r.result.find(tag) != std::string::npos,
           r.error);
+    // overwrite-write results carry a diff too: one added line over the old
+    // content ("ciao pianeta" stays as context, "riga due" is the addition).
+    r = fr("{\"action\":\"write\",\"path\":\"" + tag +
+           "\",\"content\":\"ciao pianeta\\nriga due\",\"overwrite\":true}");
+    {
+        const auto j = nlohmann::json::parse(r.result, nullptr, false);
+        check("files: overwrite write carries diff",
+              r.ok && !j.is_discarded() && j.contains("diff") &&
+                  j["diff"].value("added", 0) == 1 &&
+                  j["diff"].value("removed", 0) == 0,
+              r.error);
+    }
     // --- files: delete always asks, even inside the sandbox --------------------
     r = fr("{\"action\":\"delete\",\"path\":\"" + tag + "\"}", &ask_deny);
     check("files: delete asks -> user deny honoured", !r.ok,
@@ -687,6 +721,63 @@ int run_session_test()
     check("deleted gone", !store.exists(id));
     check("other session survives", store.exists(id2));
     fs::remove_all(dir, ec);
+
+    // --- compactor helpers (opencode v2 template / clipping / buffer) ------------------
+    {
+        const std::string p_new = krastor::compactor_test_prompt(false);
+        const std::string p_upd = krastor::compactor_test_prompt(true);
+        check("compact prompt: structured template",
+              p_new.find("## Objective") != std::string::npos &&
+                  p_new.find("## Work State") != std::string::npos &&
+                  p_new.find("### Blocked") != std::string::npos &&
+                  p_new.find("## Relevant Files") != std::string::npos);
+        check("compact prompt: update mode wording",
+              p_upd.find("Update the existing checkpoint") != std::string::npos &&
+                  p_new.find("Update the existing checkpoint") == std::string::npos);
+
+        std::vector<krastor::Message> msgs;
+        krastor::Message u;
+        u.role = "user";
+        u.content = "fai X";
+        krastor::Message a;
+        a.role = "assistant";
+        a.tool_calls.push_back({"c1", "files", "{\"action\":\"read\"}"});
+        krastor::Message t;
+        t.role = "tool";
+        t.content = std::string("big output ") + std::string(6000, 'x');
+        msgs = {u, a, t};
+        const auto lv0 = krastor::compactor_test_transcript(msgs, 0);
+        const auto lv1 = krastor::compactor_test_transcript(msgs, 1);
+        const auto lv2 = krastor::compactor_test_transcript(msgs, 2);
+        const auto lv3 = krastor::compactor_test_transcript(msgs, 3);
+        const auto lv4 = krastor::compactor_test_transcript(msgs, 4);
+        check("transcript L0 keeps tool output",
+              lv0.find("big output") != std::string::npos &&
+                  lv0.find("[clipped]") == std::string::npos);
+        check("transcript L1 clips long tool output",
+              lv1.find("big output") != std::string::npos &&
+                  lv1.find("[clipped]") != std::string::npos);
+        check("transcript L2 drops tool output",
+              lv2.find("big output") == std::string::npos &&
+                  lv2.find("[tool result omitted]") != std::string::npos &&
+                  lv2.find("assistant calls files") != std::string::npos);
+        check("transcript L3 user text only",
+              lv3.find("fai X") != std::string::npos &&
+                  lv3.find("[tool") == std::string::npos &&
+                  lv3.find("assistant calls") == std::string::npos);
+        check("transcript L4 omits everything", lv4.empty());
+
+        check("compact buffer: 15% of 200k",
+              krastor::compact_buffer_tokens("15%", 200000) == 30000);
+        check("compact buffer: 16k floor on small windows",
+              krastor::compact_buffer_tokens("15%", 64000) == 16000);
+        check("compact buffer: raw tokens floored",
+              krastor::compact_buffer_tokens("5000", 200000) == 16000);
+        check("compact buffer: half-window cap on tiny windows",
+              krastor::compact_buffer_tokens("15%", 20000) == 10000);
+        check("compact buffer: garbage falls back to 15%",
+              krastor::compact_buffer_tokens("abc", 200000) == 30000);
+    }
 
     std::cout << "session-test: " << (failed ? std::to_string(failed) : "0")
               << " failed" << (failed ? "" : " - PASS") << "\n";
