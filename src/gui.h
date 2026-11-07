@@ -14,4 +14,8 @@ class VoiceRegistry;
 // Returns the process exit code.
 int run_gui(Config& cfg, VoiceRegistry& voices);
 
+// Headless Nuklear self-test (--gui-test): fullscreen base window + modal
+// stacking - clicking the base window must never make the modal read-only.
+int run_gui_stack_test();
+
 } // namespace krastor

@@ -80,6 +80,7 @@ No mocks — the test modes exercise the real subsystems:
 .\bin\krastor.exe --tool-test      # tools, permissions, diffs, compactor
 .\bin\krastor.exe --session-test   # session store, switching, compaction
 .\bin\krastor.exe --media-test     # image/sound blocks, fit-inside, split
+.\bin\krastor.exe --gui-test       # modal/window-stacking regression
 .\bin\krastor.exe --tts-filter-test
 .\bin\krastor.exe --fx-test        # mic denoise / echo cancel
 ```

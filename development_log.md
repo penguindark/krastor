@@ -1437,3 +1437,51 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   trademark"): Section 6 grants no trademark rights; an explicit TRADEMARK
   NOTICE appended reserves "Krastor" (Dario Deledda) and requires forks to
   be renamed. README License section updated accordingly.
+
+---
+
+## 2026-11-07 (later) - frozen Settings modal fixed (window stacking)
+
+- Reported: with Settings open, clicking the chat input made the modal stop
+  responding - no clicks registered, the title-bar X did nothing.
+- Root cause (Nuklear window stack): the main window covers the whole
+  viewport, so any click on it (the chat input) moves it to the top of the
+  stack; its bounds then contain every point, so the modal can never regain
+  the top and Nuklear marks it ``NK_WINDOW_ROM`` - every widget inside,
+  including the title-bar X, is silently read-only. Permanent until the app
+  restarted.
+- Fix: submit the main window with ``NK_WINDOW_BACKGROUND`` - the idiomatic
+  flag for a desktop/base window: never raised by clicks, never gets ROM;
+  clicking a modal transfers activation to it instead. Fixes Settings,
+  Sessions, Help and the permission dialog at once.
+- New headless regression test ``krastor --gui-test``: a real ``nk_context``
+  driven with synthetic mouse frames (fullscreen base + modal + button),
+  asserting the modal keeps receiving clicks after base-window clicks.
+  Verified it FAILS without the flag (reproduces the freeze) and PASSES with
+  it. Two Nuklear 4.13.3 API notes learned: ``ctx->seq`` advances in
+  ``nk_clear`` (the test must end frames with it), and buttons trigger on
+  press (``down && clicked``), so simulated clicks span two frames.
+- Both toolchains clean; all ``--*-test`` PASS.
+
+---
+
+## 2026-11-07 (later) - ANSI replies without ESC repaired (ansi_repair)
+
+- Reported: an "abbellito con colori ANSI" reply rendered as raw ``[48;5;26m``
+  text. Diagnosis via the session log: the tool results carried real ESCs
+  (91..218 ``\\u001b`` per line) but the assistant reply carried zero - the
+  model dropped the ESC bytes when copying colored tool output into its
+  answer. The pipeline was proven innocent: the configured endpoint echoes
+  ESC back intact both ways (direct probe), ``utf8_clean`` keeps ESC,
+  nlohmann preserves it - so it is model-side flakiness (control chars get
+  dropped in long generations, worse on quantized models).
+- Fix: ``ansi_repair()`` (ansi.h) re-inserts the missing ESC before bracketed
+  numeric SGR sequences; deliberately conservative (a line is touched only
+  with 2+ sequences or an explicit ``[0m``) so prose like "wait [5m]" stays
+  literal. Wired into ``md_to_ansi`` at the passthrough check (before the ESC
+  test, so mixed lines are fixed too) - GUI + CLI benefit, stored text stays
+  raw, fenced blocks and tables never touched.
+- 3 new ``--tool-test`` assertions (repair / prose untouched / already-escaped
+  verbatim) + UITEST seed line "repaired banner no ESC"; screenshot-verified
+  on the real session: the METEO SASSARI block now renders colored.
+- Both toolchains clean; all ``--*-test`` PASS.

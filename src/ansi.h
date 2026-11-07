@@ -12,6 +12,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cctype>
 #include <string>
 #include <vector>
 
@@ -165,6 +166,48 @@ inline std::vector<AnsiRun> ansi_parse(const std::string& in,
         }
     }
     return runs;
+}
+
+// Repairs SGR sequences that lost their ESC byte - models (and a few API
+// layers) often drop control characters when copying colored tool output into
+// a reply, leaving bare "[31m"/"[0m" text. Inserts the ESC back before every
+// bracketed numeric SGR sequence that is not already escaped. Deliberately
+// conservative: a line is touched only when it clearly carries an ANSI
+// payload (two or more sequences, or an explicit "[0m" reset), so ordinary
+// prose like "wait [5m]" stays literal.
+inline std::string ansi_repair(const std::string& in)
+{
+    std::vector<size_t> starts;  // '[' positions of bare SGR sequences
+    bool has_reset = false;
+    for (size_t i = 0; i + 1 < in.size(); ++i) {
+        if (in[i] != '[' || (i > 0 && in[i - 1] == '\x1b'))
+            continue;
+        size_t j = i + 1;
+        int groups = 0;
+        while (j < in.size() && (std::isdigit(static_cast<unsigned char>(in[j])) ||
+                                 in[j] == ';')) {
+            if (in[j] == ';')
+                ++groups;
+            ++j;
+        }
+        if (j < in.size() && in[j] == 'm' && j > i + 1) {
+            starts.push_back(i);
+            if (groups == 0 && in.compare(i, j - i + 1, "[0m") == 0)
+                has_reset = true;
+        }
+    }
+    if (starts.size() < 2 && !(has_reset && !starts.empty()))
+        return in;
+    std::string out;
+    out.reserve(in.size() + starts.size());
+    size_t prev = 0;
+    for (size_t s : starts) {
+        out.append(in, prev, s - prev);
+        out += '\x1b';
+        prev = s;
+    }
+    out.append(in, prev, std::string::npos);
+    return out;
 }
 
 } // namespace krastor

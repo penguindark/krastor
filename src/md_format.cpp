@@ -1,5 +1,7 @@
 #include "md_format.h"
 
+#include "ansi.h"
+
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -367,9 +369,12 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
         // Terminal passthrough: a line that already carries ESC bytes is
         // emitted verbatim (pre-styled tool output, ANSI art) while the
         // other lines keep their markdown formatting. Lines consumed inside
-        // a fenced block or table below never reach this check.
-        if (ln.find('\x1b') != std::string::npos) {
-            out.push_back(ln);
+        // a fenced block or table below never reach this check. Models often
+        // drop the ESC byte when copying colored tool output into a reply,
+        // so bare SGR sequences are repaired first (see ansi_repair).
+        const std::string repaired = ansi_repair(ln);
+        if (repaired.find('\x1b') != std::string::npos) {
+            out.push_back(repaired);
             ++i;
             continue;
         }

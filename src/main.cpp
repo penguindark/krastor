@@ -471,6 +471,18 @@ int run_tool_test()
         check("utf8_clean keeps ESC bytes",
               krastor::utf8_clean("\x1b[32mgreen\x1b[0m").find('\x1b') !=
                   std::string::npos);
+        // Models that drop the ESC byte (control chars lost in generation):
+        // bare SGR sequences are repaired into real escapes at format time.
+        const std::string fixed = krastor::md_to_ansi(
+            "[48;5;26m[38;5;231m  METEO [0m\nplain text");
+        check("ansi_repair restores dropped ESC bytes",
+              fixed.find("\x1b[48;5;26m\x1b[38;5;231m  METEO \x1b[0m") !=
+                  std::string::npos);
+        check("ansi_repair leaves prose alone",
+              krastor::md_to_ansi("wait [5m] ok").find('\x1b') ==
+                  std::string::npos);
+        check("ansi_repair keeps escaped sequences untouched",
+              krastor::md_to_ansi("\x1b[31mred\x1b[0m") == "\x1b[31mred\x1b[0m");
     }
 
     krastor::GrantStore grants;
@@ -992,7 +1004,7 @@ int main(int argc, char** argv)
         std::abort();
     });
 
-    // Args: [--gui] [--icon-test] [--fx-test] [--tts-filter-test]
+    // Args: [--gui] [--icon-test] [--fx-test] [--tts-filter-test] [--gui-test]
     //       [--session-test] [--media-test] [--session <id>] [--new-session]
     //       [--list-sessions]
     //       [--delete-session <id>] [--compact [focus]] [config.json]
@@ -1012,6 +1024,7 @@ int main(int argc, char** argv)
         else if (a == "--tool-test") return run_tool_test();
         else if (a == "--session-test") return run_session_test();
         else if (a == "--media-test") return run_media_test();
+        else if (a == "--gui-test") return krastor::run_gui_stack_test();
         else if (a == "--new-session") new_session_flag = true;
         else if (a == "--list-sessions") list_sessions_flag = true;
         else if (a == "--session" && i + 1 < argc) session_flag = argv[++i];

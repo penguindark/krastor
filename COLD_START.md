@@ -197,6 +197,9 @@ Senza argomenti parte la CLI (stessa chat, testuale): comandi `/sessions`,
 # media inline: parsing dei token [image:]/[sound:], taglie e scalatura
 # fit-inside, split delle risposte, decode di un WAV di test — senza LLM
 .\bin\krastor.exe --media-test
+# regression GUI (Nuklear headless): le modal restano cliccabili anche dopo
+# un click sulla finestra principale a schermo intero
+.\bin\krastor.exe --gui-test
 ```
 
 - Icone mancanti/emoji al posto delle SVG → sei partito da una cartella che

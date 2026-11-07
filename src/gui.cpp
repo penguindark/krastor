@@ -587,11 +587,14 @@ struct AppState : AskHandler {
                 E + "[48;2;80;20;20m-  full-width red diff line" + E + "[0m"});
             // ANSI art sample: raw SGR colors must render as colors while
             // the markdown around them survives (line-level passthrough).
+            // The last line has NO ESC bytes (as models often send): the
+            // repair pass must turn it into a navy banner with white text.
             lines.push_back({"krastor", fmt.format(
                 "### ANSI art check\n"
                 "\x1b[48;2;255;215;0m        \x1b[48;2;230;180;0m        "
                 "\x1b[48;2;200;140;0m        \x1b[0m amber blocks\n"
-                "- markdown list item **still styled**")});
+                "- markdown list item **still styled**\n"
+                "[48;5;26m[38;5;231m[1m repaired banner [0m[48;5;26m no ESC [0m")});
             // Sample file-edit diff block (side-by-side renderer test).
             {
                 ChatLine dl{"sys", "", ""};
@@ -3666,7 +3669,14 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         struct nk_context* ctx = &device.ctx;
 
         // ---- main surface (transparent: the shader shows through) ----
-        nk_begin(ctx, "Krastor", nk_rect(0, 0, (float)w, (float)h), 0);
+        // NK_WINDOW_BACKGROUND is essential: this window covers the whole
+        // viewport, so without the flag any click (e.g. the chat input below a
+        // modal) moves it to the top of Nuklear's stack; its fullscreen bounds
+        // then contain every point, so the modals above can never regain the
+        // top and Nuklear marks them NK_WINDOW_ROM - every widget inside,
+        // including the title-bar X, stops responding (frozen-modal bug).
+        nk_begin(ctx, "Krastor", nk_rect(0, 0, (float)w, (float)h),
+                 NK_WINDOW_BACKGROUND);
         {
             // A chat click requested keyboard focus: drop the input box's edit
             // focus (the edit lives in this window, so unfocus must run here).
@@ -4098,6 +4108,95 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
     nk_glfw3_shutdown(&device);
     glfwTerminate();
     return 0;
+}
+
+// ---- --gui-test: modal stacking regression (headless Nuklear) ----
+// Reproduces the frozen-settings-modal bug: the app's main window covers the
+// whole viewport, so when a click lands on it (e.g. the chat input) while a
+// modal is open, Nuklear's window activation moves the fullscreen window to
+// the top of the stack; its bounds then contain every point, so the modal can
+// never regain the top and gets marked NK_WINDOW_ROM - every widget inside it
+// (including the title-bar X) stops responding. The fix is to submit the base
+// window with NK_WINDOW_BACKGROUND. This test drives a real nk_context with
+// synthetic mouse frames and asserts the modal button keeps receiving clicks.
+namespace {
+
+float stack_font_width(nk_handle, float, const char* text, int len)
+{ return static_cast<float>(len) * 6.0f; }
+void stack_font_query(nk_handle, float height, struct nk_user_font_glyph* glyph,
+                      nk_rune, nk_rune)
+{
+    glyph->uv[0] = nk_vec2(0, 0);
+    glyph->uv[1] = nk_vec2(1, 1);
+    glyph->offset = nk_vec2(0, 0);
+    glyph->width = 6.0f;
+    glyph->height = height;
+    glyph->xadvance = 6.0f;
+}
+
+} // namespace
+
+int run_gui_stack_test()
+{
+    int failed = 0;
+    auto check = [&failed](bool ok, const char* what) {
+        std::printf("%s: %s\n", ok ? "ok  " : "FAIL", what);
+        if (!ok)
+            ++failed;
+    };
+
+    struct nk_context ctx;
+    struct nk_user_font font;
+    nk_zero(&font, sizeof(font));
+    font.height = 12.0f;
+    font.width = stack_font_width;
+    font.query = stack_font_query;
+    if (!nk_init_default(&ctx, &font)) {
+        std::printf("FAIL: nk_init_default\n");
+        return 1;
+    }
+    nk_style_set_font(&ctx, &font);
+
+    int hits = 0;
+    // One UI pass: fullscreen base window + modal with one big button.
+    auto ui_frame = [&]() {
+        nk_begin(&ctx, "Base", nk_rect(0, 0, 800, 600), NK_WINDOW_BACKGROUND);
+        nk_end(&ctx);
+        nk_begin(&ctx, "Modal", nk_rect(300, 100, 200, 300),
+                 NK_WINDOW_TITLE | NK_WINDOW_BORDER | NK_WINDOW_CLOSABLE);
+        nk_layout_row_dynamic(&ctx, 200, 1);
+        if (nk_button_label(&ctx, "hit"))
+            ++hits;
+        nk_end(&ctx);
+        nk_clear(&ctx);  // ends the frame (advances ctx->seq, like the backends do)
+    };
+    // A real click spans two frames: Nuklear 4.13 buttons trigger on press
+    // (nk_input_is_mouse_pressed requires down && clicked in the same frame).
+    auto click_at = [&](int x, int y) {
+        nk_input_begin(&ctx);
+        nk_input_motion(&ctx, x, y);
+        nk_input_button(&ctx, NK_BUTTON_LEFT, x, y, nk_true);
+        nk_input_end(&ctx);
+        ui_frame();
+        nk_input_begin(&ctx);
+        nk_input_motion(&ctx, x, y);
+        nk_input_button(&ctx, NK_BUTTON_LEFT, x, y, nk_false);
+        nk_input_end(&ctx);
+        ui_frame();
+    };
+
+    click_at(400, 250);   // sanity: modal button responds while on top
+    check(hits == 1, "modal button responds before the trigger click");
+    click_at(50, 550);    // click the base window outside the modal (trigger)
+    click_at(400, 250);   // modal must STILL respond (before the fix: ROM)
+    check(hits == 2, "modal still responds after clicking the fullscreen base");
+    click_at(50, 550);
+    click_at(400, 250);
+    check(hits == 3, "modal keeps responding after repeated base clicks");
+
+    nk_free(&ctx);
+    std::printf("gui-test: %d failed - %s\n", failed, failed ? "FAIL" : "PASS");
+    return failed ? 1 : 0;
 }
 
 } // namespace krastor
