@@ -230,11 +230,16 @@ session switching and LLM-driven compaction.
 - Session autosave ordering: always flush the OUTGOING session (autosave)
   BEFORE loading/creating another one - after `conv` was replaced the pending
   tail belongs to the wrong session and would be appended to the new folder.
-- Modal scrollable groups must size from `nk_window_get_content_region(ctx)`
-  (remaining content height queried after the top rows, minus the footer row
-  + spacing) - fixed `mh - K` formulas overflow once the title bar and row
-  spacing are counted, and the footer buttons end up below the window with a
-  second scrollbar around the modal.
+- Modal scrollable groups must size from the LIVE layout: after the top rows,
+  `remaining = nk_window_get_content_region(ctx).y + .h - ctx->current->layout->at_y`
+  and the group gets `remaining - footer row - 2*spacing`. Two traps:
+  `nk_window_get_content_region` returns `layout->clip` (the window's WHOLE
+  content rect, NOT the remaining space - fixed `mh - K` formulas and naive
+  uses of it overflow once the title bar and row spacing are counted, and the
+  footer buttons end up below the window with a second scrollbar), and groups
+  KEEP their scroll offset across frames, so call `nk_window_set_scroll(ctx,0,0)`
+  right after `nk_group_begin` (a group IS a window; `nk_group_set_scroll_id`
+  does not exist in 4.13.3) or a previously-scrolled box opens looking empty.
 
 ## Planned layout (roadmap)
 - `gui/` — GLSL effect passes, terminal I/O panel, attachments input (Phase 5)

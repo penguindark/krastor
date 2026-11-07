@@ -1284,14 +1284,21 @@ void permission_modal(struct nk_context* ctx, AppState& app, int win_w, int win_
         nk_layout_row_dynamic(ctx, 20, 1);
         nk_label(ctx, pa->action.c_str(), NK_LEFT);
         // The detail group gets EXACTLY the space left after the labels and
-        // the button row (queried from the live layout, not a fixed formula:
-        // a formula overflowed the window at larger font sizes, pushing the
-        // buttons off-screen behind a second scrollbar).
-        const struct nk_rect rem = nk_window_get_content_region(ctx);
+        // the button row. NOTE: nk_window_get_content_region returns the
+        // window's whole clip rect, NOT the remaining space - the consumed
+        // height must be subtracted via layout->at_y, or the group overflows
+        // the window (outer scrollbar + buttons pushed off-screen).
+        const struct nk_rect clip = nk_window_get_content_region(ctx);
+        const float remaining =
+            clip.y + clip.h - ctx->current->layout->at_y;
         const float detail_h = (std::max)(
-            60.0f, rem.h - 32.0f - ctx->style.window.spacing.y);
+            60.0f, remaining - 32.0f - 2.0f * ctx->style.window.spacing.y);
         nk_layout_row_dynamic(ctx, detail_h, 1);
         if (nk_group_begin(ctx, "##perm_detail", NK_WINDOW_BORDER)) {
+            // The scrollbar must live only inside this box: start each new
+            // request at the top (groups keep their scroll across frames;
+            // a group IS a window, so nk_window_set_scroll applies to it).
+            nk_window_set_scroll(ctx, 0, 0);
             // One row per detail line: nk_label_wrap renders literal '\n'
             // as a "?" glyph, so the lines are split here instead.
             size_t pos = 0;
@@ -1371,11 +1378,13 @@ void session_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
                      nk_rgb(110, 160, 220));
     // Exact remaining space (see the permission modal note): the footer row
     // stays inside the window, so only the list itself scrolls.
-    const struct nk_rect rem = nk_window_get_content_region(ctx);
-    const float list_h = (std::max)(80.0f,
-                                    rem.h - 30.0f - ctx->style.window.spacing.y);
+    const struct nk_rect clip = nk_window_get_content_region(ctx);
+    const float remaining = clip.y + clip.h - ctx->current->layout->at_y;
+    const float list_h = (std::max)(
+        80.0f, remaining - 30.0f - 2.0f * ctx->style.window.spacing.y);
     nk_layout_row_dynamic(ctx, list_h, 1);
     if (nk_group_begin(ctx, "##sess_list", NK_WINDOW_BORDER)) {
+        nk_window_set_scroll(ctx, 0, 0);  // always open at the top
         const auto sessions = app.store.list();
         int idx = 0;
         for (const auto& s : sessions) {

@@ -1126,10 +1126,17 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
 
 - The permission modal STILL overflowed (buttons cut off at the bottom, one
   scrollbar on the window): fixed row-height formulas cannot account for the
-  title bar + spacing at every font size. Both the permission modal and the
-  session modal now query ``nk_window_get_content_region()`` after the top
-  rows and give the scrollable group exactly ``remaining - footer row`` —
-  the footer can never be pushed out of the window again.
+  title bar + spacing at every font size. First fix attempt used
+  ``nk_window_get_content_region()`` as if it returned the REMAINING space -
+  it does not: it returns ``layout->clip`` (the window's whole content rect).
+  Correct formula (both modals now): ``remaining = clip.y + clip.h -
+  ctx->current->layout->at_y`` (queried after the top rows), group height =
+  ``remaining - footer row - 2*spacing``. The footer can never be pushed out
+  of the window again, and the only scrollbar left is the group's own.
+- Groups keep their scroll offset across frames, so a long detail from a
+  previous request left the box looking empty (scrolled past the text):
+  ``nk_window_set_scroll(ctx, 0, 0)`` right after ``nk_group_begin`` resets
+  it (a group IS a window; ``nk_group_set_scroll_id`` does not exist here).
 - New GUI slash commands: ``/voice`` toggles TTS output (same flag as the
   top-bar speaker button) and ``/mic`` toggles microphone capture
   (hands-free pipeline). The CLI keeps its existing ``/voice <id>`` (voice
