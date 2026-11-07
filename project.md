@@ -62,7 +62,9 @@ Krastor is a desktop agent for LLMs written in C++20. It:
 The main chat surface is a scrollable, monospaced (JetBrains Mono), terminal-style
 text view. Messages are parsed by `src/ansi.h` (ANSI/SGR: 16/256/truecolor fg+bg,
 bold; other escapes stripped) and drawn as styled runs with `nk_draw_text`:
-- diff-style full-line backgrounds when a whole visual line shares one bg color;
+- diff-style full-line backgrounds only when EVERY token on a visual line
+  shares one bg color (a table row with one inline-code cell paints per-token
+  so the code gray never bleeds past the cell);
 - inline per-token backgrounds otherwise;
 - indentation-preserving word wrap with UTF-8-safe hard breaks.
 LLM replies are styled by the output formatting plugins (`src/formatters.h`:
