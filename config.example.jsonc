@@ -41,6 +41,30 @@
     // }
   },
 
+  // Basic chat colors ("#rrggbb"), user-owned like the agents: the app never
+  // writes them back. Defaults are the opencode dark palette; edit what you
+  // want to change (delete a key = default). The user-message marker bar in
+  // the chat always uses the active agent's "color", it is not here.
+  "colors": {
+    "text": "#FFFFFF",            // default chat text
+    "assistant": "#82DC96",       // "Krastor: " role prefix
+    "system": "#A0A0A0",          // "! " system lines
+    "meta": "#6E6E78",            // dim stats sub-line (model - time - tok/s)
+    "thinking": "#E6963C",        // "+ Thought · Ns" header
+    "thinking_body": "#9696A0",   // expanded thought text
+    // Markdown palette (headings, lists, code, tables):
+    "md_h1": "#609BFF",           // # heading
+    "md_h2": "#56C7D9",           // ## and deeper headings
+    "md_bullet": "#E6963C",       // list bullets/numbers
+    "md_italic": "#CDA0FF",       // *italic* (bold + purple)
+    "md_link": "#609BFF",         // [text](url)
+    "md_sep": "#6E6E78",          // table borders, rules
+    "md_code": "#D2C878",         // `inline code` text
+    "md_code_bg": "#262830",      // `inline code` background
+    "md_block_bg": "#181A21",     // fenced code block background
+    "md_table_head": "#C678DD"    // table header row text
+  },
+
   "tts": {
     "models_dir": "models",
     "default_voice": "it-it-paola",

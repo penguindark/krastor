@@ -28,17 +28,81 @@ std::string bg(int r, int g, int b)
     return buf;
 }
 
-// Palette (dark theme, opencode-ish).
-const char* kH1      = "\x1b[38;2;96;155;255m";   // bright blue
-const char* kH2      = "\x1b[38;2;86;199;217m";   // cyan
-const char* kBullet  = "\x1b[38;2;230;150;60m";   // orange
-const char* kItalic  = "\x1b[38;2;205;160;255m";  // soft purple
-const char* kLink    = "\x1b[38;2;96;155;255m";   // blue
-const char* kSep     = "\x1b[38;2;110;110;120m";  // dim gray (table/rule bars)
-const char* kCodeFg  = "\x1b[38;2;210;200;120m";  // khaki inline code
-const char* kCodeBg  = "\x1b[48;2;38;40;48m";     // inline code background
-const char* kBlockBg = "\x1b[48;2;24;26;33m";     // fenced block background
-const char* kTableHead = "\x1b[38;2;198;120;221m"; // violet table header text
+// Palette (dark theme, opencode-ish) built as MdPalette: see md_format.h.
+// The md_* keys in config.jsonc "colors" override these through set().
+
+} // namespace
+
+namespace {
+
+// "#rrggbb" (or "rrggbb") -> rgb; false on anything invalid.
+bool hex_rgb(const std::string& hex, int& r, int& g, int& b)
+{
+    std::string s = hex;
+    if (!s.empty() && s[0] == '#')
+        s.erase(0, 1);
+    if (s.size() != 6)
+        return false;
+    int v = 0;
+    for (char c : s) {
+        int d;
+        if (c >= '0' && c <= '9')
+            d = c - '0';
+        else if (c >= 'a' && c <= 'f')
+            d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F')
+            d = c - 'A' + 10;
+        else
+            return false;
+        v = v * 16 + d;
+    }
+    r = (v >> 16) & 0xff;
+    g = (v >> 8) & 0xff;
+    b = v & 0xff;
+    return true;
+}
+
+} // namespace
+
+MdPalette::MdPalette()
+{
+    h1 = fg(96, 155, 255);      // bright blue
+    h2 = fg(86, 199, 217);      // cyan
+    bullet = fg(230, 150, 60);  // orange
+    italic = fg(205, 160, 255); // soft purple
+    link = fg(96, 155, 255);    // blue
+    sep = fg(110, 110, 120);    // dim gray (table/rule bars)
+    code_fg = fg(210, 200, 120);// khaki inline code
+    code_bg = bg(38, 40, 48);   // inline code background
+    block_bg = bg(24, 26, 33);  // fenced block background
+    table_head = fg(198, 120, 221);  // violet table header text
+}
+
+void MdPalette::set(const std::string& key, const std::string& hex)
+{
+    int r = 0, g = 0, b = 0;
+    if (!hex_rgb(hex, r, g, b))
+        return;
+    const std::string f = fg(r, g, b);
+    if (key == "h1")            h1 = f;
+    else if (key == "h2")       h2 = f;
+    else if (key == "bullet")   bullet = f;
+    else if (key == "italic")   italic = f;
+    else if (key == "link")     link = f;
+    else if (key == "sep")      sep = f;
+    else if (key == "code")     code_fg = f;
+    else if (key == "table_head") table_head = f;
+    else if (key == "code_bg")  code_bg = bg(r, g, b);
+    else if (key == "block_bg") block_bg = bg(r, g, b);
+}
+
+const MdPalette& md_palette_default()
+{
+    static const MdPalette kDefault;
+    return kDefault;
+}
+
+namespace {
 
 const char* kRule = "────────────────────────────────────────────────────────────";
 
@@ -106,7 +170,7 @@ std::string trim(const std::string& s)
 // ---- inline pass -------------------------------------------------------------
 bool is_space(char c) { return c == ' ' || c == '\t' || c == '\r'; }
 
-std::string inline_md(const std::string& s)
+std::string inline_md(const std::string& s, const MdPalette& pal)
 {
     std::string out;
     const size_t n = s.size();
@@ -117,8 +181,8 @@ std::string inline_md(const std::string& s)
         if (c == '`') {
             const size_t j = s.find('`', i + 1);
             if (j != std::string::npos && j > i + 1) {
-                out += kCodeFg;
-                out += kCodeBg;
+                out += pal.code_fg;
+                out += pal.code_bg;
                 out += s.substr(i + 1, j - i - 1);
                 out += kReset;
                 i = j + 1;
@@ -130,7 +194,7 @@ std::string inline_md(const std::string& s)
             const size_t j = s.find("**", i + 2);
             if (j != std::string::npos && j > i + 2) {
                 out += kBold;
-                out += inline_md(s.substr(i + 2, j - i - 2));
+                out += inline_md(s.substr(i + 2, j - i - 2), pal);
                 out += kReset;
                 i = j + 2;
                 continue;
@@ -145,8 +209,8 @@ std::string inline_md(const std::string& s)
                 ++j;
             if (j < n && j > i + 1 && !is_space(s[i + 1]) && !is_space(s[j - 1])) {
                 out += kBold;
-                out += kItalic;
-                out += inline_md(s.substr(i + 1, j - i - 1));
+                out += pal.italic;
+                out += inline_md(s.substr(i + 1, j - i - 1), pal);
                 out += kReset;
                 i = j + 1;
                 continue;
@@ -158,8 +222,8 @@ std::string inline_md(const std::string& s)
             if (close != std::string::npos) {
                 const size_t end = s.find(')', close + 2);
                 if (end != std::string::npos) {
-                    out += kLink;
-                    out += inline_md(s.substr(i + 1, close - i - 1));
+                    out += pal.link;
+                    out += inline_md(s.substr(i + 1, close - i - 1), pal);
                     out += kReset;
                     out += kDim;
                     out += " (" + s.substr(close + 2, end - close - 2) + ")";
@@ -323,7 +387,8 @@ std::vector<std::string> table_cells(const std::string& ln)
     return cells;
 }
 
-void append_block_bg(std::vector<std::string>& out, const std::string& code)
+void append_block_bg(std::vector<std::string>& out, const std::string& code,
+                     const MdPalette& pal)
 {
     size_t start = 0;
     while (start <= code.size()) {
@@ -335,7 +400,7 @@ void append_block_bg(std::vector<std::string>& out, const std::string& code)
         // the full-line background stays continuous.
         if (line.empty())
             line = " ";
-        out.push_back(std::string(kBlockBg) + line + kReset);
+        out.push_back(pal.block_bg + line + kReset);
         if (nl == std::string::npos)
             break;
         start = nl + 1;
@@ -344,7 +409,8 @@ void append_block_bg(std::vector<std::string>& out, const std::string& code)
 
 } // namespace
 
-std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
+std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl,
+                       const MdPalette& pal)
 {
     std::vector<std::string> lines;
     {
@@ -395,7 +461,7 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
             if (!lang.empty())
                 // Header bar: same background as the block so the renderer's
                 // full-line fill makes one continuous rectangle.
-                out.push_back(std::string(kBlockBg) + kDim + "  " + lang + kReset);
+                out.push_back(pal.block_bg + kDim + "  " + lang + kReset);
             const std::string styled = hl ? hl(code, lang) : std::string();
             // A block the highlighter never touched (no language, or unknown)
             // that carries an ANSI payload (the model pasted colored output
@@ -419,7 +485,7 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
                 if (repairable >= 2)
                     content = ansi_repair(code);
             }
-            append_block_bg(out, content);
+            append_block_bg(out, content, pal);
             continue;
         }
 
@@ -443,7 +509,7 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
             for (size_t r = 0; r < rows.size(); ++r)
                 for (size_t c = 0; c < cols; ++c) {
                     cell[r].push_back(c < rows[r].size()
-                                          ? inline_md(rows[r][c])
+                                          ? inline_md(rows[r][c], pal)
                                           : std::string());
                     w[c] = std::max(w[c], vis_cp(cell[r][c]));
                 }
@@ -462,7 +528,7 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
 
             // Horizontal rule: left/middle/right corners + dashes per column.
             auto bar = [&](const char* l, const char* m, const char* rc) {
-                std::string s = std::string(kSep) + l;
+                std::string s = pal.sep + l;
                 for (size_t c = 0; c < cols; ++c) {
                     for (size_t k = 0; k < w[c] + 2; ++k)
                         s += "─";
@@ -473,7 +539,7 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
 
             out.push_back(bar("┌", "┬", "┐"));
             for (size_t r = 0; r < rows.size(); ++r) {
-                std::string line = std::string(kSep) + "│" + kReset + " ";
+                std::string line = pal.sep + "│" + kReset + " ";
                 for (size_t c = 0; c < cols; ++c) {
                     const size_t raw = vis_cp(cell[r][c]);
                     const size_t pad = w[c] - raw;
@@ -482,12 +548,12 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
                                                           : 0;
                     line += std::string(left, ' ');
                     if (r == 0)
-                        line += std::string(kTableHead) + cell[r][c] + kReset;
+                        line += pal.table_head + cell[r][c] + kReset;
                     else
                         line += cell[r][c];
                     line += std::string(pad - left, ' ');
                     line += " ";
-                    line += kSep;
+                    line += pal.sep;
                     line += "│";
                     if (c + 1 < cols)
                         line += " ";
@@ -505,15 +571,15 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
         std::string rest;
         const int lvl = heading_level(ln, rest);
         if (lvl) {
-            out.push_back(std::string(lvl == 1 ? kH1 : kH2) + kBold +
-                          inline_md(rest) + kReset);
+            out.push_back((lvl == 1 ? pal.h1 : pal.h2) + kBold +
+                          inline_md(rest, pal) + kReset);
             ++i;
             continue;
         }
 
         // horizontal rule
         if (is_hr(ln)) {
-            out.push_back(std::string(kSep) + kRule + kReset);
+            out.push_back(pal.sep + kRule + kReset);
             ++i;
             continue;
         }
@@ -523,7 +589,7 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
             const std::string t = ltrim(ln);
             if (t.size() >= 2 && t[0] == '>' && (t[1] == ' ' || t[1] == '\t')) {
                 out.push_back(std::string(kDim) + "│ " +
-                              inline_md(trim(t.substr(1))) + kReset);
+                              inline_md(trim(t.substr(1)), pal) + kReset);
                 ++i;
                 continue;
             }
@@ -538,7 +604,8 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
         {
             std::string indent, body;
             if (list_item(ln, indent, body)) {
-                out.push_back(indent + kBullet + "- " + kReset + inline_md(ltrim(body)));
+                out.push_back(indent + pal.bullet + "- " + kReset +
+                              inline_md(ltrim(body), pal));
                 ++i;
                 continue;
             }
@@ -547,15 +614,15 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
         {
             std::string indent, num, body;
             if (olist_item(ln, indent, num, body)) {
-                out.push_back(indent + kBullet + num + " " + kReset +
-                              inline_md(ltrim(body)));
+                out.push_back(indent + pal.bullet + num + " " + kReset +
+                              inline_md(ltrim(body), pal));
                 ++i;
                 continue;
             }
         }
 
         // plain line
-        out.push_back(inline_md(ln));
+        out.push_back(inline_md(ln, pal));
         ++i;
     }
 

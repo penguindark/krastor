@@ -101,6 +101,10 @@ struct ChatLine {
     std::string diff_path;
     int diff_added = 0, diff_removed = 0;
     bool diff_open = true;
+    // "you" lines: the sending agent's accent color, drawn as a small
+    // vertical bar in the left margin (captured at send time, so old
+    // messages keep the color of the agent that wrote them).
+    int bar_r = 120, bar_g = 180, bar_b = 255;
     ChatLine() = default;
     ChatLine(std::string w, std::string t, std::string m = {})
         : who(std::move(w)), text(std::move(t)), meta(std::move(m)) {}
@@ -299,7 +303,8 @@ bool is_word_char(unsigned char c)
 // pass: every frame the wrap in draw_chat_line records a hit-map (pixel rect +
 // codepoint range per drawn token) and the mouse/keyboard map into it. The
 // virtual document is the ANSI-stripped text of all chat lines joined by '\n';
-// prefixes ("> ", "Krastor: ", "! ") and stats sub-lines are not selectable.
+// prefixes ("Krastor: ", "! ") and stats sub-lines are not selectable (the
+// "you" lines have no prefix: just the agent-color bar in the margin).
 struct ChatSeg {
     float x0, x1;      // pixel span of the token
     int line;          // source ChatLine index
@@ -361,6 +366,11 @@ struct AppState : AskHandler {
     // ---- multi-agent (config.jsonc "agents") ----
     std::string agent_id;          // active agent id (cfg.agent.active)
     int agent_r = 120, agent_g = 180, agent_b = 255;  // accent color (rgb)
+    // ---- chat color scheme (config.jsonc "colors", opencode-ish defaults) ----
+    // User-owned like the agents map: parsed once at startup, never edited
+    // at runtime, so no reload path is needed.
+    struct nk_color col_text, col_assistant, col_system, col_meta,
+                    col_thinking, col_think_body;
     LlmConfig eff;                 // effective LLM config for the active agent
     bool tools_active = false;     // tool-usage suffix applies to the prompt
     LlmModelRegistry models;       // llm_models.jsonc (Settings model combo)
@@ -542,6 +552,21 @@ struct AppState : AskHandler {
                 lines.push_back({"sys", l});
             tools_active = !tool_registry.empty();
         }
+        // Chat color scheme (config.jsonc "colors"): parse the hex entries
+        // once; the markdown palette (fmt) already came along with cfg.
+        {
+            auto hex = [](const std::string& s) {
+                int r = 255, g = 255, b = 255;
+                parse_hex_color(s, r, g, b);
+                return nk_rgb(r, g, b);
+            };
+            col_text = hex(c.colors.text);
+            col_assistant = hex(c.colors.assistant);
+            col_system = hex(c.colors.system);
+            col_meta = hex(c.colors.meta);
+            col_thinking = hex(c.colors.thinking);
+            col_think_body = hex(c.colors.thinking_body);
+        }
         // Agent bootstrap: effective LLM config (model_ref + thinking), the
         // composed system prompt (base + usage suffixes) and the persona
         // name/color — the exact same path Shift+Tab and session restore use.
@@ -635,6 +660,17 @@ struct AppState : AskHandler {
                               "filler line %d - the quick brown fox jumps over "
                               "the lazy dog", i);
                 lines.push_back({"sys", buf});
+            }
+            // User message sample after the filler (visible in a bottom-pinned
+            // screenshot): no prefix, just the sending agent's color bar in
+            // the left margin, text on the same character grid as the rest.
+            {
+                ChatLine you{"you", "user message: the bar on the left is the "
+                                    "agent color, the text keeps the grid"};
+                you.bar_r = agent_r;
+                you.bar_g = agent_g;
+                you.bar_b = agent_b;
+                lines.push_back(std::move(you));
             }
             // Markdown formatter sample, placed
             // after the filler so it is visible in a bottom-pinned screenshot.
@@ -755,7 +791,13 @@ struct AppState : AskHandler {
                 }
             }
         }
-        lines.push_back({"you", shown});
+        {
+            ChatLine you{"you", shown};
+            you.bar_r = agent_r;  // the left bar keeps the sender agent's color
+            you.bar_g = agent_g;
+            you.bar_b = agent_b;
+            lines.push_back(std::move(you));
+        }
         conv.add_user(model_text, std::move(b64));
         attachments.clear();
         overflow_retried = false;  // fresh turn: the retry budget resets
@@ -927,7 +969,13 @@ struct AppState : AskHandler {
                     t += "[+" + std::to_string(m.images.size()) +
                          (m.images.size() == 1 ? " image]" : " images]");
                 }
-                lines.push_back({"you", t});
+                ChatLine you{"you", t};
+                // Restored messages wear the session's agent color (the one
+                // active right now: apply_agent ran before this rebuild).
+                you.bar_r = agent_r;
+                you.bar_g = agent_g;
+                you.bar_b = agent_b;
+                lines.push_back(std::move(you));
             } else if (m.role == "assistant") {
                 for (const auto& tc : m.tool_calls) {
                     ChatLine tl{"sys", "", ""};
@@ -1030,10 +1078,11 @@ struct AppState : AskHandler {
         session_id = id;
         session_title = sm.title;
         saved_count = conv.messages().size();
-        rebuild_lines_from_conv();
-        // The session's agent comes back with it (unknown ids keep the current).
+        // The session's agent comes back with it (unknown ids keep the
+        // current) BEFORE the rebuild, so the restored "you" bars wear it.
         if (!sm.agent.empty() && sm.agent != agent_id)
             apply_agent(sm.agent);
+        rebuild_lines_from_conv();
         return true;
     }
 
@@ -2584,19 +2633,21 @@ std::vector<std::pair<std::string, int>> split_wide(const std::string& w,
 // with diff-style full-line backgrounds. Returns the pixel height consumed.
 // When src_line >= 0, every drawn body token is recorded into `hits` for the
 // selection hit-map, and the selection `sel` (if any) paints a highlight.
+// prefix_col overrides the prefix color (default: default_color).
 float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
                      const std::string& body, struct nk_color default_color,
                      float text_w, int src_line,
                      std::vector<ChatHitLine>* hits, const SelRange* sel,
-                     const EmojiAtlas* em = nullptr)
+                     const EmojiAtlas* em = nullptr,
+                     const struct nk_color* prefix_col = nullptr)
 {
     const struct nk_user_font* f = ctx->style.font;
     const float row_h = f && f->height > 0.0f ? f->height : 18.0f;
     text_w = text_w < 40.0f ? 40.0f : text_w;
 
+    const struct nk_color pcol = prefix_col ? *prefix_col : default_color;
     std::vector<AnsiRun> runs;
-    runs.push_back({prefix, default_color.r, default_color.g, default_color.b,
-                    false, 0, 0, 0, false});
+    runs.push_back({prefix, pcol.r, pcol.g, pcol.b, false, 0, 0, 0, false});
     auto body_runs = ansi_parse(body, default_color.r, default_color.g, default_color.b);
     runs.insert(runs.end(), body_runs.begin(), body_runs.end());
 
@@ -3307,17 +3358,26 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         app.thought_rects.clear();
         app.diff_rects.clear();
         app.image_rects.clear();
+        // User-message agent bars are painted after nk_group_end: the marker
+        // lives in the group's left padding, outside the group's clip rect.
+        std::vector<std::pair<struct nk_rect, struct nk_color>> you_bars;
         // Images are always contained inside the chat text area: the max
         // block height is the visible group height (no scroll needed to see
         // a whole image), the max width is text_w (media_fit does the rest).
         const float media_max_h =
             height - 2.0f * ctx->style.window.padding.y - 8.0f;
         for (const auto& l : app.lines) {
-            const std::string prefix = l.who == "you" ? "> " :
-                                       l.who == "krastor" ? app.name + ": " : "! ";
-            struct nk_color col = nk_rgb(160, 160, 160);
-            if (l.who == "you") col = nk_rgb(120, 180, 255);
-            else if (l.who == "krastor") col = nk_rgb(130, 220, 150);
+            // "you" lines carry no prefix: a small vertical bar in the
+            // sending agent's color marks them in the left margin (opencode
+            // style), so the text keeps the same character grid as every
+            // other line. Body text is the scheme's white; only the role
+            // prefixes are colored.
+            const std::string prefix = l.who == "krastor" ? app.name + ": " :
+                                       l.who == "sys" ? "! " : "";
+            struct nk_color col = app.col_text;         // body default
+            struct nk_color pcol = app.col_assistant;   // "Krastor: " prefix
+            if (l.who == "sys") col = pcol = app.col_system;
+            const struct nk_color bar_col = nk_rgb(l.bar_r, l.bar_g, l.bar_b);
             // File-edit diff (files edit/write): its own collapsible block,
             // no plain text row of its own.
             if (!l.diff.is_null()) {
@@ -3335,14 +3395,14 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                                                           : l.think_label);
                 if (!l.think_meta.empty())
                     head += " \xC2\xB7 " + l.think_meta;
-                content_h += draw_chat_line(ctx, "", head, nk_rgb(230, 150, 60),
+                content_h += draw_chat_line(ctx, "", head, app.col_thinking,
                                             text_w, -1, nullptr, nullptr,
                                             &app.emoji) +
                              spacing;
                 app.thought_rects.push_back({src, nk_widget_bounds(ctx)});
                 if (l.thought_open)
                     content_h += draw_chat_line(
-                        ctx, "  \xE2\x94\x82 ", l.thinking, nk_rgb(150, 150, 160),
+                        ctx, "  \xE2\x94\x82 ", l.thinking, app.col_think_body,
                         text_w, -1, nullptr, nullptr, &app.emoji) +
                                  spacing;
             }
@@ -3355,17 +3415,20 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                          : draw_media_sound(ctx, app, l.media, text_w)) +
                     spacing;
             // Pure tool blocks carry no text line of their own.
-            if (!l.text.empty() || (l.thinking.empty() && !l.media))
+            if (!l.text.empty() || (l.thinking.empty() && !l.media)) {
                 content_h += draw_chat_line(ctx, prefix, l.text, col, text_w, src,
                                             &app.chat_hits, has_sel ? &sel : nullptr,
-                                            &app.emoji) +
+                                            &app.emoji, &pcol) +
                              spacing;
+                if (l.who == "you")
+                    you_bars.push_back({nk_widget_bounds(ctx), bar_col});
+            }
             // Dim stats sub-line under the reply (model - time - tok/s).
             if (!l.meta.empty())
                 content_h += draw_chat_line(ctx, "  \xC2\xB7 ", l.meta,
-                                             nk_rgb(110, 110, 120), text_w,
-                                             -1, nullptr, nullptr,
-                                             &app.emoji) +
+                                            app.col_meta, text_w,
+                                            -1, nullptr, nullptr,
+                                            &app.emoji) +
                              spacing;
             ++src;
         }
@@ -3424,6 +3487,25 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
             nk_group_set_scroll(ctx, "##chat", 0, (nk_uint)bottom);
         }
         nk_group_end(ctx);
+        // User-message agent bars, now on the main window's clip (the group's
+        // own clip would cut the marker in the left padding). Clamped to the
+        // group's visible rect so a scrolled-out message paints nothing over
+        // the top bar or the input box.
+        {
+            struct nk_command_buffer* cv = nk_window_get_canvas(ctx);
+            for (const auto& b : you_bars) {
+                // The scissor after nk_group_end still starts at the group's
+                // left bound, so the marker hugs gb.x: a few px left of the
+                // text, outside the character grid (opencode style).
+                float x0 = b.first.x - 9.0f;
+                if (x0 < gb.x) x0 = gb.x;
+                float y0 = b.first.y + 2.0f, y1 = b.first.y + b.first.h - 2.0f;
+                if (y0 < gb.y) y0 = gb.y;
+                if (y1 > gb.y + gb.h) y1 = gb.y + gb.h;
+                if (y1 > y0)
+                    fill_px(cv, x0, y0, 3.0f, y1 - y0, b.second);
+            }
+        }
         // Post-end bookkeeping on the persistent offset:
         // - clamp any overshoot (Nuklear's own clamp stops working once the
         //   scrollbar auto-hides) so it can never be rendered;

@@ -1136,6 +1136,24 @@ int run_config_test()
     krastor::apply_agent_llm(eff, base, nullptr, reg);
     check("no agent keeps the model default", eff.reasoning_effort == "medium");
 
+    // --- colors: user-only scheme + markdown palette override -----------------
+    {
+        std::ofstream f(dir / "config.jsonc");
+        f << "{ \"colors\": { \"text\": \"#FF0000\", \"md_code\": \"#00FF00\" } }\n";
+    }
+    { std::ofstream(dir / "state.json")
+        << "{ \"colors\": { \"text\": \"#00FF00\" } }\n"; }
+    cfg = krastor::Config::load((dir / "config.jsonc").string());
+    check("colors parsed from config.jsonc", cfg.colors.text == "#FF0000");
+    check("colors are user-only (state.json ignored)",
+          cfg.colors.text == "#FF0000");
+    check("md_* overrides the markdown palette",
+          krastor::md_to_ansi("a `b`", nullptr, cfg.colors.md)
+              .find("\x1b[38;2;0;255;0m") != std::string::npos);
+    check("default palette keeps the opencode-ish code color",
+          krastor::md_to_ansi("a `b`")
+              .find("\x1b[38;2;210;200;120m") != std::string::npos);
+
     // --- save() round-trip: state schema, no agents map ------------------------------
     {
         std::ofstream f(dir / "config.jsonc");

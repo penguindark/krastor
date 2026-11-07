@@ -1774,3 +1774,42 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   `Poeta` shows in the top-left combo, the input accent bar and the thinking
   sweep/meter (162 + 270 amber px in the two crops).
 - Both toolchains clean; all `--*-test` PASS.
+
+---
+
+## 2026-11-08 - user-message agent bar + editable color scheme (opencode palette)
+
+- Request: user messages in the chat no longer get the `> ` prefix (it broke
+  the monospace grid alignment); instead a small vertical rectangle in the
+  active agent's color marks them in the left margin, opencode-style. Default
+  chat text becomes white (opencode), and a basic color scheme becomes
+  editable in the config, defaulting to the opencode palette.
+- `colors` section in config.jsonc (user-owned like `agents`: parsed from
+  the user file only, never written back): `text` (default #FFFFFF),
+  `assistant`, `system`, `meta`, `thinking`, `thinking_body` + the
+  markdown palette `md_*` (h1/h2/bullet/italic/link/sep/code/code_bg/
+  block_bg/table_head). `ColorScheme` in config.h holds the hex strings and
+  an `MdPalette`; `apply_json(cfg, root, user_only)` (param renamed from
+  `with_agents`) fills it.
+- `md_format`: the hardcoded SGR constants became a `MdPalette` struct
+  (prebuilt escape strings, opencode-ish defaults identical to the old
+  constants); `md_to_ansi(md, hl, pal)` takes it as an optional 3rd
+  argument, `MdPalette::set(key, hex)` overrides one entry;
+  `OutputFormatter` carries `cfg.colors.md` through. Trap: member
+  definitions must live outside the anonymous namespace (nested-namespace
+  member definitions are ill-formed).
+- GUI: `draw_chat_line` gained `prefix_col` (role prefix color separated
+  from the body default: white body, green `Krastor:`, gray `!`);
+  `ChatLine` gained `bar_r/g/b` captured at send time (restored messages
+  get the session agent's color - `switch_to_session` now applies the agent
+  BEFORE rebuilding lines). The bar is a 3 px rect painted after
+  `nk_group_end`: the group's scissor clips anything left of its bounds
+  (the padding is only ~4 px), so drawing inside the group was invisible;
+  the post-end pass clamps y to the group's visible rect so scrolled-out
+  messages cannot paint over the top bar or the input box.
+- `--config-test` +4 checks (24 total): colors parsed, user-only (state.json
+  ignored), `md_*` override reaches `md_to_ansi`, default palette intact.
+- UITEST seed gained a sample user line. Verified with the screenshot
+  harness: amber bars on every user message (783 amber px in the chat band,
+  0 stray azzurro), white text on the shared grid.
+- Both toolchains clean; all `--*-test` PASS.

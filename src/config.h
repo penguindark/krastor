@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#include "md_format.h"  // MdPalette (markdown colors of the "colors" scheme)
+
 namespace krastor {
 
 struct LlmConfig {
@@ -82,6 +84,20 @@ struct GuiConfig {
     bool format_output = true;      // Markdown/syntax formatting of LLM replies
 };
 
+// Basic chat color scheme (config.jsonc "colors", "#rrggbb"). User-owned
+// like the agents map: parsed from config.jsonc only, never written back.
+// Defaults are the opencode dark palette (white text). The user-message
+// marker bar is not here: it always uses the active agent's color.
+struct ColorScheme {
+    std::string text = "#FFFFFF";          // default chat text
+    std::string assistant = "#82DC96";     // "Krastor: " role prefix
+    std::string system = "#A0A0A0";        // "! " system/error lines
+    std::string meta = "#6E6E78";          // dim stats sub-line
+    std::string thinking = "#E6963C";      // "+ Thought · Ns" header
+    std::string thinking_body = "#9696A0"; // expanded thought text
+    MdPalette md;                          // markdown palette ("colors"."md_*")
+};
+
 struct AgentConfig {
     std::string name = "Krastor";       // base persona name (UI + window title)
     std::string active;                 // id of the selected agent in `agents`
@@ -112,6 +128,7 @@ struct Config {
     SttConfig stt;
     GuiConfig gui;
     AgentConfig agent;
+    ColorScheme colors;
     ToolsConfig tools;
     SessionsConfig sessions;
     // Selectable agents from config.jsonc "agents" (file order). When the

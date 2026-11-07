@@ -32,9 +32,10 @@ std::string env(const char* name)
 }
 
 // One JSONC object merged into `cfg` (every key optional). Called for
-// config.jsonc (with_agents = true) and again for state.json (false: the
-// agents map is user-owned and never lives in the state file).
-void apply_json(Config& cfg, const nlohmann::json& root, bool with_agents)
+// config.jsonc (user_only = true: the user-owned "agents" map and "colors"
+// scheme are read) and again for state.json (false: those sections are
+// user-owned and never live in the state file).
+void apply_json(Config& cfg, const nlohmann::json& root, bool user_only)
 {
     if (root.contains("llm") && root["llm"].is_object()) {
         const auto& j = root["llm"];
@@ -82,7 +83,7 @@ void apply_json(Config& cfg, const nlohmann::json& root, bool with_agents)
         cfg.agent.ignore_while_speaking =
             j.value("ignore_while_speaking", cfg.agent.ignore_while_speaking);
     }
-    if (with_agents && root.contains("agents") && root["agents"].is_object()) {
+    if (user_only && root.contains("agents") && root["agents"].is_object()) {
         cfg.agents.clear();
         for (const auto& [id, a] : root["agents"].items()) {
             AgentDef d;
@@ -96,6 +97,20 @@ void apply_json(Config& cfg, const nlohmann::json& root, bool with_agents)
             }
             cfg.agents.push_back(std::move(d));
         }
+    }
+    if (user_only && root.contains("colors") && root["colors"].is_object()) {
+        const auto& j = root["colors"];
+        cfg.colors.text = j.value("text", cfg.colors.text);
+        cfg.colors.assistant = j.value("assistant", cfg.colors.assistant);
+        cfg.colors.system = j.value("system", cfg.colors.system);
+        cfg.colors.meta = j.value("meta", cfg.colors.meta);
+        cfg.colors.thinking = j.value("thinking", cfg.colors.thinking);
+        cfg.colors.thinking_body =
+            j.value("thinking_body", cfg.colors.thinking_body);
+        // md_* keys feed the markdown palette ("md_code" -> palette "code").
+        for (const auto& [k, v] : j.items())
+            if (v.is_string() && k.size() > 3 && k.rfind("md_", 0) == 0)
+                cfg.colors.md.set(k.substr(3), v.get<std::string>());
     }
     if (root.contains("tools") && root["tools"].is_object()) {
         const auto& j = root["tools"];
@@ -340,8 +355,9 @@ void Config::save(const std::string& path) const
         {"auto_compact", sessions.auto_compact},
         {"compact_buffer", sessions.compact_buffer},
     };
-    // NOTE: the "agents" map is deliberately NOT written: it lives only in
-    // config.jsonc, where the user's comments are preserved forever.
+    // NOTE: the "agents" map and the "colors" scheme are deliberately NOT
+    // written: they live only in config.jsonc, where the user's comments are
+    // preserved forever.
 
     // Atomic write: serialize to a temp file, then rename over the target
     // (std::filesystem::rename replaces an existing file on both toolchains).

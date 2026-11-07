@@ -28,6 +28,7 @@ public:
 private:
     bool enabled_;
     CodeHighlightFn hl_;
+    MdPalette pal_;  // markdown palette from config "colors".md_*
 };
 
 } // namespace krastor
