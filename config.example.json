@@ -25,6 +25,8 @@
     "effect_intensity": 1.0,
     "window_w": 900,
     "window_h": 640,
+    "window_x": -1,
+    "window_y": -1,
     "format_output": true
   },
   "agent": {

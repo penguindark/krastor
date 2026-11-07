@@ -151,7 +151,7 @@ cd C:\Dev\krastor
 Finestra con chat stile terminale, sfondo shader, icone SVG (barra in alto:
 sessione corrente a tendina + tre pulsanti solo icona: hands-free, parlata,
 settings; cluster in basso a destra: send, allega immagine, ascolta, prova
-voce, pulisci schermo, stop). Enter invia, Ctrl+V incolla testo o
+voce, pulisci schermo, help, stop). Enter invia, Ctrl+V incolla testo o
 allega un'immagine, drag & drop di file nel box.
 Le chat sono **salvate automaticamente** in `sessions\` (una cartella per
 sessione): `Ctrl+O` apre il gestore sessioni, `Ctrl+Shift+O` cicla le

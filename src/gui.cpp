@@ -371,6 +371,7 @@ struct AppState : AskHandler {
     bool auto_speak = true;
     int last_prompt_tokens = 0;  // context occupancy = last request's prompt size
     bool follow_bottom = true;   // chat auto-scrolls to newest unless the user
+    float chat_bottom = 0.0f;    // last frame's max scroll offset (wheel clamp)
                                  // scrolled back up (wheel/keys clear the flag)
 
     // ---- Hands-free pipeline (mic -> STT -> chat -> LLM -> TTS) ----
@@ -2212,6 +2213,11 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
             float off = (float)sy - ctx->input.mouse.scroll_delta.y * row_h * 3.0f;
             if (off < 0.0f)
                 off = 0.0f;
+            // Clamp at the bottom too (previous frame's value): without this
+            // the wheel pushed the offset past the end BEFORE the content was
+            // drawn, so every tick flashed an over-scrolled frame (the bounce).
+            if (off > app.chat_bottom)
+                off = app.chat_bottom;
             nk_group_set_scroll(ctx, "##chat", 0, (nk_uint)off);
             ctx->input.mouse.scroll_delta.y = 0.0f;  // consumed
         }
@@ -2396,13 +2402,26 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         }
         if (app.follow_bottom) {
             nk_group_set_scroll(ctx, "##chat", 0, (nk_uint)bottom);
-        } else {
-            nk_uint sx = 0, sy = 0;
-            nk_group_get_scroll(ctx, "##chat", &sx, &sy);
-            if ((float)sy >= bottom - 4.0f)
-                app.follow_bottom = true;
         }
         nk_group_end(ctx);
+        // Post-end bookkeeping on the persistent offset:
+        // - clamp any overshoot (Nuklear's own clamp stops working once the
+        //   scrollbar auto-hides) so it can never be rendered;
+        // - wheel/drag reaching the bottom re-enables the follow pin;
+        // - a scrollbar drag that pulled the view up while pinned must
+        //   release the pin, otherwise the next frame snaps back to the
+        //   bottom and the drag is impossible.
+        {
+            nk_uint sx = 0, sy = 0;
+            nk_group_get_scroll(ctx, "##chat", &sx, &sy);
+            if ((float)sy > bottom)
+                nk_group_set_scroll(ctx, "##chat", 0, (nk_uint)bottom);
+            else if ((float)sy >= bottom - 4.0f)
+                app.follow_bottom = true;
+            else if (app.follow_bottom)
+                app.follow_bottom = false;  // drag pulled the view up
+        }
+        app.chat_bottom = bottom;
         nk_layout_row_end(ctx);
     }
     nk_style_pop_color(ctx);
@@ -2478,6 +2497,24 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
     }
     glfwMakeContextCurrent(win);
     glfwSwapInterval(1);  // vsync
+
+    // Restore the persisted position (-1 = let the OS place the window).
+    // Guard against a stale position from a disconnected monitor: only apply
+    // it when the title-bar area lands on some monitor's work area.
+    if (cfg.gui.window_x >= 0 && cfg.gui.window_y >= 0) {
+        const int mx = cfg.gui.window_x, my = cfg.gui.window_y;
+        int mon_n = 0;
+        GLFWmonitor** mons = glfwGetMonitors(&mon_n);
+        for (int m = 0; m < mon_n; ++m) {
+            int wx = 0, wy = 0, ww = 0, wh = 0;
+            glfwGetMonitorWorkarea(mons[m], &wx, &wy, &ww, &wh);
+            if (mx >= wx - 50 && mx + 200 <= wx + ww + 50 &&
+                my >= wy - 50 && my + 100 <= wy + wh + 50) {
+                glfwSetWindowPos(win, mx, my);
+                break;
+            }
+        }
+    }
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
         std::fprintf(stderr, "gui: gladLoadGLLoader failed\n");
@@ -2584,7 +2621,19 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         int w = 0, h = 0;
         glfwGetWindowSize(win, &w, &h);
 
-        // Window resized by the user: remember it (debounced, like font zoom).
+        // Window resized or moved by the user: remember it (debounced, like
+        // font zoom). Position is skipped while iconified (Windows reports a
+        // parked off-screen position for minimized windows).
+        const bool iconified = glfwGetWindowAttrib(win, GLFW_ICONIFIED) != 0;
+        if (!iconified) {
+            int px = 0, py = 0;
+            glfwGetWindowPos(win, &px, &py);
+            if (px != cfg.gui.window_x || py != cfg.gui.window_y) {
+                cfg.gui.window_x = px;
+                cfg.gui.window_y = py;
+                win_save_due = glfwGetTime() + 0.5;
+            }
+        }
         if (w != cfg.gui.window_w || h != cfg.gui.window_h) {
             cfg.gui.window_w = w;
             cfg.gui.window_h = h;
@@ -2953,10 +3002,10 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             // the selection handler can ignore clicks on it.
             const float fab_gap = 6.0f, fab_pad = 6.0f;
             const struct nk_rect fab_strip = nk_rect(
-                (float)w - (6.0f * fab_sz + 5.0f * fab_gap + 2.0f * fab_pad) - 10.0f,
+                (float)w - (7.0f * fab_sz + 6.0f * fab_gap + 2.0f * fab_pad) - 10.0f,
                 (float)h - (status_h + input_h + attach_h + 14.0f) -
                     (fab_sz + 2.0f * fab_pad),
-                6.0f * fab_sz + 5.0f * fab_gap + 2.0f * fab_pad,
+                7.0f * fab_sz + 6.0f * fab_gap + 2.0f * fab_pad,
                 fab_sz + 2.0f * fab_pad);
             app.fab_rect = fab_strip;
             chat_panel(ctx, app, chat_h > 60.0f ? chat_h : 60.0f);
@@ -2978,17 +3027,18 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                     bool enabled;
                 };
                 const bool busy = app.worker != AppState::Worker::None;
-                const FabBtn fabs[6] = {
+                const FabBtn fabs[7] = {
                     {"send", 0x1F680, "Send", "Send", !busy},
                     {"paperclip", 0x1F4CE, "Attach image from clipboard", "Img", true},
                     {"ear", 0x1F442, "Listen (mic, max 10 s)", "Mic", !busy},
                     {"volume-2", 0x1F3B5, "Test voice", "Voice", true},
                     {"eraser", 0x1F9F9, "Clear screen (keeps the session)", "Clr", true},
+                    {"help", 0x2753, "Help: commands & shortcuts (F1)", "Help", true},
                     {"square", 0x274C, "Stop: cancel request + silence", "Stop", true},
                 };
-                bool fab_click[6] = {false, false, false, false, false, false};
+                bool fab_click[7] = {false, false, false, false, false, false, false};
                 int fab_hover = -1;
-                for (int i = 0; i < 6; ++i) {
+                for (int i = 0; i < 7; ++i) {
                     const struct nk_rect slot = nk_rect(
                         fab_strip.x + fab_pad + (float)i * (fab_sz + fab_gap),
                         fab_strip.y + fab_pad, fab_sz, fab_sz);
@@ -3077,6 +3127,8 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 if (fab_click[4])
                     app.clean_screen();
                 if (fab_click[5])
+                    app.help_open = !app.help_open;
+                if (fab_click[6])
                     app.stop();
                 if (fab_click[0] && app.worker == AppState::Worker::None &&
                     app.input[0]) {

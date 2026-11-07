@@ -1186,3 +1186,35 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   the end of the frame below the hovered button so the chat group cannot
   paint over it - hands-free (shows ON/OFF + /mic), voice output (ON/OFF +
   /voice), Settings.
+
+---
+
+## 2026-11-07 (later) - chat wheel-scroll bounce at the bottom fixed
+
+- Scrolling down with the wheel past the end of the chat made the view bounce
+  vertically on every wheel tick; dragging the scrollbar up was snapped back
+  to the bottom. First diagnosis (Nuklear's group_end wheel clamp) was wrong:
+  the app consumes the wheel itself inside the chat group and only clamped
+  at 0, so the overshoot was written BEFORE the content was drawn - a
+  post-group_end clamp could never prevent the flashed frame.
+- Real fixes:
+  1. the app wheel handler now clamps at the bottom as well (previous frame's
+     ``chat_bottom`` - the exact bottom is only known after drawing);
+  2. a scrollbar drag that pulls the view up while the follow-bottom pin is
+     active now releases the pin (post-end: offset < bottom - 4 while
+     pinned -> follow_bottom = false), so dragging up works again;
+  3. reaching the bottom by wheel or drag re-pins in the same frame.
+
+---
+
+## 2026-11-07 (later) - help FAB + window position persistence
+
+- 7th floating button (new ``help`` Lucide icon, ``--icon-test`` now 13
+  icons): toggles the help overlay, same as F1 / ``/help``.
+- Window position was never persisted (only size) - what looked like
+  "vertical remembered, horizontal not" was Windows' default placement.
+  Added ``gui.window_x/window_y`` (-1 = OS default): saved debounced with
+  the size (skipped while iconified, Windows parks minimized windows
+  off-screen), restored after ``glfwCreateWindow`` only if the spot lands on
+  some monitor's work area (stale positions from disconnected monitors fall
+  back to the OS placement).

@@ -51,6 +51,8 @@ struct GuiConfig {
     double effect_intensity = 1.0;  // background brightness multiplier 0.2..3
     int window_w = 900;             // main window size, restored at startup
     int window_h = 640;
+    int window_x = -1;              // main window position (-1 = OS default)
+    int window_y = -1;
     bool format_output = true;      // Markdown/syntax formatting of LLM replies
 };
 
