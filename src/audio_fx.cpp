@@ -33,6 +33,8 @@ constexpr uint64_t kRefSize = 48000; // 3 s far-end ring @ 16 kHz
 void resample_stream(SpeexResamplerState* rs, std::vector<float>& src,
                      std::vector<float>& dst)
 {
+    if (!rs)
+        return;
     size_t off = 0;
     while (off < src.size()) {
         spx_uint32_t in_len =
@@ -250,6 +252,8 @@ void AudioFx::push_playback(const float* samples, int n, int sample_rate)
             I.rs_ref = speex_resampler_init(1, sample_rate, kRate, 3, &err);
             I.ref_rate = sample_rate;
         }
+        if (!I.rs_ref)
+            return;  // resampler init failed: skip the far-end, never feed null
         std::vector<float> raw(samples, samples + n);
         resample_stream(I.rs_ref, raw, ref16);  // distinct src/dst vectors
     }

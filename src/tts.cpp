@@ -135,15 +135,20 @@ struct Tts::Impl {
         dc.sampleRate = static_cast<ma_uint32>(sample_rate);
         dc.dataCallback = out_callback;
         dc.pUserData = this;
+        // Publish the rate BEFORE the callback can run: a callback firing
+        // between ma_device_start and the assignment below would hand rate 0
+        // to the AEC far-end resampler, whose init fails -> null resampler
+        // dereferenced (the crash on first speak).
+        out_rate = sample_rate;
         if (ma_device_init(nullptr, &dc, &out) != MA_SUCCESS ||
             ma_device_start(&out) != MA_SUCCESS) {
             std::fprintf(stderr,
                          "tts: no audio output device — speech will be silent\n");
             out_ok = false;
+            out_rate = 0;
             return false;
         }
         out_ok = true;
-        out_rate = sample_rate;
         return true;
     }
 
