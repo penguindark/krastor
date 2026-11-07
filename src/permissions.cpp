@@ -269,4 +269,20 @@ bool GrantStore::granted(PermClass cls, const std::string& canonical_path) const
     return false;
 }
 
+std::vector<std::pair<std::string, std::string>> GrantStore::list() const
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    std::vector<std::pair<std::string, std::string>> out;
+    out.reserve(grants_.size());
+    for (const auto& g : grants_)
+        out.emplace_back(perm_class_name(static_cast<PermClass>(g.first)), g.second);
+    return out;
+}
+
+void GrantStore::clear()
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    grants_.clear();
+}
+
 } // namespace krastor

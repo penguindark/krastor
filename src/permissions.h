@@ -90,6 +90,11 @@ public:
     void allow(PermClass cls, const std::string& canonical_path);
     bool granted(PermClass cls, const std::string& canonical_path) const;
 
+    // Snapshot of the live grants as (class name, path prefix) pairs, for
+    // the /grants command; clear() revokes them all without a restart.
+    std::vector<std::pair<std::string, std::string>> list() const;
+    void clear();
+
 private:
     mutable std::mutex mtx_;
     std::vector<std::pair<int, std::string>> grants_;  // (class, path prefix)

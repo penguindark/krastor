@@ -1249,6 +1249,25 @@ struct AppState : AskHandler {
             }
             return true;
         }
+        if (line == "/grants" || line.rfind("/grants ", 0) == 0) {
+            // "always allow" answers live only in this session; this is the
+            // way to inspect or revoke them without restarting.
+            if (arg_of("/grants") == "clear") {
+                tool_grants.clear();
+                lines.push_back({"sys", "all tool permissions revoked"});
+            } else {
+                auto gs = tool_grants.list();
+                if (gs.empty())
+                    lines.push_back({"sys", "no always-allow grants this session"});
+                else {
+                    lines.push_back({"sys", "always-allow grants (session):"});
+                    for (const auto& g : gs)
+                        lines.push_back({"sys", "  " + g.first + "  " + g.second});
+                    lines.push_back({"sys", "revoke all with /grants clear"});
+                }
+            }
+            return true;
+        }
         if (line == "/compact" || line.rfind("/compact ", 0) == 0) {
             run_compact(arg_of("/compact"));
             return true;
@@ -1815,7 +1834,9 @@ void help_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
               {"/session new [title]", "start a new session"},
               {"/session rename <t>", "rename the current session"},
               {"/title [title]", "show or set the current title"},
-              {"/compact [focus]", "summarize + shrink the session (LLM)"}});
+              {"/compact [focus]", "summarize + shrink the session (LLM)"},
+               {"/grants", "list always-allow tool permissions (session)"},
+               {"/grants clear", "revoke all always-allow tool permissions"}});
         section("Voice & screen");
         rows({{"/voice", "toggle voice output (TTS)"},
               {"/mic", "toggle microphone capture (hands-free)"},
@@ -2232,6 +2253,90 @@ char32_t utf8_next(const std::string& s, size_t i, size_t& len)
     if ((c & 0xF8) == 0xF0) { len = 4; return (char32_t(c & 0x07) << 18) | (cont(1) << 12) | (cont(2) << 6) | cont(3); }
     len = 1;
     return c;
+}
+
+// ---- "thinking..." shimmer (opencode-style) ----
+// The text keeps a fixed length; a band of light sweeps across its glyphs.
+// Math ported from opencode's tab-pulse.ts / shimmer-text.tsx: a sweep front
+// coasts across the string every kShimMs, each glyph's intensity follows a
+// smootherstep with a short head (leading edge) and long tail (comet trail),
+// and the glyph color is lerp(base, shimmer, intensity * amplitude).
+constexpr double kShimMs = 1600.0;  // one full sweep
+constexpr float kShimHead = 5.0f;   // leading-edge width in glyph cells
+constexpr float kShimTail = 10.0f;  // trail width in glyph cells
+constexpr float kShimAmp = 1.0f;    // peak blend: the band reaches full shimmer color
+constexpr float kShimFloor = 0.15f; // resting tint so the word is never fully static
+
+float shim_clamp(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
+
+float shim_smootherstep(float v)
+{
+    v = shim_clamp(v);
+    return v * v * v * (v * (v * 6.0f - 15.0f) + 10.0f);
+}
+
+// Ease with linear middle and eased ends (opencode's `coast`, ramp 0.2).
+float shim_coast(float v)
+{
+    const float ramp = 0.2f;
+    if (v < ramp)
+        return (v * v) / (2.0f * ramp * (1.0f - ramp));
+    if (v > 1.0f - ramp)
+        return 1.0f - ((1.0f - v) * (1.0f - v)) / (2.0f * ramp * (1.0f - ramp));
+    return (v - ramp / 2.0f) / (1.0f - ramp);
+}
+
+// Intensity of glyph `i` when the sweep front sits at `front`.
+float shim_intensity(float i, float front)
+{
+    const float d = front - i;
+    return d < 0.0f ? shim_smootherstep(1.0f + d / kShimHead)
+                    : shim_smootherstep(1.0f - d / kShimTail);
+}
+
+struct nk_color shim_mix(struct nk_color a, struct nk_color b, float t)
+{
+    return nk_rgb(
+        static_cast<int>(float(a.r) + (float(b.r) - float(a.r)) * t),
+        static_cast<int>(float(a.g) + (float(b.g) - float(a.g)) * t),
+        static_cast<int>(float(a.b) + (float(b.b) - float(a.b)) * t));
+}
+
+// Draws `text` glyph by glyph with the sweep; returns the total pixel width.
+float draw_shimmer_text(struct nk_command_buffer* cv, float x, float y,
+                        float row_h, const std::string& text,
+                        const struct nk_user_font* f, struct nk_color base,
+                        struct nk_color shimmer, double now)
+{
+    const int n = (int)text.size();
+    const float total = text_w_px(f, text.data(), n);
+    if (text.empty() || total <= 0.0f)
+        return 0.0f;
+    // Glyph positions are converted to cell units (0..cells) so they share
+    // `front`'s coordinate space (opencode addresses render cells).
+    const float cell_w = total / (float)n > 0.0f ? total / (float)n : 1.0f;
+    const double cyc = std::fmod(now * 1000.0, kShimMs) / kShimMs;
+    // Sweep range kept tight around the word: the band rides over the glyphs
+    // for most of the cycle (a wide off-text margin would leave the word
+    // static and dim for the majority of each loop).
+    const float front = -2.0f +
+                        shim_coast((float)cyc) * (float(n + 4.0f));
+    float cx = x;
+    size_t i = 0;
+    while (i < text.size()) {
+        size_t len = 1;
+        utf8_next(text, i, len);  // decode only to get the glyph's byte span
+        const float gw = text_w_px(f, text.data() + i, (int)len);
+        // Floor keeps a faint constant tint; the sweep rides on top of it.
+        const float cell = (cx + gw / 2.0f - x) / cell_w;
+        const float t = kShimFloor +
+                        shim_intensity(cell, front) * (kShimAmp - kShimFloor);
+        nk_draw_text(cv, nk_rect(cx, y, gw + 2.0f, row_h), text.data() + i,
+                     (int)len, f, nk_rgba(0, 0, 0, 0), shim_mix(base, shimmer, t));
+        cx += gw;
+        i += len;
+    }
+    return total;
 }
 
 // Draws one token: plain text via nk_draw_text; codepoints present in the
@@ -4048,9 +4153,13 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             // Status line + context usage footer.
             nk_layout_row_dynamic(ctx, status_h, 1);
             std::string status_buf;
-            if (app.worker == AppState::Worker::Thinking)
-                status_buf = "thinking...";
-            else if (app.worker == AppState::Worker::Compacting)
+            bool shim = false;  // draw the first word with the light sweep
+            if (app.worker == AppState::Worker::Thinking) {
+                // Fixed-length waiting indicator (opencode-style shimmer):
+                // the text never changes, a band of light sweeps across it.
+                status_buf = "thinking\xe2\x80\xa6";
+                shim = true;
+            } else if (app.worker == AppState::Worker::Compacting)
                 status_buf = "compacting session...";
             else if (app.worker == AppState::Worker::Listening)
                 status_buf = "listening... speak now (max 10 s)";
@@ -4078,7 +4187,30 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                               " / " + fmt_thousands(total) +
                               " (" + std::to_string(pct) + "%)";
             }
-            if (100.0 * app.last_prompt_tokens > 85.0 * cfg.llm.context_size)
+            const bool amber =
+                100.0 * app.last_prompt_tokens > 85.0 * cfg.llm.context_size;
+            if (shim && !status_buf.empty()) {
+                // Custom draw: shimmer on "thinking…", plain color on the rest
+                // (a plain nk_label would ignore the sweep). The slot rect
+                // comes from Nuklear's own layout bookkeeping.
+                const struct nk_rect slot = nk_layout_widget_bounds(ctx);
+                const struct nk_user_font* f = ctx->style.font;
+                const float fh = f->height;
+                const float ty = slot.y + (slot.h - fh) / 2.0f;
+                const struct nk_color base = amber ? nk_rgb(220, 180, 90)
+                                                   : ctx->style.text.color;
+                const std::string head = "thinking\xe2\x80\xa6";
+                const float w = draw_shimmer_text(
+                    &ctx->current->buffer, slot.x, ty, slot.h, head, f, base,
+                    nk_rgb(150, 200, 255), glfwGetTime());
+                const std::string rest = status_buf.substr(head.size());
+                if (!rest.empty())
+                    nk_draw_text(&ctx->current->buffer,
+                                 nk_rect(slot.x + w, ty, slot.w - w, fh),
+                                 rest.data(), (int)rest.size(), f,
+                                 nk_rgba(0, 0, 0, 0), base);
+            }
+            else if (amber)
                 nk_label_colored(ctx, status_buf.c_str(), NK_MIDDLE_LEFT,
                                  nk_rgb(220, 180, 90));
             else

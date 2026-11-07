@@ -71,6 +71,8 @@ void print_help()
         "  /session delete <x>  delete a session permanently\n"
         "  /session rename <t>  rename the current session\n"
         "  /compact [focus]   summarize + shrink the session with the LLM\n"
+        "  /grants            list this session's always-allow tool permissions\n"
+        "  /grants clear      revoke all always-allow tool permissions\n"
         "  /config            show the active LLM configuration\n"
         "  /exit              quit\n"
         "Anything else is sent to the LLM.\n\n";
@@ -1471,6 +1473,25 @@ int main(int argc, char** argv)
             arg.erase(0, arg.find_first_not_of(" \t"));
             if (arg.empty()) { std::cout << "usage: /say <text>\n"; continue; }
             tts.speak(arg);
+            continue;
+        }
+        if (line == "/grants" || line.rfind("/grants ", 0) == 0) {
+            std::string arg = line.size() > 7 ? line.substr(7) : "";
+            arg.erase(0, arg.find_first_not_of(" \t"));
+            if (arg == "clear") {
+                tool_grants.clear();
+                std::cout << "all tool permissions revoked\n";
+            } else {
+                auto gs = tool_grants.list();
+                if (gs.empty())
+                    std::cout << "no always-allow grants this session\n";
+                else {
+                    std::cout << "always-allow grants (session):\n";
+                    for (const auto& g : gs)
+                        std::cout << "  " << g.first << "  " << g.second << '\n';
+                    std::cout << "revoke all with /grants clear\n";
+                }
+            }
             continue;
         }
         if (line[0] == '/') {

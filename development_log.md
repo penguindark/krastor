@@ -1609,3 +1609,46 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   `/voice`) write it back with `cfg.save()`. The icon shows volume-x
   when off; `/say` and the voice-test FAB still speak on demand.
 - Both toolchains clean; all `--*-test` PASS.
+
+---
+
+## 2026-11-08 (later) - animated "thinking" shimmer in the status line
+
+- Request: an animated waiting indicator bottom-left while the LLM
+  reply is pending, WITHOUT changing the text length; opencode's look.
+- The status line now shows a fixed `thinking…` (U+2026 ellipsis, same
+  glyphs every frame) and a band of light sweeps across it, ported
+  from opencode's shimmer-text/tab-pulse math: sweep front coasts
+  across the word over a 1.6 s cycle, per-glyph intensity `smoother-
+  step` with head 5 / tail 10 cells, glyph color = lerp(base,
+  light-blue, floor 0.15 + intensity*0.85) - the floor keeps a faint
+  tint so the word never looks frozen between sweeps. Driven by
+  `glfwGetTime()` in the render loop (no timer needed, the game loop
+  redraws anyway).
+- `draw_shimmer_text()` draws glyph by glyph (UTF-8 decoded via
+  `utf8_next`, per-glyph `text_w_px` advance). Two traps hit: (1) a
+  hand-computed row rect from `layout->at_y` drew outside the visible
+  row (invisible text) - `nk_layout_widget_bounds` is the only
+  reliable slot rect; (2) the first version mixed units - glyph
+  positions in pixels vs the sweep front in cell indices, so only the
+  first ~2 glyphs ever lit; glyph centers are now converted to cell
+  units (`px / (total/n)`). The `| ctx: ...` tail is drawn right after
+  the shimmer word with the plain label color.
+- Verified with the `KRASTOR_UITEST` auto-send screenshot harness: the
+  captured strips show the light band at different positions across
+  frames while the text stays identical.
+- Both toolchains clean; all `--*-test` PASS.
+
+---
+
+## 2026-11-08 (later) - `/grants`: inspect and revoke always-allow permissions
+
+- Request: after answering "always allow" to a tool prompt, there was no
+  way to change one's mind - the grants live in memory for the whole
+  session (never persisted), so the only escape was restarting.
+- `GrantStore` gains `list()` (snapshot as class-name + path-prefix
+  pairs, mutex-guarded, names via `perm_class_name`) and `clear()`.
+- New `/grants` command in GUI and CLI: bare `/grants` lists the live
+  grants (or says there are none), `/grants clear` revokes them all.
+  Also in the GUI help palette and the CLI `/help`.
+- Both toolchains clean; all `--*-test` PASS.
