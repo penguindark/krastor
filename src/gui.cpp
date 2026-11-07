@@ -617,6 +617,16 @@ struct AppState : AskHandler {
                 "|---|---|:---:|\n"
                 "| `bfd3305` | Print loaded config path at startup | 2026-10-25 09:16 |\n"
                 "| `12ec6e3` | Code-block aesthetics + settings spacing | 2026-10-25 09:10 |")});
+            // Wide table sample (long third column, inline code + em dash):
+            // regression check for bar/row width alignment in the renderer.
+            lines.push_back({"krastor", fmt.format(
+                "| File | Dimensione | Cosa contiene |\n"
+                "|---|---|---|\n"
+                "| `cube_100x40.txt` | 9.005 B | ASCII puro, 40 righe × 100 caratteri, tre shade di block |\n"
+                "| `cube_100x40_giallo.ansi.txt` | 38.567 B | ANSI, un codice colore per ogni carattere (ridondante) |\n"
+                "| `cube_100x40_giallo.runs.ansi.txt` | 9.878 B | ANSI ottimizzato a \"run\" — questo è quello buono per il terminale |\n"
+                "| `cube_100x40_giallo.svg` | 4.976 B | Render immagine (palette ambra) |\n"
+                "| `cube_100x40_ansi_render.svg` | 4.976 B | Render immagine con i colori esatti dei codici ANSI |")});
             // Code-block sample with an interior blank line (background
             // continuity regression for append_block_bg).
             lines.push_back({"krastor", fmt.format(
@@ -2399,14 +2409,20 @@ float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
     struct nk_command_buffer* canvas = nk_window_get_canvas(ctx);
     float y = area.y;
     for (const auto& ln : lines) {
-        // Diff-style full-line background only when every colored token on the
-        // visual line shares one background color; otherwise paint per-token
-        // backgrounds so inline highlights (bg: X) do not bleed across the line.
+        // Diff-style full-line background only when every token on the visual
+        // line carries the same background; a single token without one (a table
+        // border, plain cell text next to an inline-code cell) means the line
+        // is not a full-line background, so paint per-token backgrounds instead
+        // and inline highlights (bg: X, `code`) do not bleed across the line.
         struct nk_color bg = nk_rgba(0, 0, 0, 0);
         bool uniform = true;
         for (const auto& w : ln) {
-            if (!w.bg.a)
+            if (w.text.empty())
                 continue;
+            if (!w.bg.a) {
+                uniform = false;
+                break;
+            }
             if (!bg.a)
                 bg = w.bg;
             else if (bg.r != w.bg.r || bg.g != w.bg.g || bg.b != w.bg.b) {

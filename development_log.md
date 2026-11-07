@@ -1343,3 +1343,29 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
      for web content, python ONLY as a last resort"; the python manifest
      description starts with "LAST RESORT tool: ...". Covered by
      ``--tool-test``.
+
+---
+
+## 2026-11-07 (later) - GUI fix: inline-code background bled across the whole line
+
+- Reported behavior: thin gray lines extending past the right border of
+  markdown tables. Root cause in ``draw_chat_line``: the "diff full-line
+  background" check only compared tokens that HAVE a background, so a table
+  row like ``│ `code` │ text │`` - where the only bg-carrying token is the
+  inline-code cell - counted as "uniform" and the code's gray background was
+  filled across the entire text width. Same bug made ``bg: X`` inline
+  highlights bleed over the whole line.
+- Fix: a visual line is uniform only when EVERY non-empty token carries the
+  same background; any token without one (table border, plain cell text)
+  falls back to per-token background painting. True full-line diff rows
+  (single bg run, or every word sharing the diff bg) still fill the line.
+- Verified with the screenshot harness (``KRASTOR_UITEST`` + window raise +
+  ``CopyFromScreen``): tables now show box borders with the code-cell gray
+  confined to the code text; the seeded full-width green/red diff lines and
+  the side-by-side diff block are unchanged. The UITEST seed gained a wide
+  table sample (long third column, inline code + em dash) as a regression
+  check. NOTE: box-drawing glyphs need ``data/fonts`` relative to the CWD -
+  launch from the repo root, otherwise the atlas falls back to the built-in
+  font and ``│ ─`` render blank.
+- Both toolchains clean; ``--tool-test``/``--session-test``/``--media-test``
+  all PASS.
