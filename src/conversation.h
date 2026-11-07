@@ -41,6 +41,16 @@ public:
     // Clears the history but keeps the system prompt.
     void reset();
 
+    // Replaces the whole history (system prompt kept as first message);
+    // `history` must not contain a system message. Used to restore persisted
+    // sessions and compacted histories (see sessions_plan.md).
+    void replace_history(std::vector<Message> history);
+
+    // Messages added since index `idx` (used to persist new turns).
+    std::vector<Message> messages_since(size_t idx) const;
+
+    const std::string& system_prompt() const { return system_prompt_; }
+
     // System prompt + full history, ready to serialize for the API.
     const std::vector<Message>& messages() const { return messages_; }
 

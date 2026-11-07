@@ -106,7 +106,9 @@ working dir):
    con fallback env `KRASTOR_API_KEY` → `OPENAI_API_KEY`),
    `tts.default_voice` (`it-it-paola`), `stt.input_device` (-1 = default),
    `gui.*` (font, effetto sfondo, dimensione finestra), `agent.*`,
-   `tools.enabled` (master switch dei tool esterni, vedi `tools_plan.md`).
+   `tools.enabled` (master switch dei tool esterni, vedi `tools_plan.md`),
+    `sessions.*` (`dir` vuoto = `sessions\` accanto a `bin\`, `autosave`,
+    `continue_last` — vedi `sessions_plan.md`).
    La GUI salva qui le proprie modifiche (Settings, zoom font, resize).
 
 ## 6. Compilare
@@ -147,11 +149,16 @@ cd C:\Dev\krastor
 ```
 
 Finestra con chat stile terminale, sfondo shader, icone SVG (barra in alto:
-Hands-free / Speak / Settings; cluster in basso a destra: send, allega
-immagine, ascolta, prova voce, stop). Enter invia, Ctrl+V incolla testo o
-allega un'immagine, drag & drop di file nel box.
+sessione corrente a tendina / Hands-free / Speak / Settings; cluster in basso
+a destra: send, allega immagine, ascolta, prova voce, stop). Enter invia,
+Ctrl+V incolla testo o allega un'immagine, drag & drop di file nel box.
+Le chat sono **salvate automaticamente** in `sessions\` (una cartella per
+sessione): `Ctrl+O` apre il gestore sessioni, `Ctrl+Shift+O` cicla le
+recenti, `/compact` riassume la sessione con il modello attivo.
 
-Senza argomenti parte la modalità CLI (stessa chat, testuale).
+Senza argomenti parte la CLI (stessa chat, testuale): comandi `/sessions`,
+`/session new|open|delete|rename`, `/compact`; flag `--session <id>`,
+`--new-session`, `--list-sessions`, `--delete-session <id>`, `--compact`.
 
 ## 8. Verifiche rapide
 
@@ -163,6 +170,9 @@ Senza argomenti parte la modalità CLI (stessa chat, testuale).
 # sistema dei tool esterni: gira i 3 tool senza LLM (scrittura nel sandbox,
 # deny floor, webfetch, python) e stampa PASS/FAIL per riga
 .\bin\krastor.exe --tool-test
+# sistema delle sessioni: round-trip cartella/alleati/tool call, tolleranza
+# ai crash, archivio del compact, delete — senza LLM
+.\bin\krastor.exe --session-test
 ```
 
 - Icone mancanti/emoji al posto delle SVG → sei partito da una cartella che

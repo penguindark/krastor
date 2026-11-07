@@ -3,15 +3,21 @@
 // TTS voice selection. STT/TTS audio and the GUI arrive in Phases 4/5.
 // See project.md (master description) and src/development.md (this folder).
 
+#include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <random>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -19,6 +25,8 @@
 #include <windows.h>
 #endif
 
+#include "clipboard.h"
+#include "compactor.h"
 #include "config.h"
 #include "audio_fx.h"
 #include "conversation.h"
@@ -29,6 +37,7 @@
 #include "llm_client.h"
 #include "llm_models.h"
 #include "permissions.h"
+#include "session_store.h"
 #include "stt.h"
 #include "tool_loop.h"
 #include "tool_registry.h"
@@ -52,7 +61,14 @@ void print_help()
         "  /devices           list capture (microphone) devices with their index\n"
         "  /mic [sec] [idx]   live microphone level meter (diagnose no-signal)\n"
         "  /transcribe <file> transcribe an audio file (wav/mp3/flac)\n"
-        "  /reset             clear the conversation (keeps system prompt)\n"
+        "  /reset             clear the conversation (starts a new session)\n"
+        "  /sessions          list saved sessions\n"
+        "  /session           show the current session\n"
+        "  /session new [t]   start a new session (optional title)\n"
+        "  /session open <x>  load a session (list index, id or id prefix)\n"
+        "  /session delete <x>  delete a session permanently\n"
+        "  /session rename <t>  rename the current session\n"
+        "  /compact [focus]   summarize + shrink the session with the LLM\n"
         "  /config            show the active LLM configuration\n"
         "  /exit              quit\n"
         "Anything else is sent to the LLM.\n\n";
@@ -64,6 +80,59 @@ void print_voice(const krastor::VoiceRegistry& voices)
     std::cout << (v ? "current TTS voice: " + v->id + " [" + v->language + "]"
                     : "no TTS voice discovered")
               << '\n';
+}
+
+// ---- session command helpers (CLI, see sessions_plan.md) ----
+
+// Resolve a `/session open|delete` argument: list index ("3" or "#3"),
+// exact id, or unique id prefix. Empty = not found/ambiguous.
+std::string resolve_session(const krastor::SessionStore& store,
+                            const std::string& arg)
+{
+    std::string a = arg;
+    if (!a.empty() && a[0] == '#')
+        a.erase(0, 1);
+    if (a.empty())
+        return {};
+    const auto l = store.list();
+    if (std::all_of(a.begin(), a.end(),
+                    [](char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; })) {
+        const int i = std::atoi(a.c_str());
+        if (i >= 1 && i <= static_cast<int>(l.size()))
+            return l[i - 1].id;
+        return {};
+    }
+    if (store.exists(a))
+        return a;
+    std::string hit;
+    int n = 0;
+    for (const auto& s : l)
+        if (s.id.rfind(a, 0) == 0) { hit = s.id; ++n; }
+    return n == 1 ? hit : std::string();
+}
+
+void print_sessions(const krastor::SessionStore& store)
+{
+    const auto l = store.list();
+    if (l.empty()) {
+        std::cout << "no sessions (" << store.dir() << ")\n";
+        return;
+    }
+    std::cout << "sessions in " << store.dir() << ":\n";
+    int i = 0;
+    for (const auto& s : l)
+        std::cout << "  " << ++i << "  " << s.id << "  " << s.updated << "  "
+                  << s.messages << " msgs"
+                  << (s.compactions ? "  compacted x" + std::to_string(s.compactions)
+                                    : "")
+                  << "  " << s.title << "\n";
+}
+
+// Trim leading whitespace/tabs of a command argument.
+std::string trim_arg(std::string s)
+{
+    const size_t p = s.find_first_not_of(" \t");
+    return p == std::string::npos ? std::string() : s.substr(p);
 }
 
 void list_voices(const krastor::VoiceRegistry& voices)
@@ -496,6 +565,124 @@ int run_tool_test()
     return failed;
 }
 
+// Headless self-test for the session store (sessions_plan.md): folder-per-
+// session round-trip with images and tool calls, crash tolerance, rename,
+// list ordering, compaction archive, delete. Exit code = failed checks.
+int run_session_test()
+{
+    namespace fs = std::filesystem;
+    int failed = 0;
+    auto check = [&](const char* name, bool ok, const std::string& err = {}) {
+        std::cout << (ok ? "PASS " : "FAIL ") << name
+                  << (ok || err.empty() ? "" : " - " + err) << "\n";
+        if (!ok)
+            ++failed;
+    };
+
+    std::error_code ec;
+    const fs::path dir = fs::temp_directory_path() / "krastor_session_test";
+    fs::remove_all(dir, ec);
+    krastor::SessionStore store(dir.string());
+
+    // --- create / meta ----------------------------------------------------------
+    const std::string id = store.create("test session", "test/model");
+    check("create returns id", !id.empty());
+    check("folder exists", store.exists(id));
+    check("rejects path traversal", !store.exists("../evil"));
+    krastor::SessionMeta m;
+    check("meta readable", store.meta_of(id, m) && m.title == "test session" &&
+                              m.model_ref == "test/model");
+
+    // --- append + load round-trip (image, tool calls, tool result) --------------
+    const std::string png = "fake-png-bytes-1234";
+    const std::string b64 =
+        krastor::base64_encode(reinterpret_cast<const unsigned char*>(png.data()),
+                               png.size());
+    krastor::Conversation conv("SYS");
+    conv.add_user("hello", {b64});
+    conv.add_assistant("", {{"call1", "files", "{\"action\":\"list\"}"}});
+    conv.add_tool("call1", "[]");
+    conv.add_assistant("done");
+    check("append turn", store.append(id, conv.messages_since(1)));
+    check("attachment file written",
+          fs::exists(dir / id / "attachments" / "img-1.png"));
+
+    krastor::Conversation back("SYS");
+    check("load", store.load(id, back, &m));
+    const auto& ms = back.messages();
+    check("system kept + 4 messages", ms.size() == 5);
+    check("user text restored", ms.size() == 5 && ms[1].content == "hello");
+    check("image round-trip",
+          ms.size() == 5 && ms[1].images.size() == 1 && ms[1].images[0] == b64);
+    check("tool_calls round-trip",
+          ms.size() == 5 && ms[2].tool_calls.size() == 1 &&
+              ms[2].tool_calls[0].id == "call1" &&
+              ms[2].tool_calls[0].name == "files" &&
+              ms[2].tool_calls[0].arguments == "{\"action\":\"list\"}");
+    check("tool result round-trip",
+          ms.size() == 5 && ms[3].role == "tool" &&
+              ms[3].tool_call_id == "call1" && ms[3].content == "[]");
+    krastor::SessionMeta m2;
+    store.meta_of(id, m2);
+    check("meta message count", m2.messages == 4);
+
+    // --- incremental append (messages_since) -------------------------------------
+    conv.add_user("second");
+    check("incremental append", store.append(id, conv.messages_since(5)));
+    krastor::Conversation back2("SYS");
+    store.load(id, back2);
+    check("5 messages after append", back2.messages().size() == 6);
+
+    // --- crash tolerance: half-written last line is skipped ----------------------
+    {
+        std::ofstream f(dir / id / "log.jsonl", std::ios::app);
+        f << "{\"role\":\"user\",\"content\":\"trunc";  // no newline, broken JSON
+    }
+    krastor::Conversation back3("SYS");
+    check("load survives corrupt tail", store.load(id, back3));
+    check("corrupt line skipped", back3.messages().size() == 6);
+
+    // --- rename + list -------------------------------------------------------------
+    check("rename", store.rename(id, "renamed"));
+    auto l = store.list();
+    check("list shows one", l.size() == 1 && l[0].title == "renamed");
+    const std::string id2 = store.create("second session", "");
+    l = store.list();
+    check("list shows two", l.size() == 2);
+    // `updated` has second resolution: wait past the boundary so the rename
+    // below is unambiguously the newest activity.
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    store.rename(id, "touched last");  // deterministic: id is now newest
+    l = store.list();
+    check("list newest first", !l.empty() && l[0].id == id);
+
+    // --- compaction rewrite + archive ----------------------------------------------
+    std::vector<krastor::Message> fresh;
+    krastor::Message s;
+    s.role = "user";
+    s.content = std::string(krastor::kSummaryMarker) + " — compacted] text";
+    fresh.push_back(s);
+    fresh.push_back(conv.messages()[5]);  // keep one tail message
+    check("compact rewrite", store.replace_log_after_compact(id, fresh));
+    check("archive kept",
+          fs::exists(dir / id / "archive" / "pre-compact-1.jsonl"));
+    krastor::Conversation back4("SYS");
+    check("compacted log loads", store.load(id, back4, &m2));
+    check("compacted content", back4.messages().size() == 3 &&
+                                   krastor::is_summary_message(back4.messages()[1]));
+    check("meta compactions", m2.compactions == 1 && m2.messages == 2);
+
+    // --- delete ----------------------------------------------------------------------
+    check("delete", store.remove(id));
+    check("deleted gone", !store.exists(id));
+    check("other session survives", store.exists(id2));
+    fs::remove_all(dir, ec);
+
+    std::cout << "session-test: " << (failed ? std::to_string(failed) : "0")
+              << " failed" << (failed ? "" : " - PASS") << "\n";
+    return failed;
+}
+
 int main(int argc, char** argv)
 {
 #ifdef _WIN32
@@ -529,9 +716,15 @@ int main(int argc, char** argv)
         std::abort();
     });
 
-    // Args: [--gui] [--icon-test] [--fx-test] [--tts-filter-test] [config.json]
+    // Args: [--gui] [--icon-test] [--fx-test] [--tts-filter-test]
+    //       [--session-test] [--session <id>] [--new-session] [--list-sessions]
+    //       [--delete-session <id>] [--compact [focus]] [config.json]
     bool use_gui = false;
     std::string config_path;  // empty -> default (exe dir, legacy CWD fallback)
+    std::string session_flag, delete_session_flag;
+    bool new_session_flag = false, list_sessions_flag = false,
+         compact_flag = false;
+    std::string compact_focus;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--gui") use_gui = true;
@@ -540,6 +733,17 @@ int main(int argc, char** argv)
         else if (a == "--tts-filter-test") return run_tts_filter_test();
         else if (a == "--tool-run") return run_tool_run(argc, argv, i);
         else if (a == "--tool-test") return run_tool_test();
+        else if (a == "--session-test") return run_session_test();
+        else if (a == "--new-session") new_session_flag = true;
+        else if (a == "--list-sessions") list_sessions_flag = true;
+        else if (a == "--session" && i + 1 < argc) session_flag = argv[++i];
+        else if (a == "--delete-session" && i + 1 < argc)
+            delete_session_flag = argv[++i];
+        else if (a == "--compact") {
+            compact_flag = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+                compact_focus = argv[++i];
+        }
         else config_path = a;
     }
     if (config_path.empty())
@@ -580,6 +784,55 @@ int main(int argc, char** argv)
     else if (krastor::apply_model_ref(cfg.llm, models))
         std::cout << "model: " << cfg.llm.model_ref << " -> " << cfg.llm.base_url
                   << "\n";
+
+    // ---- session CLI flags (sessions_plan.md) --------------------------------
+    // Handled before the heavy voice stack: pure store operations exit here.
+    krastor::SessionStore store(krastor::SessionStore::default_dir(cfg.sessions.dir));
+    if (list_sessions_flag) {
+        print_sessions(store);
+        return 0;
+    }
+    if (!delete_session_flag.empty()) {
+        const std::string id = resolve_session(store, delete_session_flag);
+        if (id.empty()) {
+            std::cerr << "session not found: " << delete_session_flag << "\n";
+            return 1;
+        }
+        std::cout << (store.remove(id) ? "deleted session " + id + "\n"
+                                       : "delete failed\n");
+        return store.exists(id);
+    }
+    if (compact_flag) {
+        std::string id = session_flag.empty()
+                             ? (store.list().empty() ? std::string()
+                                                     : store.list().front().id)
+                             : resolve_session(store, session_flag);
+        if (id.empty()) {
+            std::cerr << "no session to compact (--session <id>)\n";
+            return 1;
+        }
+        krastor::Conversation conversation(cfg.llm.system_prompt);
+        if (!store.load(id, conversation)) {
+            std::cerr << "cannot load session " << id << "\n";
+            return 1;
+        }
+        krastor::LlmClient llm(cfg.llm);
+        std::cout << "compacting " << id << "...\n";
+        const auto cr = krastor::compact_conversation(
+            llm, conversation, cfg.llm.context_size, cfg.llm.max_tokens,
+            compact_focus, nullptr,
+            [](const std::string& s) { std::cout << "[compact] " << s << "\n"; });
+        if (!cr.ok) {
+            std::cerr << "compact failed: " << cr.error << "\n";
+            return 1;
+        }
+        store.replace_log_after_compact(id, conversation.messages_since(1));
+        std::cout << "compacted " << cr.messages_before << " -> "
+                  << cr.messages_after << " messages (~" << cr.est_tokens_before
+                  << " -> ~" << cr.est_tokens_after << " tokens, "
+                  << cr.llm_calls << " LLM call(s))\n";
+        return 0;
+    }
 
     krastor::VoiceRegistry voices;
     if (voices.discover(cfg.tts.models_dir)) {
@@ -646,6 +899,58 @@ int main(int argc, char** argv)
             return hl.highlight(code, lang);
         });
     krastor::Conversation conversation(cfg.llm.system_prompt);
+
+    // ---- session selection (sessions_plan.md) ---------------------------------
+    // --session <id> > --new-session > continue the most recent > fresh session.
+    std::string session_id;
+    std::string session_title;
+    if (!session_flag.empty() && !new_session_flag) {
+        session_id = resolve_session(store, session_flag);
+        if (session_id.empty()) {
+            std::cerr << "warning: session '" << session_flag
+                      << "' not found, starting a new one\n";
+        }
+    }
+    if (session_id.empty() && !new_session_flag && cfg.sessions.continue_last) {
+        const auto l = store.list();
+        if (!l.empty())
+            session_id = l.front().id;
+    }
+    if (!session_id.empty() && store.load(session_id, conversation)) {
+        krastor::SessionMeta sm;
+        store.meta_of(session_id, sm);
+        session_title = sm.title;
+        std::cout << "session: " << session_id << " \"" << session_title
+                  << "\" (" << sm.messages << " msgs restored)\n";
+    } else {
+        session_id = store.create("New session", cfg.llm.model_ref);
+        session_title = "New session";
+        std::cout << "session: " << session_id << " (new)\n";
+    }
+    size_t saved_count = conversation.messages().size();
+
+    // Persist everything appended since the last save; auto-title the session
+    // from its first user message while it is still untitled.
+    auto autosave = [&] {
+        if (!cfg.sessions.autosave || session_id.empty())
+            return;
+        const auto fresh = conversation.messages_since(saved_count);
+        if (fresh.empty())
+            return;
+        store.append(session_id, fresh);
+        saved_count = conversation.messages().size();
+        krastor::SessionMeta sm;
+        if (store.meta_of(session_id, sm) && sm.title == "New session") {
+            for (const auto& msg : conversation.messages())
+                if (msg.role == "user" && !msg.content.empty()) {
+                    session_title =
+                        krastor::SessionStore::title_from_text(msg.content);
+                    store.rename(session_id, session_title);
+                    break;
+                }
+        }
+    };
+
     print_help();
 
     std::string line;
@@ -699,7 +1004,122 @@ int main(int argc, char** argv)
             break;
         if (line == "/help") { print_help(); continue; }
         if (line == "/voices") { list_voices(voices); continue; }
-        if (line == "/reset") { conversation.reset(); std::cout << "(conversation cleared)\n"; continue; }
+        if (line == "/reset") {
+            conversation.reset();
+            session_id = store.create("New session", cfg.llm.model_ref);
+            session_title = "New session";
+            saved_count = conversation.messages().size();
+            std::cout << "(conversation cleared, new session " << session_id
+                      << ")\n";
+            continue;
+        }
+        if (line == "/sessions") { print_sessions(store); continue; }
+        if (line.rfind("/session", 0) == 0) {
+            const std::string rest = line.size() > 8 ? line.substr(8) : "";
+            std::istringstream iss(trim_arg(rest));
+            std::string sub;
+            iss >> sub;
+            if (sub.empty() || sub == "info") {
+                krastor::SessionMeta sm;
+                if (store.meta_of(session_id, sm))
+                    std::cout << "session: " << sm.id << "\n  title: " << sm.title
+                              << "\n  created: " << sm.created
+                              << "\n  updated: " << sm.updated
+                              << "\n  messages: " << sm.messages
+                              << "\n  compactions: " << sm.compactions << "\n";
+                else
+                    std::cout << "no current session\n";
+            } else if (sub == "new") {
+                const std::string title = trim_arg(rest.substr(rest.find("new") + 3));
+                autosave();  // flush the outgoing session first
+                conversation.reset();
+                session_id = store.create(title.empty() ? "New session" : title,
+                                          cfg.llm.model_ref);
+                session_title = title.empty() ? "New session" : title;
+                saved_count = conversation.messages().size();
+                std::cout << "new session " << session_id << "\n";
+            } else if (sub == "open") {
+                std::string arg;
+                iss >> arg;
+                const std::string id = resolve_session(store, arg);
+                if (id.empty()) {
+                    std::cout << "session not found: " << arg << " (see /sessions)\n";
+                } else {
+                    autosave();  // keep the outgoing session complete on disk
+                    if (store.load(id, conversation)) {
+                        krastor::SessionMeta sm;
+                        store.meta_of(id, sm);
+                        session_id = id;
+                        session_title = sm.title;
+                        saved_count = conversation.messages().size();
+                        std::cout << "opened session " << id << " \""
+                                  << session_title << "\"\n";
+                    } else {
+                        std::cout << "cannot load session " << id << "\n";
+                    }
+                }
+            } else if (sub == "delete") {
+                std::string arg;
+                iss >> arg;
+                const std::string id = resolve_session(store, arg);
+                if (id.empty())
+                    std::cout << "session not found: " << arg
+                              << " (see /sessions)\n";
+                else if (store.remove(id)) {
+                    std::cout << "deleted session " << id << "\n";
+                    if (id == session_id) {  // the ground vanished under us
+                        conversation.reset();
+                        session_id = store.create("New session", cfg.llm.model_ref);
+                        session_title = "New session";
+                        saved_count = conversation.messages().size();
+                        std::cout << "started a new session " << session_id << "\n";
+                    }
+                } else
+                    std::cout << "delete failed\n";
+            } else if (sub == "rename") {
+                const std::string title =
+                    trim_arg(rest.substr(rest.find("rename") + 6));
+                if (title.empty())
+                    std::cout << "usage: /session rename <title>\n";
+                else if (store.rename(session_id, title)) {
+                    session_title = title;
+                    std::cout << "renamed to \"" << title << "\"\n";
+                }
+            } else
+                std::cout << "usage: /session [info|new|open|delete|rename]\n";
+            continue;
+        }
+        if (line.rfind("/title", 0) == 0) {
+            const std::string title = trim_arg(line.substr(6));
+            if (title.empty())
+                std::cout << "current title: " << session_title << "\n";
+            else if (store.rename(session_id, title)) {
+                session_title = title;
+                std::cout << "renamed to \"" << title << "\"\n";
+            }
+            continue;
+        }
+        if (line.rfind("/compact", 0) == 0) {
+            const std::string focus = trim_arg(line.substr(8));
+            std::cout << "compacting session " << session_id << "...\n";
+            const auto cr = krastor::compact_conversation(
+                llm, conversation, cfg.llm.context_size, cfg.llm.max_tokens,
+                focus, nullptr,
+                [](const std::string& s) { std::cout << "[compact] " << s << "\n"; });
+            if (!cr.ok) {
+                std::cout << "compact failed: " << cr.error << "\n";
+            } else {
+                store.replace_log_after_compact(session_id,
+                                                conversation.messages_since(1));
+                saved_count = conversation.messages().size();
+                std::cout << "compacted " << cr.messages_before << " -> "
+                          << cr.messages_after << " messages (~"
+                          << cr.est_tokens_before << " -> ~"
+                          << cr.est_tokens_after << " tokens, " << cr.llm_calls
+                          << " LLM call(s))\n";
+            }
+            continue;
+        }
         if (line == "/config") {
             std::cout << "base_url: " << cfg.llm.base_url << "\n"
                       << "model:    " << cfg.llm.model << "\n"
@@ -755,6 +1175,7 @@ int main(int argc, char** argv)
             // The user turn stays in history; the model can still see the question.
             std::cerr << "LLM error: " << reply.error << "\n\n";
         }
+        autosave();  // persist the whole turn (user + tool traffic + reply)
     }
     std::cout << "bye.\n";
     return 0;

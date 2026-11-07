@@ -9,8 +9,8 @@ executables are emitted to `../bin`, intermediates to `../obj`.
 ## Current state (Phase 5, 2026-10-29) — GUI chat interface
 | Module | Responsibility |
 |---|---|
-| `main.cpp` | CLI REPL: commands (`/help /voices /voice <id> /say <text> /listen [sec] [idx] /devices /mic [sec] [idx] /transcribe <file> /reset /config /exit`), everything else goes to the LLM; at startup resolves `llm.model_ref` against `llm_models.json` (prints `model: <ref> -> <base_url>`) and applies the `stt.denoise`/`stt.echo_cancel` toggles to `AudioFx` before launching CLI or `--gui`; headless self-test flags `--icon-test`, `--fx-test`, `--tts-filter-test` and `--tool-test` exit early with PASS/FAIL, `--tool-run <tool> <json>` runs one tool call without the LLM |
-| `config.h/.cpp` | JSON config (`config.json`, see `config.example.json`); API key fallback `KRASTOR_API_KEY` -> `OPENAI_API_KEY`; `save()` used by the GUI. **Runtime config lives next to the executable** (`exe_dir()/config.json`, atomic tmp+rename write); a legacy `config.json` in the working directory is read as fallback and migrated on first launch. Sections: `llm` (incl. `context_size`, default 131072, and `model_ref` — the selected `llm_models.json` entry), `tts`, `stt`, `gui` (font_size, effect, effect_intensity, window_w/h), `agent` (name, continuous, ignore_while_speaking) |
+| `main.cpp` | CLI REPL: commands (`/help /voices /voice <id> /say <text> /listen [sec] [idx] /devices /mic [sec] [idx] /transcribe <file> /reset /sessions /session /compact /title /config /exit`), everything else goes to the LLM; at startup resolves `llm.model_ref` against `llm_models.json` (prints `model: <ref> -> <base_url>`) and applies the `stt.denoise`/`stt.echo_cancel` toggles to `AudioFx` before launching CLI or `--gui`; headless self-test flags `--icon-test`, `--fx-test`, `--tts-filter-test`, `--tool-test` and `--session-test` exit early with PASS/FAIL, `--tool-run <tool> <json>` runs one tool call without the LLM, session flags `--session <id> --new-session --list-sessions --delete-session <id> --compact [focus]` |
+| `config.h/.cpp` | JSON config (`config.json`, see `config.example.json`); API key fallback `KRASTOR_API_KEY` -> `OPENAI_API_KEY`; `save()` used by the GUI. **Runtime config lives next to the executable** (`exe_dir()/config.json`, atomic tmp+rename write); a legacy `config.json` in the working directory is read as fallback and migrated on first launch. Sections: `llm` (incl. `context_size`, default 131072, and `model_ref` — the selected `llm_models.json` entry), `tts`, `stt`, `gui` (font_size, effect, effect_intensity, window_w/h), `agent` (name, continuous, ignore_while_speaking), `sessions` (dir, autosave, continue_last) |
 | `llm_models.h/.cpp` | **LlmModelRegistry**: parses `llm_models.json` (opencode.jsonc `provider` schema — `options|settings.baseURL/apiKey`, `models.<id>.name`, `limit.context/output`, `//` comments allowed) into `provider/model` refs; `apply_model_ref()` fills `LlmConfig` base_url/api_key/model/context_size from the selected ref. File lookup: exe dir, then working dir; missing/invalid file falls back to explicit config fields |
 | `md_format.h/.cpp` | **Markdown -> ANSI/SGR**: headings, bold/italic, inline code, lists (orange bullets), blockquotes, rules, links, tables (OpenCode-style box grid, violet header, GFM :---/---:/:---: alignment), fenced code blocks (dim language-label header bar + continuous dark block background incl. blank lines; optional `CodeHighlightFn` hook for the syntax highlighter). ESC-containing input passes through unchanged |
 | `formatters.h/.cpp` | **OutputFormatter**: plugin chain applied to raw LLM replies before display (GUI + CLI); kill-switch `gui.format_output`; conversation history and TTS always use the raw text |
@@ -52,6 +52,18 @@ tools through OpenAI function calling; Krastor supervises every call.
 | `config` (tools) | `ToolsConfig`: `tools.enabled` master switch + raw per-tool `overrides_json` round-trip; `LlmConfig::supports_tools` set from `llm_models.json` `capabilities.tools` — tools are only offered when the model declares function calling |
 | `gui.cpp` (tools) | `AppState : AskHandler` — worker blocks in `ask()` until the **permission modal** (Allow once / Always allow / Deny) answers; the modal dismisses as soon as the request is answered (`ask()` clears `pending_ask` on wake, the modal also skips an answered request) and its detail box gets an explicit row height so the args/paths scroll visibly; completed tool calls drain in `poll()` as collapsible `⚙ tool · action` chat blocks (reuses the Thought-block renderer via `think_label`); Settings checkbox "Enable external tools (restart)" |
 | `main.cpp` (tools) | CLI `ConsoleAsk` (y/N/a prompt), tool system-prompt hint with the sandbox path, debug flags: `--tool-run <tool> <json>` single call (auto-allow), `--tool-test` headless self-test (20 checks: sandbox write/read/edit/list, delete confirm+deny+floor, deny floors, ask-deny honour, webfetch text + file:// block, websearch results [SKIP when DDG's anti-bot page answers], python run + traceback + ask gate) |
+
+## Sessions system (Phase 7, 2026-11-07)
+See `../sessions_plan.md` for the full design. Persistent chat sessions,
+session switching and LLM-driven compaction.
+| Module | Responsibility |
+|---|---|
+| `session_store.h/.cpp` | **SessionStore**: one folder per session under `sessions/` (exe/../sessions, fallback ./sessions, `sessions.dir` override): `meta.json` (title/dates/counters) + append-only `log.jsonl` (one message per line, images stored as `attachments/img-<n>.png` file refs, base64 in/out) + `archive/pre-compact-<n>.jsonl`. `create/append/load/rename/remove/list/meta_of/replace_log_after_compact`; malformed log lines are skipped on load (crash tolerance); ids are `YYYYMMDD-HHMMSS-xxxx`; `is_summary_message()` recognizes `[Conversation summary` markers. Self-test `krastor --session-test` (29 checks) |
+| `compactor.h/.cpp` | **compact_conversation()**: budget = `context_size - max_tokens - headroom(≥512, ctx/16)`; recent tail kept verbatim (≤ budget/5, never starting on a `tool` result), head split into ≤70%-budget chunks (tool_call/tool pairs never split) and folded rolling into one summary by the *active* LLM (transcript clipped at 4 KB/msg); new history = summary user-message + tail. Never throws, cancellable, progress callback for the UI |
+| `conversation.h/.cpp` (sessions) | `replace_history()` (system prompt kept) + `messages_since(idx)` autosave cursor |
+| `config` (sessions) | `SessionsConfig`: `sessions.dir` / `autosave` / `continue_last` |
+| `main.cpp` (sessions) | startup session pick (`--session` > `--new-session` > continue-last > new), autosave after every turn (auto-title from the first user message), commands `/sessions`, `/session info|new|open|delete|rename` (index `#N`, id or unique prefix), `/compact [focus]`, `/title`; `/reset` now starts a new session folder; flags `--list-sessions` / `--delete-session` / `--compact` exit before the voice stack |
+| `gui.cpp` (sessions) | `AppState::switch_to_session()` is the single switch path (autosave-before-load, refused while the worker is busy): top-bar **quick-switcher combo** (10 recent + "+ new session"), **Ctrl+O** session modal (list/open, delete with inline "sure?" confirm, New/Rename/Close), **Ctrl+Shift+O** cycles recent; slash commands in the input box (`/sessions /session /compact /title`); autosave in `poll()` when a turn completes; `/compact` runs on the worker (`Worker::Compacting`, Stop cancels); window title follows `name — session`; `rebuild_lines_from_conv()` re-renders a loaded history (tool calls as collapsed `⚙` blocks, summary as divider) |
 
 ## Conventions
 - C++20, no compiler-specific extensions without a guarded abstraction
@@ -210,6 +222,14 @@ tools through OpenAI function calling; Krastor supervises every call.
   pointer when it wakes up (and the modal must skip an answered request) -
   otherwise the dialog keeps re-rendering after the click and keeps blocking
   input while the worker already resumed.
+- This Nuklear (4.13.3) has `nk_button_label`, NOT `nk_label_button` (that is a
+  newer/other API name) - the label-button helper does not exist here.
+- `(cond ? "" : " ") + std::string` fails to compile: both branches are
+  `const char*`, so `+` is pointer arithmetic, not string concat. Build the
+  string explicitly (`if (!t.empty()) t += " ";`).
+- Session autosave ordering: always flush the OUTGOING session (autosave)
+  BEFORE loading/creating another one - after `conv` was replaced the pending
+  tail belongs to the wrong session and would be appended to the new folder.
 
 ## Planned layout (roadmap)
 - `gui/` — GLSL effect passes, terminal I/O panel, attachments input (Phase 5)

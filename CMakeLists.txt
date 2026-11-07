@@ -73,6 +73,8 @@ add_executable(krastor
     src/main.cpp
     src/config.cpp
     src/conversation.cpp
+    src/session_store.cpp
+    src/compactor.cpp
     src/llm_client.cpp
     src/llm_models.cpp
     src/md_format.cpp

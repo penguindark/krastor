@@ -68,6 +68,13 @@ struct ToolsConfig {
     std::string overrides_json;  // raw "tools" object minus "enabled"
 };
 
+struct SessionsConfig {
+    // Persistent chat sessions (see sessions_plan.md).
+    std::string dir;                  // "" -> sessions/ next to the executable
+    bool autosave = true;             // persist every completed turn
+    bool continue_last = true;        // startup resumes the most recent session
+};
+
 struct Config {
     LlmConfig llm;
     TtsConfig tts;
@@ -75,6 +82,7 @@ struct Config {
     GuiConfig gui;
     AgentConfig agent;
     ToolsConfig tools;
+    SessionsConfig sessions;
 
     // Directory containing the running executable ("." when undetectable).
     static std::string exe_dir();

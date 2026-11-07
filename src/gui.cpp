@@ -58,6 +58,8 @@
 #include "tool_registry.h"
 #include "tool_runner.h"
 #include "tool_loop.h"
+#include "session_store.h"
+#include "compactor.h"
 
 namespace krastor {
 
@@ -291,8 +293,9 @@ struct AppState : AskHandler {
     std::vector<Attachment> attachments;
     bool pending_image_paste = false;  // set by the clipboard paste hook
 
-    enum class Worker { None, Thinking, Listening } worker = Worker::None;
+    enum class Worker { None, Thinking, Listening, Compacting } worker = Worker::None;
     std::future<LlmReply> llm_fut;
+    std::future<CompactResult> compact_fut;  // /compact worker result
     std::shared_ptr<CancelToken> llm_cancel;  // Stop button aborts the request
     std::future<std::string> stt_fut;
     std::atomic<bool> speaking{false};
@@ -359,6 +362,14 @@ struct AppState : AskHandler {
     std::mutex tev_mtx;
     std::vector<ToolEvent> tev_ready;
 
+    // ---- Sessions (see sessions_plan.md) ----
+    SessionStore store;
+    std::string session_id, session_title;
+    size_t saved_count = 0;      // messages persisted so far (autosave cursor)
+    bool sessions_open = false;  // session manager modal
+    int delete_confirm = -1;     // list row awaiting a delete confirmation
+    char rename_buf[128] = {0};  // rename field in the session modal
+
     // Multiline chat input (Enter sends, Shift+Enter inserts a newline).
     // Large buffer so pasted code/long prompts are never silently truncated.
     char input[16384] = {0};
@@ -387,7 +398,8 @@ struct AppState : AskHandler {
 
     AppState(Config& c, VoiceRegistry& v)
         : cfg(c), voices(v), conv(c.llm.system_prompt), llm(c.llm), tts(v, c), stt(c),
-          fmt(c), tool_runner(tool_grants, nlohmann::json{})
+          fmt(c), tool_runner(tool_grants, nlohmann::json{}),
+          store(SessionStore::default_dir(c.sessions.dir))
     {
         name = c.agent.name;
         // Model list for the Settings combo (URL/key/context come from this file).
@@ -423,6 +435,25 @@ struct AppState : AskHandler {
         lines.push_back({"sys", name + " ready. Type below (Enter sends, "
                                   "Shift+Enter = newline). Ctrl+V pastes text or "
                                   "an image. Settings = LLM/voice config."});
+        // ---- session restore (sessions_plan.md): continue the most recent
+        // session or start a fresh one; a restored history rebuilds the chat.
+        {
+            const auto l = store.list();
+            if (!l.empty() && c.sessions.continue_last &&
+                store.load(l.front().id, conv)) {
+                session_id = l.front().id;
+                session_title = l.front().title;
+            }
+            if (session_id.empty()) {
+                session_id = store.create("New session", c.llm.model_ref);
+                session_title = "New session";
+            }
+            saved_count = conv.messages().size();
+            if (saved_count > 1)
+                rebuild_lines_from_conv();
+            else
+                lines.push_back({"sys", "session: " + session_title});
+        }
         // Screenshot-test hook: seed a styled sample line and attach whatever
         // image (if any) is on the clipboard, so renderers can be verified.
         if (std::getenv("KRASTOR_UITEST")) {
@@ -518,6 +549,11 @@ struct AppState : AskHandler {
 
     void send(const std::string& text)
     {
+        // Slash commands never reach the LLM (sessions_plan.md §4).
+        if (!text.empty() && text[0] == '/') {
+            handle_command(text);
+            return;
+        }
         if ((text.empty() && attachments.empty()) || worker != Worker::None)
             return;
         std::vector<std::string> b64;
@@ -580,11 +616,253 @@ struct AppState : AskHandler {
     // TTS playback. Safe to press at any time (no-ops when idle).
     void stop()
     {
-        if (worker == Worker::Thinking && llm_cancel) {
+        if ((worker == Worker::Thinking || worker == Worker::Compacting) &&
+            llm_cancel) {
             llm_cancel->cancel();  // makes the blocking HTTP call return now
             lines.push_back({"sys", "(stopped)"});
         }
         tts.interrupt();  // no-op when nothing is playing
+    }
+
+    // ------------------------------------------------------------- sessions
+    // Persist everything appended since the last save (see sessions_plan.md);
+    // auto-titles an untitled session from its first user message.
+    void autosave_turn()
+    {
+        if (!cfg.sessions.autosave || session_id.empty())
+            return;
+        const auto fresh = conv.messages_since(saved_count);
+        if (fresh.empty())
+            return;
+        store.append(session_id, fresh);
+        saved_count = conv.messages().size();
+        SessionMeta sm;
+        if (store.meta_of(session_id, sm) && sm.title == "New session") {
+            for (const auto& m : conv.messages())
+                if (m.role == "user" && !m.content.empty()) {
+                    session_title = SessionStore::title_from_text(m.content);
+                    store.rename(session_id, session_title);
+                    break;
+                }
+        }
+    }
+
+    // Rebuild the visible chat from the loaded conversation: user/assistant
+    // turns, tool calls as collapsed blocks (like live ones), summaries as a
+    // divider. Main thread only.
+    void rebuild_lines_from_conv()
+    {
+        lines.clear();
+        sel_anchor = sel_caret = -1;
+        lines.push_back({"sys", "session: " + session_title});
+        const auto& msgs = conv.messages();
+        for (size_t i = 1; i < msgs.size(); ++i) {
+            const auto& m = msgs[i];
+            if (is_summary_message(m)) {
+                lines.push_back({"sys", "---- compacted summary ----"});
+                continue;
+            }
+            if (m.role == "user") {
+                std::string t = m.content;
+                if (!m.images.empty()) {
+                    if (!t.empty())
+                        t += " ";
+                    t += "[+" + std::to_string(m.images.size()) +
+                         (m.images.size() == 1 ? " image]" : " images]");
+                }
+                lines.push_back({"you", t});
+            } else if (m.role == "assistant") {
+                for (const auto& tc : m.tool_calls) {
+                    ChatLine tl{"sys", "", ""};
+                    std::string action = tc.name;
+                    auto aj = nlohmann::json::parse(tc.arguments, nullptr, false);
+                    if (aj.is_object() && aj.contains("action") &&
+                        aj["action"].is_string())
+                        action = aj["action"].get<std::string>();
+                    tl.think_label = "\xE2\x9A\x99 " + tc.name + " \xC2\xB7 " + action;
+                    tl.thinking = "args: " + tc.arguments;
+                    lines.push_back(std::move(tl));
+                }
+                if (!m.content.empty())
+                    lines.push_back({"krastor", fmt.format(m.content)});
+            } else if (m.role == "tool") {
+                // Fold the result into the last tool block above it.
+                for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
+                    if (it->who == "sys" && !it->think_label.empty()) {
+                        it->thinking += "\nresult: " + m.content;
+                        break;
+                    }
+                }
+            }
+        }
+        follow_bottom = true;
+    }
+
+    // Resolve a list index ("3"/"#3"), exact id or unique id prefix.
+    std::string resolve_session_arg(const std::string& arg)
+    {
+        std::string a = arg.empty() || arg[0] != '#' ? arg : arg.substr(1);
+        if (a.empty())
+            return {};
+        const auto l = store.list();
+        if (std::all_of(a.begin(), a.end(), [](char ch) {
+                return std::isdigit(static_cast<unsigned char>(ch)) != 0;
+            })) {
+            const int i = std::atoi(a.c_str());
+            if (i >= 1 && i <= static_cast<int>(l.size()))
+                return l[i - 1].id;
+            return {};
+        }
+        if (store.exists(a))
+            return a;
+        std::string hit;
+        int n = 0;
+        for (const auto& s : l)
+            if (s.id.rfind(a, 0) == 0) { hit = s.id; ++n; }
+        return n == 1 ? hit : std::string();
+    }
+
+    // The single switch path: modal, quick switcher, hotkey and commands all
+    // funnel here. Refused while the worker owns the conversation.
+    bool switch_to_session(const std::string& id)
+    {
+        if (worker != Worker::None || !store.exists(id))
+            return false;
+        autosave_turn();  // the outgoing session stays complete on disk
+        if (!store.load(id, conv)) {
+            lines.push_back({"sys", "could not load session " + id});
+            return false;
+        }
+        SessionMeta sm;
+        store.meta_of(id, sm);
+        session_id = id;
+        session_title = sm.title;
+        saved_count = conv.messages().size();
+        rebuild_lines_from_conv();
+        return true;
+    }
+
+    void new_session(const std::string& title = {})
+    {
+        if (worker != Worker::None)
+            return;
+        autosave_turn();
+        conv.reset();
+        session_title = title.empty() ? "New session" : title;
+        session_id = store.create(session_title, cfg.llm.model_ref);
+        saved_count = conv.messages().size();
+        lines.push_back({"sys", "new session: " + session_title});
+        follow_bottom = true;
+    }
+
+    void delete_session(const std::string& id)
+    {
+        if (worker != Worker::None || !store.exists(id))
+            return;
+        const bool was_current = id == session_id;
+        store.remove(id);
+        if (was_current) {
+            conv.reset();
+            session_id = store.create("New session", cfg.llm.model_ref);
+            session_title = "New session";
+            saved_count = conv.messages().size();
+            lines.clear();
+            lines.push_back({"sys", "session deleted - new session started"});
+            follow_bottom = true;
+        }
+    }
+
+    // /compact on a worker thread: the summarizing LLM calls must never block
+    // the render loop. The worker owns `conv` while worker != None.
+    void run_compact(const std::string& focus)
+    {
+        if (worker != Worker::None)
+            return;
+        worker = Worker::Compacting;
+        llm_cancel = std::make_shared<CancelToken>();
+        const LlmClient client(llm);  // snapshot: survives settings changes
+        auto cancel = llm_cancel;
+        lines.push_back({"sys", "compacting session..."});
+        compact_fut = std::async(std::launch::async,
+                                 [this, client, cancel, focus] {
+            return compact_conversation(client, conv, cfg.llm.context_size,
+                                        cfg.llm.max_tokens, focus, cancel.get());
+        });
+    }
+
+    // Slash commands typed in the input box (opencode-style). Returns true
+    // when the text was consumed as a command (send() then skips the LLM).
+    bool handle_command(const std::string& line)
+    {
+        auto trim = [](std::string s) {
+            const size_t p = s.find_first_not_of(" \t");
+            return p == std::string::npos ? std::string() : s.substr(p);
+        };
+        auto arg_of = [&](const char* cmd) {
+            return line.size() > std::strlen(cmd)
+                       ? trim(line.substr(std::strlen(cmd)))
+                       : std::string();
+        };
+        if (line == "/sessions") {
+            sessions_open = true;
+            return true;
+        }
+        if (line == "/session") {
+            SessionMeta sm;
+            if (store.meta_of(session_id, sm))
+                lines.push_back({"sys", "session " + sm.id + " - " + sm.title +
+                                    " (" + std::to_string(sm.messages) + " msgs, " +
+                                    std::to_string(sm.compactions) + " compactions)"});
+            return true;
+        }
+        if (line.rfind("/session ", 0) == 0) {
+            const std::string rest = arg_of("/session");
+            const auto sub = [&](const char* s) {
+                return rest.rfind(s, 0) == 0;
+            };
+            if (rest == "new" || sub("new ")) {
+                new_session(rest.size() > 4 ? trim(rest.substr(4)) : std::string());
+            } else if (sub("open ")) {
+                const std::string arg = trim(rest.substr(5));
+                const std::string id = resolve_session_arg(arg);
+                if (id.empty())
+                    lines.push_back({"sys", "session not found: " + arg});
+                else if (!switch_to_session(id))
+                    lines.push_back({"sys", "cannot open session " + arg});
+            } else if (sub("delete ")) {
+                const std::string arg = trim(rest.substr(7));
+                const std::string id = resolve_session_arg(arg);
+                if (id.empty())
+                    lines.push_back({"sys", "session not found: " + arg});
+                else {
+                    delete_session(id);
+                    lines.push_back({"sys", "deleted session " + id});
+                }
+            } else if (sub("rename ")) {
+                const std::string t = trim(rest.substr(7));
+                if (!t.empty() && store.rename(session_id, t))
+                    session_title = t;
+            } else {
+                lines.push_back({"sys", "usage: /session [new|open <x>|delete "
+                                        "<x>|rename <t>] - list: /sessions"});
+            }
+            return true;
+        }
+        if (line == "/compact" || line.rfind("/compact ", 0) == 0) {
+            run_compact(arg_of("/compact"));
+            return true;
+        }
+        if (line == "/title" || line.rfind("/title ", 0) == 0) {
+            const std::string t = arg_of("/title");
+            if (t.empty())
+                lines.push_back({"sys", "current title: " + session_title});
+            else if (store.rename(session_id, t))
+                session_title = t;
+            return true;
+        }
+        lines.push_back({"sys", "unknown command: " + line +
+                                "  (try /sessions, /compact)"});
+        return true;
     }
 
     void start_listen()
@@ -743,6 +1021,35 @@ struct AppState : AskHandler {
             } else {
                 lines.push_back({"sys", "LLM error: " + reply.error});
             }
+            // Turn complete (user + tool traffic + reply, or just the user
+            // turn on error): persist it to the session folder.
+            autosave_turn();
+        }
+        if (worker == Worker::Compacting &&
+            compact_fut.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            CompactResult cr;
+            try {
+                cr = compact_fut.get();
+            } catch (const std::exception& e) {
+                cr.ok = false;
+                cr.error = e.what();
+            }
+            worker = Worker::None;
+            if (cr.ok) {
+                store.replace_log_after_compact(session_id,
+                                                conv.messages_since(1));
+                saved_count = conv.messages().size();
+                rebuild_lines_from_conv();
+                lines.push_back({"sys", "compacted " +
+                                std::to_string(cr.messages_before) + " -> " +
+                                std::to_string(cr.messages_after) +
+                                " messages (~" + std::to_string(cr.est_tokens_before) +
+                                " -> ~" + std::to_string(cr.est_tokens_after) +
+                                " tokens)"});
+            } else if (cr.error != "cancelled") {
+                lines.push_back({"sys", "compact failed: " + cr.error});
+            }
+            follow_bottom = true;
         }
         if (worker == Worker::Listening &&
             stt_fut.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
@@ -959,6 +1266,108 @@ void permission_modal(struct nk_context* ctx, AppState& app, int win_w, int win_
         }
         app.ask_cv.notify_all();
     }
+}
+
+// Session manager: list / switch / new / rename / delete (sessions_plan.md §5).
+void session_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
+{
+    if (!app.sessions_open)
+        return;
+
+    nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
+                             nk_style_item_color(nk_rgba(16, 18, 24, 240)));
+    const int mw = (std::max)(420, (std::min)(640, win_w - 60));
+    const int mh = (std::max)(300, (std::min)(480, win_h - 80));
+    const float row_h = ctx->style.font && ctx->style.font->height > 0.0f
+                            ? ctx->style.font->height
+                            : 18.0f;
+    bool close = false;
+    // X-click detection: same hidden-window quirk as the Settings modal
+    // (nk_begin fails after the title X hides the window).
+    if (!nk_begin(ctx, "Sessions",
+                  nk_rect((win_w - mw) / 2.0f, (win_h - mh) / 2.0f,
+                          (float)mw, (float)mh),
+                  NK_WINDOW_TITLE | NK_WINDOW_BORDER | NK_WINDOW_CLOSABLE)) {
+        nk_end(ctx);
+        nk_window_show(ctx, "Sessions", NK_SHOWN);
+        nk_style_pop_style_item(ctx);
+        app.sessions_open = false;
+        app.delete_confirm = -1;
+        return;
+    }
+
+    nk_layout_row_dynamic(ctx, row_h + 4, 1);
+    nk_label_colored(ctx, "Sessions - click a row to open it", NK_LEFT,
+                     nk_rgb(110, 160, 220));
+
+    // Scrollable list: title + date + counts per row, delete needs a second
+    // confirming click on the same row.
+    nk_layout_row_dynamic(ctx, (float)mh - 4.0f * row_h - 110.0f, 1);
+    if (nk_group_begin(ctx, "##sess_list", NK_WINDOW_BORDER)) {
+        const auto sessions = app.store.list();
+        int idx = 0;
+        for (const auto& s : sessions) {
+            nk_layout_row_begin(ctx, NK_DYNAMIC, row_h + 8, 3);
+            const bool cur = s.id == app.session_id;
+            nk_layout_row_push(ctx, 0.70f);
+            const std::string label =
+                (cur ? "> " : "  ") + s.title + "   " +
+                (s.updated.size() >= 10 ? s.updated.substr(0, 10) : s.updated) +
+                "  " + std::to_string(s.messages) + " msgs" +
+                (s.compactions ? "  compacted x" + std::to_string(s.compactions)
+                               : "");
+            if (nk_button_label(ctx, label.c_str()) && !cur)
+                if (app.switch_to_session(s.id))
+                    close = true;  // refused while the worker is busy
+            nk_layout_row_push(ctx, 0.13f);
+            const bool confirm = app.delete_confirm == idx;
+            if (nk_button_label(ctx, confirm ? "sure?" : "delete")) {
+                if (confirm) {
+                    app.delete_session(s.id);
+                    app.delete_confirm = -1;
+                } else {
+                    app.delete_confirm = idx;
+                }
+            }
+            nk_layout_row_push(ctx, 0.17f);
+            nk_label_colored(ctx, cur ? "current" : s.id.c_str(), NK_LEFT,
+                             nk_rgb(110, 110, 120));
+            nk_layout_row_end(ctx);
+            ++idx;
+        }
+        if (sessions.empty()) {
+            nk_layout_row_dynamic(ctx, row_h + 6, 1);
+            nk_label(ctx, "(no saved sessions)", NK_LEFT);
+        }
+        nk_group_end(ctx);
+    }
+
+    // Footer: new / rename / close.
+    nk_layout_row_dynamic(ctx, 28, 3);
+    if (nk_button_label(ctx, "New session")) {
+        app.new_session();
+        close = true;
+    }
+    nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, app.rename_buf,
+                                   sizeof(app.rename_buf) - 1,
+                                   nk_filter_default);
+    if (nk_button_label(ctx, "Rename current")) {
+        if (app.rename_buf[0] &&
+            app.store.rename(app.session_id, app.rename_buf)) {
+            app.session_title = app.rename_buf;
+            app.rename_buf[0] = '\0';
+        }
+    }
+    nk_layout_row_dynamic(ctx, 28, 1);
+    if (nk_button_label(ctx, "Close"))
+        close = true;
+    nk_end(ctx);
+
+    if (close) {
+        app.sessions_open = false;
+        app.delete_confirm = -1;
+    }
+    nk_style_pop_style_item(ctx);
 }
 
 bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
@@ -2025,6 +2434,33 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             }
         }
 
+        // ---- session hotkeys: Ctrl+O opens the manager, Ctrl+Shift+O cycles
+        // through the recent sessions (LRU order of the store list) ----
+        {
+            const bool ctrl = glfwGetKey(win, GLFW_KEY_LEFT_CONTROL) ||
+                              glfwGetKey(win, GLFW_KEY_RIGHT_CONTROL);
+            static bool prev_o = false;
+            const bool o = ctrl && glfwGetKey(win, GLFW_KEY_O) != 0;
+            if (o && !prev_o && app.worker == AppState::Worker::None) {
+                const bool shift = glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) ||
+                                   glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT);
+                if (shift) {
+                    const auto l = app.store.list();
+                    if (l.size() > 1) {
+                        size_t i = 0;
+                        for (; i < l.size(); ++i)
+                            if (l[i].id == app.session_id)
+                                break;
+                        if (i < l.size())
+                            app.switch_to_session(l[(i + 1) % l.size()].id);
+                    }
+                } else {
+                    app.sessions_open = !app.sessions_open;
+                }
+            }
+            prev_o = o;
+        }
+
         // ---- chat selection & scroll hotkeys (only while the chat has focus,
         // i.e. after clicking in it; edge-detected like the font zoom) ----
         if (app.chat_focused && !app.settings.open && app.doc_len > 0) {
@@ -2182,11 +2618,35 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             const float chip_h = fh * 1.45f;
             const float fab_sz = fh * 1.45f;  // floating action button size
 
-            // Top bar: title | hands-free | speak toggle | settings
-            nk_layout_row_begin(ctx, NK_DYNAMIC, top_h, 4);
-            nk_layout_row_push(ctx, 0.40f);
-            nk_label(ctx, app.name.c_str(), NK_MIDDLE_LEFT);
+            // Top bar: title | session quick switcher | hands-free | speak | settings
+            nk_layout_row_begin(ctx, NK_DYNAMIC, top_h, 5);
             nk_layout_row_push(ctx, 0.22f);
+            nk_label(ctx, app.name.c_str(), NK_MIDDLE_LEFT);
+            nk_layout_row_push(ctx, 0.30f);
+            {
+                // One-click switch over the most recent sessions; the combo
+                // lives inside the main window, so it cannot ROM the UI the
+                // way a child window would (see the fab comment below).
+                if (nk_combo_begin_label(ctx, app.session_title.c_str(),
+                                         nk_vec2(360.0f, 280.0f))) {
+                    nk_layout_row_dynamic(ctx, 24, 1);
+                    int shown = 0;
+                    for (const auto& s : app.store.list()) {
+                        if (++shown > 10)
+                            break;
+                        const std::string item = s.title + "  -  " +
+                            (s.updated.size() >= 16 ? s.updated.substr(0, 16)
+                                                    : s.updated);
+                        if (nk_combo_item_label(ctx, item.c_str(), NK_TEXT_LEFT) &&
+                            s.id != app.session_id)
+                            app.switch_to_session(s.id);
+                    }
+                    if (nk_combo_item_label(ctx, "+ new session", NK_TEXT_LEFT))
+                        app.new_session();
+                    nk_combo_end(ctx);
+                }
+            }
+            nk_layout_row_push(ctx, 0.16f);
             if (button_icon(ctx, app.icons, app.hands_free() ? "mic" : "mic-off",
                             app.hands_free() ? "Hands-free: ON"
                                              : "Hands-free: OFF")) {
@@ -2200,7 +2660,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                             app.auto_speak ? "volume-2" : "volume-x",
                             app.auto_speak ? "Speak: ON" : "Speak: OFF"))
                 app.auto_speak = !app.auto_speak;
-            nk_layout_row_push(ctx, 0.13f);
+            nk_layout_row_push(ctx, 0.17f);
             if (button_icon(ctx, app.icons, "settings", "Settings"))
                 app.settings.open = !app.settings.open;
             nk_layout_row_end(ctx);
@@ -2413,6 +2873,8 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             std::string status_buf;
             if (app.worker == AppState::Worker::Thinking)
                 status_buf = "thinking...";
+            else if (app.worker == AppState::Worker::Compacting)
+                status_buf = "compacting session...";
             else if (app.worker == AppState::Worker::Listening)
                 status_buf = "listening... speak now (max 10 s)";
             else if (app.speaking.load()) status_buf = "speaking...";
@@ -2449,13 +2911,22 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
 
         settings_modal(ctx, cfg, voices, app.settings, w, h, fx, app.models,
                        app.icons);
+        // Session manager (list/switch/new/rename/delete, sessions_plan.md).
+        session_modal(ctx, app, w, h);
         // External-tool permission dialog (blocks the worker until answered).
         permission_modal(ctx, app, w, h);
 
-        // A saved name change propagates to the top bar and the window title.
-        if (cfg.agent.name != app.name) {
+        // A saved name change propagates to the top bar and the window title
+        // (the title also follows the current session).
+        if (cfg.agent.name != app.name)
             app.name = cfg.agent.name;
-            glfwSetWindowTitle(win, app.name.c_str());
+        {
+            static std::string last_win_title;
+            const std::string want = app.name + " \xE2\x80\x94 " + app.session_title;
+            if (want != last_win_title) {
+                glfwSetWindowTitle(win, want.c_str());
+                last_win_title = want;
+            }
         }
 
         // ---- render: shader background, then the UI ----

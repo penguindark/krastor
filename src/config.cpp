@@ -120,6 +120,13 @@ Config Config::load(const std::string& path)
             if (!ov.empty())
                 cfg.tools.overrides_json = ov.dump();
         }
+        if (root.contains("sessions") && root["sessions"].is_object()) {
+            const auto& j = root["sessions"];
+            cfg.sessions.dir = j.value("dir", cfg.sessions.dir);
+            cfg.sessions.autosave = j.value("autosave", cfg.sessions.autosave);
+            cfg.sessions.continue_last =
+                j.value("continue_last", cfg.sessions.continue_last);
+        }
     }
 
     if (cfg.llm.api_key.empty()) {
@@ -174,6 +181,11 @@ void Config::save(const std::string& path) const
             for (const auto& [k, v] : ov.items())
                 root["tools"][k] = v;
     }
+    root["sessions"] = {
+        {"dir", sessions.dir},
+        {"autosave", sessions.autosave},
+        {"continue_last", sessions.continue_last},
+    };
 
     // Atomic write: serialize to a temp file, then rename over the target
     // (std::filesystem::rename replaces an existing file on both toolchains).

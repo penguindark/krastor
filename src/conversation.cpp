@@ -49,6 +49,23 @@ void Conversation::reset()
     messages_.push_back({"system", system_prompt_});
 }
 
+void Conversation::replace_history(std::vector<Message> history)
+{
+    std::vector<Message> msgs;
+    msgs.push_back({"system", system_prompt_});
+    for (auto& m : history)
+        if (m.role != "system")
+            msgs.push_back(std::move(m));
+    messages_ = std::move(msgs);
+}
+
+std::vector<Message> Conversation::messages_since(size_t idx) const
+{
+    if (idx >= messages_.size())
+        return {};
+    return std::vector<Message>(messages_.begin() + long(idx), messages_.end());
+}
+
 size_t Conversation::turn_count() const
 {
     return (messages_.size() - 1) / 2;

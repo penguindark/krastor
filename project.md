@@ -227,3 +227,10 @@ not Krastor's own voice or room noise; toggles `stt.denoise`/`stt.echo_cancel`
   (project root): phases A-D, sandbox `~/Documents/KrastorWorkspace/`,
   ask-permission modals, `ask_actions` forced confirmations, headless
   self-test `krastor --tool-test`.
+- **Phase 7 - Sessions (built 2026-11-07).** Persistent chat sessions in `sessions/`
+  next to the exe, one folder per session (messages JSONL + attachments +
+  compaction archives). Session switching/deletion from CLI and GUI (quick
+  switcher, Ctrl+O modal, `/sessions` `/session` `/compact` commands),
+  LLM-driven context compaction tuned to the active model's context window,
+  headless self-test `krastor --session-test`. Detailed design in
+  `sessions_plan.md` (project root).

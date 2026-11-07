@@ -34,5 +34,10 @@
   },
   "tools": {
     "enabled": true
+  },
+  "sessions": {
+    "dir": "",
+    "autosave": true,
+    "continue_last": true
   }
 }

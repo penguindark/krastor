@@ -1061,3 +1061,41 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   (clamped 360..560 x 260..440), splits the detail one row per line
   (scrollable group), and the runner builds a compact detail: one
   ``path:``/``url:`` line each + single-line ``args:`` JSON.
+
+---
+
+## 2026-11-07 (later) - Phase 7: sessions, switching and compaction
+
+- Design locked in ``sessions_plan.md`` (project root), then implemented
+  end-to-end (phases A-E). One folder per session under ``sessions/``
+  (sibling of ``bin/``, same resolution rule as ``tools/``; ``sessions.dir``
+  overrides): ``meta.json`` + append-only ``log.jsonl`` (one message per
+  line, images stored as ``attachments/img-<n>.png`` refs) +
+  ``archive/pre-compact-<n>.jsonl``. System prompt never persisted (always
+  from config).
+- New modules: ``session_store.h/.cpp`` (SessionStore + ``is_summary_message``)
+  and ``compactor.h/.cpp`` (budget = context - max_tokens - headroom; rolling
+  map-reduce chunk summarization by the *active* LLM; recent tail kept
+  verbatim, tool_call/tool pairs never split). ``Conversation`` gained
+  ``replace_history()`` + ``messages_since()``; config gained the
+  ``sessions.{dir,autosave,continue_last}`` section.
+- CLI: startup pick ``--session``/``--new-session``/continue-last/new,
+  autosave after every turn (auto-title from the first user message),
+  commands ``/sessions``, ``/session info|new|open|delete|rename`` (index,
+  id or unique prefix), ``/compact [focus]``, ``/title``; ``/reset`` now
+  starts a new session folder; pre-loop flags ``--list-sessions`` /
+  ``--delete-session`` / ``--compact`` exit before the voice stack.
+- GUI: autosave in ``poll()`` on turn completion; single switch path
+  ``AppState::switch_to_session()`` (flushes the outgoing session first,
+  refused while the worker is busy); top-bar quick-switcher combo (10 recent
+  + "+ new session"); **Ctrl+O** session modal (open / delete with inline
+  "sure?" confirm / New / Rename), **Ctrl+Shift+O** cycles recent; slash
+  commands intercepted in the input box; ``/compact`` runs on the worker
+  (``Worker::Compacting``, Stop cancels); window title follows
+  ``name — session``; ``rebuild_lines_from_conv()`` re-renders a loaded
+  history (tool calls as collapsed ⚙ blocks, summary as a divider).
+- Self-test ``krastor --session-test``: 29 checks (round-trip incl. image +
+  tool_calls, incremental append, corrupt-tail tolerance, rename/list order,
+  compact archive, delete) - PASS on both toolchains. E2E via CLI against
+  the active model: two turns autosaved, ``/compact`` shrank 4 -> 1 messages
+  with a faithful summary, archive intact. Both toolchains clean; GUI smoke OK.
