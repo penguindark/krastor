@@ -1682,3 +1682,33 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   in the UITEST seed; verified with a bottom-center screenshot + pixel
   scan (bars exactly 86,190,240 at both pill edges).
 - Both toolchains clean; all `--*-test` PASS.
+
+---
+
+## 2026-11-08 (later) - opencode-style thinking wait: block cursor + meter
+
+- Request: the waiting state should look like opencode's: a blinking
+  block cursor in the response area and an animated block meter with an
+  "esc interrupt" hint at the bottom.
+- Chat: while `Worker::Thinking`, a fresh line under the newest content
+  carries a blinking white block (filled rect, 1.1 s cycle ~55% duty,
+  width 0.55*font-height) - where the reply will land. Trap found:
+  `nk_layout_widget_bounds` returns raw content coordinates (it does
+  NOT subtract the group scroll offset, unlike `nk_widget_bounds` ->
+  `nk_layout_peek` -> `nk_layout_widget_space`, which does) - the block
+  was laid out at y=18414, far off-screen. `nk_widget_bounds` fixed it.
+  Side discovery while debugging: the UITEST seed intentionally
+  scroll-jumps the chat to the top (selection-highlight harness), which
+  is why the bottom-pinned cursor never showed in harness screenshots.
+- Status line: after the shimmer word, `draw_block_meter()` draws 6
+  small squares with a light wave sweeping across them (1.4 s coast
+  cycle, sharper crest than the word shimmer: head 1 / tail 2 cells),
+  then "esc" (light) + "interrupt" (dim).
+- Esc now really interrupts: global edge-detected handler calls
+  `stop()` while Thinking/Compacting (cancels the HTTP request + TTS);
+  when idle it falls through to the chat handler (clears selection).
+  Added to the F1 help palette.
+- Verified with the screenshot harness (temporary thinking-hold +
+  bottom-pin): frames show the block blinking under the last line and
+  the meter wave at different positions; text stays fixed-length.
+- Both toolchains clean; all `--*-test` PASS.

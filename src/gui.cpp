@@ -1835,6 +1835,7 @@ void help_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
               {"Ctrl+V", "paste text / attach clipboard image"},
               {"drag & drop", "attach an image file"},
               {"click + drag in chat", "select text (Ctrl+C copies it)"},
+              {"Esc", "interrupt the running request (or clear selection)"},
               {"Ctrl++ / Ctrl+-", "font zoom in / out"}});
         section("Sessions");
         rows({{"Ctrl+O", "open the session manager"},
@@ -2312,6 +2313,29 @@ struct nk_color shim_mix(struct nk_color a, struct nk_color b, float t)
         static_cast<int>(float(a.r) + (float(b.r) - float(a.r)) * t),
         static_cast<int>(float(a.g) + (float(b.g) - float(a.g)) * t),
         static_cast<int>(float(a.b) + (float(b.b) - float(a.b)) * t));
+}
+
+// opencode-style indeterminate meter for the waiting status line: a row of
+// small squares with a light wave sweeping across them. Returns the pixel
+// width consumed.
+float draw_block_meter(struct nk_command_buffer* cv, float x, float y_center,
+                       float h, double now)
+{
+    constexpr int kCells = 6;
+    const float s = std::max(3.0f, h * 0.40f);  // square size
+    const float gap = s * 0.55f;
+    const double cyc = std::fmod(now * 1000.0, 1400.0) / 1400.0;
+    const float front = shim_coast((float)cyc) * (float(kCells) + 1.0f) - 0.5f;
+    for (int i = 0; i < kCells; ++i) {
+        // Sharp crest (head 1 / tail 2 cells): a small bar wants a tighter
+        // wave than the shimmer word does.
+        const float d = front - float(i);
+        const float b = d < 0.0f ? shim_smootherstep(1.0f + d)
+                                 : shim_smootherstep(1.0f - d / 2.0f);
+        fill_px(cv, x + (s + gap) * float(i), y_center - s / 2.0f, s, s,
+                nk_rgba(80, 150, 250, static_cast<int>(60.0f + 195.0f * b)));
+    }
+    return float(kCells) * (s + gap);
 }
 
 // Draws `text` glyph by glyph with the sweep; returns the total pixel width.
@@ -3293,6 +3317,21 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                              spacing;
             ++src;
         }
+        // opencode-style block cursor: while the LLM thinks, a blinking █
+        // sits on a fresh line under the newest content (where the reply
+        // will land). Drawn as a filled rect (no glyph atlas dependency).
+        // nk_widget_bounds (NOT nk_layout_widget_bounds) subtracts the group
+        // scroll offset, so the slot is in screen coordinates like every
+        // chat line.
+        if (app.worker == AppState::Worker::Thinking) {
+            const struct nk_user_font* f = ctx->style.font;
+            nk_layout_row_dynamic(ctx, f->height + spacing, 1);
+            const struct nk_rect slot = nk_widget_bounds(ctx);
+            if (std::fmod(glfwGetTime(), 1.1) < 0.6)
+                fill_px(&ctx->current->buffer, slot.x,
+                        slot.y + (slot.h - f->height) / 2.0f,
+                        f->height * 0.55f, f->height, nk_rgb(232, 236, 242));
+        }
         // Follow-bottom pinning: keep the newest line in view while following.
         // The group keeps its own persistent scroll offset (nk_window_set_scroll
         // would scroll the outer window). The bottom offset is taken from the
@@ -3703,6 +3742,16 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             if (f1 && !prev_f1)
                 app.help_open = !app.help_open;
             prev_f1 = f1;
+            // Esc interrupts a running request (opencode's "esc interrupt");
+            // when idle it falls through to the chat handler (clears the
+            // selection). Edge-detected.
+            static bool prev_esc = false;
+            const bool esc = glfwGetKey(win, GLFW_KEY_ESCAPE) != 0;
+            if (esc && !prev_esc &&
+                (app.worker == AppState::Worker::Thinking ||
+                 app.worker == AppState::Worker::Compacting))
+                app.stop();
+            prev_esc = esc;
         }
 
         // ---- chat selection & scroll hotkeys (only while the chat has focus,
@@ -4220,9 +4269,10 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             const bool amber =
                 100.0 * app.last_prompt_tokens > 85.0 * cfg.llm.context_size;
             if (shim && !status_buf.empty()) {
-                // Custom draw: shimmer on "thinking…", plain color on the rest
-                // (a plain nk_label would ignore the sweep). The slot rect
-                // comes from Nuklear's own layout bookkeeping.
+                // Custom draw: shimmer on "thinking…", then the opencode-
+                // style block meter + "esc interrupt" hint, then the rest in
+                // the plain color (a plain nk_label would ignore the sweep).
+                // The slot rect comes from Nuklear's own layout bookkeeping.
                 const struct nk_rect slot = nk_layout_widget_bounds(ctx);
                 const struct nk_user_font* f = ctx->style.font;
                 const float fh = f->height;
@@ -4233,10 +4283,25 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 const float w = draw_shimmer_text(
                     &ctx->current->buffer, slot.x, ty, slot.h, head, f, base,
                     nk_rgb(150, 200, 255), glfwGetTime());
+                float x = slot.x + w + 14.0f;
+                x += draw_block_meter(&ctx->current->buffer, x,
+                                      slot.y + slot.h / 2.0f, fh,
+                                      glfwGetTime()) +
+                     10.0f;
+                static const char* kEsc = "esc";
+                static const char* kInt = "interrupt";
+                const float we = text_w_px(f, kEsc, 3), wi = text_w_px(f, kInt, 9);
+                nk_draw_text(&ctx->current->buffer, nk_rect(x, ty, we + 2.0f, fh),
+                             kEsc, 3, f, nk_rgba(0, 0, 0, 0),
+                             nk_rgb(165, 170, 180));
+                nk_draw_text(&ctx->current->buffer,
+                             nk_rect(x + we + 6.0f, ty, wi + 2.0f, fh), kInt, 9,
+                             f, nk_rgba(0, 0, 0, 0), nk_rgb(110, 115, 125));
+                x += we + 6.0f + wi + 14.0f;
                 const std::string rest = status_buf.substr(head.size());
                 if (!rest.empty())
                     nk_draw_text(&ctx->current->buffer,
-                                 nk_rect(slot.x + w, ty, slot.w - w, fh),
+                                 nk_rect(x, ty, slot.x + slot.w - x, fh),
                                  rest.data(), (int)rest.size(), f,
                                  nk_rgba(0, 0, 0, 0), base);
             }
