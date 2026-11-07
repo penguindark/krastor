@@ -517,12 +517,12 @@ struct AppState : AskHandler {
                                    ov.is_object() ? ov : nlohmann::json(), tlog);
             for (auto& l : tlog)
                 lines.push_back({"sys", l});
-            if (!tool_registry.empty())
-                c.llm.system_prompt +=
-                    "\nYou can call the provided tools to inspect and change "
-                    "the machine. Writable sandbox: " + workspace_dir() +
-                    " (other locations need user approval). Prefer small, "
-                    "reversible steps and report what a tool did.";
+            // Guard against double-append: the GUI persists the prompt into
+            // config.json on every save, so a saved config already carries it.
+            if (!tool_registry.empty() &&
+                c.llm.system_prompt.find("provided tools to inspect") ==
+                    std::string::npos)
+                c.llm.system_prompt += tool_usage_prompt();
         }
         // Media usage (always on): the model shows images/sounds with the
         // chat tokens. conv was built from the plain prompt in the member

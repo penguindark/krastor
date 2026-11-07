@@ -39,6 +39,24 @@ bool glob_match(const std::string& pattern, const std::string& path);
 // Created on demand; every "write"-class default policy allows it freely.
 std::string workspace_dir();
 
+// Appended to the system prompt when tools are enabled: the sandbox location
+// plus the tool-selection rule - dedicated tools first, python last resort.
+// Callers must guard against double-appending a saved config (same pattern
+// as kMediaUsagePrompt).
+inline std::string tool_usage_prompt()
+{
+    return "\nYou can call the provided tools to inspect and change the "
+           "machine. Writable sandbox: " +
+           workspace_dir() +
+           " (other locations need user approval). Prefer small, reversible "
+           "steps and report what a tool did.\n"
+           "Pick the simplest tool that does the job: use files to read, "
+           "write or edit files (NEVER run python just to read or write a "
+           "file), webfetch/websearch for web content, and python ONLY as a "
+           "last resort for what the other tools cannot do (computation, "
+           "data processing, extra packages).";
+}
+
 struct PermRule {
     std::vector<std::string> allow;  // empty = unrestricted (unless deny)
     std::vector<std::string> deny;

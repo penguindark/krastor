@@ -447,6 +447,15 @@ int run_tool_test()
     check("utf8_clean cuts truncated tail",
           krastor::utf8_clean("ok\xe2\x82") == "ok??");
 
+    // tool usage prompt: sandbox + the "python is the last resort" rule.
+    {
+        const std::string up = krastor::tool_usage_prompt();
+        check("tool prompt: sandbox + python last resort",
+              up.find(krastor::workspace_dir()) != std::string::npos &&
+                  up.find("last resort") != std::string::npos &&
+                  up.find("NEVER run python just to read") != std::string::npos);
+    }
+
     krastor::GrantStore grants;
     krastor::ToolRegistry reg;
     std::vector<std::string> log;
@@ -1137,12 +1146,11 @@ int main(int argc, char** argv)
                                ov.is_object() ? ov : nlohmann::json(), tlog);
         for (auto& l : tlog)
             std::cout << l << "\n";
-        if (!tool_registry.empty())
-            cfg.llm.system_prompt +=
-                "\nYou can call the provided tools to inspect and change the "
-                "machine. Writable sandbox: " + krastor::workspace_dir() +
-                " (other locations need user approval). Prefer small, "
-                "reversible steps and report what a tool did.";
+        // Guard against double-append (a saved config already carries it).
+        if (!tool_registry.empty() &&
+            cfg.llm.system_prompt.find("provided tools to inspect") ==
+                std::string::npos)
+            cfg.llm.system_prompt += krastor::tool_usage_prompt();
     }
     // Media usage instructions (chat [image:]/[sound:] tokens), same as the
     // GUI; guarded so a config that already stores the text is not doubled.

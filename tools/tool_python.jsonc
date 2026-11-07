@@ -4,7 +4,7 @@
 // the dialog shows the code about to run.
 {
   "name": "python",
-  "description": "Run Python code in the agent's dedicated virtualenv (packages: requests, beautifulsoup4). Provide either inline 'code' or a 'script' file path with optional 'args'. The working directory is the workspace sandbox. Returns the program's stdout and, on failure, the traceback. Every run needs user approval.",
+  "description": "Run Python code in the agent's dedicated virtualenv (packages: requests, beautifulsoup4). LAST RESORT tool: use the files tool to read/write/edit files and webfetch for URLs - never call python for what those tools can do; use python only for computation, data processing or extra packages. Provide either inline 'code' or a 'script' file path with optional 'args'. The working directory is the workspace sandbox. Returns the program's stdout and, on failure, the traceback. Every run needs user approval.",
   "exe": "python/venv/Scripts/python.exe",
   "args": ["python/runner.py"],
   "cwd": "workspace",

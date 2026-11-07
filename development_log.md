@@ -1322,3 +1322,24 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   covers the prompt template/update mode, the 5 transcript levels and the
   buffer math. Both toolchains clean; ``--tool-test``/``--session-test``/
   ``--media-test`` all PASS; GUI smoke with the seeded diff block OK.
+
+---
+
+## 2026-11-07 (later) - tool-choice fix: python demoted to last resort
+
+- Reported behavior: the agent kept running python to read text files even
+  though ``files read`` does that directly. Two causes found:
+  1. **Duplicated system prompt**: the tool-usage instruction was appended to
+     ``llm.system_prompt`` WITHOUT the double-append guard the media prompt
+     has; the GUI persists the prompt into ``config.json`` on every save, so
+     each launch added one more copy - the live config carried it 24 times
+     (~6 KB of junk diluting the instructions). Fixed: shared
+     ``tool_usage_prompt()`` in permissions.h (next to ``workspace_dir``),
+     appended in GUI + CLI only when the marker text is absent; the polluted
+     ``bin/config.json`` was cleaned (backup in the temp dir).
+  2. **No tool-choice guidance**: neither the prompt nor the manifests said
+     which tool to reach for. The prompt now adds "simplest tool first:
+     files for file I/O (NEVER python just to read/write a file), webfetch
+     for web content, python ONLY as a last resort"; the python manifest
+     description starts with "LAST RESORT tool: ...". Covered by
+     ``--tool-test``.
