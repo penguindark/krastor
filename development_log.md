@@ -1485,3 +1485,29 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   verbatim) + UITEST seed line "repaired banner no ESC"; screenshot-verified
   on the real session: the METEO SASSARI block now renders colored.
 - Both toolchains clean; all ``--*-test`` PASS.
+
+---
+
+## 2026-11-07 (later) - chat scroll could not reach the last lines
+
+- Reported: after the prime-table reply the wheel "stopped descending" and the
+  last lines stayed hidden. Investigation first looked at DPI (150% display)
+  and the render backend - all clean: `glfwGetWindowSize` == framebuffer ==
+  `GetClientRect`, one ortho, scissor respected. The reported screenshot was
+  a Win+Shift+S area crop, which cut the input box out and made the crop edge
+  look like the window edge.
+- Real weak point found while measuring: the follow/wheel bottom was computed
+  from `content_h`, a parallel sum of measured row heights, and the scroll
+  was clamped to it. Nuklear's own scrollbar clamps to the group's actual
+  layout end (`at_y + row.height - bounds.y - bounds.h`). The two agreed on
+  every measured frame, but whenever they diverge the smaller clamp makes the
+  tail of the chat unreachable - exactly the reported symptom.
+- Fix: `bottom = max(content_h - visible, layout_end)` - the layout end is
+  authoritative (same value Nuklear's scrollbar max uses), the estimate only
+  keeps the small bottom margin. Wheel clamp, keyboard End and the follow pin
+  all use it.
+- Debugging note for future harnesses: PowerShell screenshot helpers must
+  call `SetProcessDPIAware()` first - a DPI-unaware `GetWindowRect`/
+  `CopyFromScreen` pair captures only the top-left virtualized part of a
+  DPI-scaled window and fakes "content below the window is missing".
+- Both toolchains clean; all `--*-test` PASS.

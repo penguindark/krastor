@@ -3145,12 +3145,20 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         }
         // Follow-bottom pinning: keep the newest line in view while following.
         // The group keeps its own persistent scroll offset (nk_window_set_scroll
-        // would scroll the outer window). The bottom offset is computed
-        // explicitly instead of relying on Nuklear's clamp, which stops running
-        // once the scrollbar auto-hides. Scrolling up with the wheel leaves the
+        // would scroll the outer window). The bottom offset is taken from the
+        // group's actual layout end - the same value Nuklear's own scrollbar
+        // clamps to - rather than from the content_h sum: if the two ever
+        // diverge, clamping to the smaller one would leave the last lines
+        // unreachable below the clamp. Scrolling up with the wheel leaves the
         // view where the user left it; reaching the bottom re-enables follow.
         const float visible = height - 2.0f * ctx->style.window.padding.y - 8.0f;
-        const float bottom = content_h > visible ? content_h - visible : 0.0f;
+        struct nk_panel* gp = ctx->current->layout;
+        const float est_bottom = content_h > visible ? content_h - visible : 0.0f;
+        // panel_end finalizes at_y with the last row height; Nuklear's own
+        // scrollbar max is (at_y + row.height) - bounds.y - bounds.h.
+        const float layout_bottom =
+            gp->at_y + gp->row.height - gp->bounds.y - gp->bounds.h;
+        const float bottom = layout_bottom > est_bottom ? layout_bottom : est_bottom;
         // Keyboard scroll commands (PageUp/PageDown/Home/End, set by the main
         // loop when the chat has focus).
         if (app.scroll_cmd) {

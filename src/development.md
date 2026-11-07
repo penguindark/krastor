@@ -91,7 +91,11 @@ session switching and LLM-driven compaction.
   - `nk_window_set_scroll` scrolls the **outer window**, not the current group; use
     `nk_group_set_scroll(ctx, id, x, y)` with the group's own id. Nuklear only clamps
     the offset while the scrollbar is visible, so compute the bottom offset yourself
-    (content height − visible height) rather than pinning to a huge value.
+    rather than pinning to a huge value — but take it from the group's **actual
+    layout end** (`panel->at_y + row.height − bounds.y − bounds.h`, the same value
+    Nuklear's own scrollbar max uses), not from a parallel sum of measured row
+    heights: if the two ever diverge, clamping to the smaller one leaves the last
+    lines unreachable below the clamp ("scroll sticks, last lines invisible").
     **Read with `nk_group_get_scroll`, never `nk_window_get_scroll`**: inside a group
     `ctx->current` is still the main window (groups are panels, not windows), so
     `nk_window_get_scroll` returns the main window's `scrollbar.y` (always 0) while
