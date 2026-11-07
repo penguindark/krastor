@@ -894,6 +894,21 @@ struct AppState : AskHandler {
             clean_screen();
             return true;
         }
+        if (line == "/voice") {  // toggle TTS output (same as the top-bar button)
+            auto_speak = !auto_speak;
+            lines.push_back({"sys", std::string("voice output: ") +
+                                    (auto_speak ? "ON" : "OFF")});
+            return true;
+        }
+        if (line == "/mic") {  // toggle microphone capture (hands-free pipeline)
+            if (hands_free()) {
+                stop_hands_free();
+                lines.push_back({"sys", "microphone capture: OFF"});
+            } else {
+                start_hands_free();  // reports its own success/failure line
+            }
+            return true;
+        }
         if (line == "/compact" || line.rfind("/compact ", 0) == 0) {
             run_compact(arg_of("/compact"));
             return true;
@@ -1268,9 +1283,14 @@ void permission_modal(struct nk_context* ctx, AppState& app, int win_w, int win_
                          NK_LEFT, nk_rgb(235, 160, 70));
         nk_layout_row_dynamic(ctx, 20, 1);
         nk_label(ctx, pa->action.c_str(), NK_LEFT);
-        // Explicit row height: without it the group collapses to a sliver
-        // and the detail text is unreachable.
-        nk_layout_row_dynamic(ctx, (float)mh - 130.0f, 1);
+        // The detail group gets EXACTLY the space left after the labels and
+        // the button row (queried from the live layout, not a fixed formula:
+        // a formula overflowed the window at larger font sizes, pushing the
+        // buttons off-screen behind a second scrollbar).
+        const struct nk_rect rem = nk_window_get_content_region(ctx);
+        const float detail_h = (std::max)(
+            60.0f, rem.h - 32.0f - ctx->style.window.spacing.y);
+        nk_layout_row_dynamic(ctx, detail_h, 1);
         if (nk_group_begin(ctx, "##perm_detail", NK_WINDOW_BORDER)) {
             // One row per detail line: nk_label_wrap renders literal '\n'
             // as a "?" glyph, so the lines are split here instead.
@@ -1349,7 +1369,11 @@ void session_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
     nk_layout_row_dynamic(ctx, row_h + 4, 1);
     nk_label_colored(ctx, "Sessions - click a row to open it", NK_LEFT,
                      nk_rgb(110, 160, 220));
-    const float list_h = (std::max)(80.0f, (float)mh - 2.0f * row_h - 78.0f);
+    // Exact remaining space (see the permission modal note): the footer row
+    // stays inside the window, so only the list itself scrolls.
+    const struct nk_rect rem = nk_window_get_content_region(ctx);
+    const float list_h = (std::max)(80.0f,
+                                    rem.h - 30.0f - ctx->style.window.spacing.y);
     nk_layout_row_dynamic(ctx, list_h, 1);
     if (nk_group_begin(ctx, "##sess_list", NK_WINDOW_BORDER)) {
         const auto sessions = app.store.list();

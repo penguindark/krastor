@@ -230,6 +230,11 @@ session switching and LLM-driven compaction.
 - Session autosave ordering: always flush the OUTGOING session (autosave)
   BEFORE loading/creating another one - after `conv` was replaced the pending
   tail belongs to the wrong session and would be appended to the new folder.
+- Modal scrollable groups must size from `nk_window_get_content_region(ctx)`
+  (remaining content height queried after the top rows, minus the footer row
+  + spacing) - fixed `mh - K` formulas overflow once the title bar and row
+  spacing are counted, and the footer buttons end up below the window with a
+  second scrollbar around the modal.
 
 ## Planned layout (roadmap)
 - `gui/` — GLSL effect passes, terminal I/O panel, attachments input (Phase 5)

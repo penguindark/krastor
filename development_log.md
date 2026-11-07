@@ -1119,3 +1119,18 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
 - **``/clean``** clears the visible chat WITHOUT touching the session or the
   LLM conversation (``clean_screen()``); also a 6th floating button (new
   ``eraser`` Lucide icon, ``--icon-test`` now 12 icons) next to Stop.
+
+---
+
+## 2026-11-07 (later) - modal sizing done right + /voice + /mic
+
+- The permission modal STILL overflowed (buttons cut off at the bottom, one
+  scrollbar on the window): fixed row-height formulas cannot account for the
+  title bar + spacing at every font size. Both the permission modal and the
+  session modal now query ``nk_window_get_content_region()`` after the top
+  rows and give the scrollable group exactly ``remaining - footer row`` —
+  the footer can never be pushed out of the window again.
+- New GUI slash commands: ``/voice`` toggles TTS output (same flag as the
+  top-bar speaker button) and ``/mic`` toggles microphone capture
+  (hands-free pipeline). The CLI keeps its existing ``/voice <id>`` (voice
+  selection) and ``/mic [sec]`` (level meter) semantics untouched.
