@@ -18,9 +18,22 @@ namespace krastor {
 using CodeHighlightFn =
     std::function<std::string(const std::string& code, const std::string& lang)>;
 
-// Markdown -> ANSI-styled text. Input that already contains ESC bytes is
-// returned unchanged (pre-styled tool output must not be re-processed).
+// Markdown -> ANSI-styled text. Source lines that already contain ESC bytes
+// are emitted verbatim (terminal passthrough: pre-styled tool output, ANSI
+// art), while the remaining lines keep their markdown formatting.
 std::string md_to_ansi(const std::string& md,
                        const CodeHighlightFn& hl = nullptr);
+
+// Appended to the system prompt (GUI + CLI, always on): the chat renders
+// ANSI SGR colors, so the model can emit colored output directly instead of
+// describing or escaping it. Guarded against double-append like
+// kMediaUsagePrompt (marker: "renders ANSI SGR colors").
+inline constexpr const char* kAnsiUsagePrompt =
+    "\nThe chat renders ANSI SGR colors (16/256/truecolor fg+bg, bold): to "
+    "show colored output (ANSI art, colored listings, terminal demos) print "
+    "the raw escape codes directly instead of describing or escaping them, "
+    "and do not wrap them in code blocks. Lines containing ANSI codes are "
+    "shown verbatim (markdown is skipped for those lines only), so keep "
+    "colored blocks on their own lines.";
 
 } // namespace krastor

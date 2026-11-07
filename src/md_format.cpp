@@ -344,9 +344,6 @@ void append_block_bg(std::vector<std::string>& out, const std::string& code)
 
 std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
 {
-    if (md.find('\x1b') != std::string::npos)
-        return md;  // already styled (e.g. shell/tool output)
-
     std::vector<std::string> lines;
     {
         size_t start = 0;
@@ -366,6 +363,16 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
     size_t i = 0;
     while (i < n) {
         const std::string& ln = lines[i];
+
+        // Terminal passthrough: a line that already carries ESC bytes is
+        // emitted verbatim (pre-styled tool output, ANSI art) while the
+        // other lines keep their markdown formatting. Lines consumed inside
+        // a fenced block or table below never reach this check.
+        if (ln.find('\x1b') != std::string::npos) {
+            out.push_back(ln);
+            ++i;
+            continue;
+        }
 
         // fenced code block
         std::string marker, lang;

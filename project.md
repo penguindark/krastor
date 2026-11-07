@@ -69,7 +69,11 @@ bold; other escapes stripped) and drawn as styled runs with `nk_draw_text`:
 - indentation-preserving word wrap with UTF-8-safe hard breaks.
 LLM replies are styled by the output formatting plugins (`src/formatters.h`:
 Markdown, syntax highlighting, Thought blocks, color emoji) before reaching this
-renderer.
+renderer. Raw ANSI from the model or from tool output is honored, not escaped:
+`md_to_ansi` passes any ESC-carrying source line through verbatim (terminal
+passthrough) while the other lines keep their Markdown formatting, and the
+system prompt (`kAnsiUsagePrompt`) tells the model the chat speaks SGR colors
+so it prints colored output instead of describing it.
 Implemented: per-response stats sub-line (`model - time -
 tok/s`) + context-usage footer (`llm.context_size`), window-size persistence,
 mouse-wheel/keyboard chat scrolling with follow-bottom, and chat text selection &

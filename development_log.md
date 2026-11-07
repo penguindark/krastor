@@ -1369,3 +1369,29 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   font and ``│ ─`` render blank.
 - Both toolchains clean; ``--tool-test``/``--session-test``/``--media-test``
   all PASS.
+
+---
+
+## 2026-11-07 (later) - ANSI color output in the chat (ansi_plan.md)
+
+- Goal: colored output (ANSI art, colored listings) visible in the chat.
+  Investigation showed the renderer already spoke ANSI end-to-end; the gaps
+  were upstream:
+  1. the model did not know the chat renders colors and refused to print the
+     codes - added ``kAnsiUsagePrompt`` (md_format.h), appended always-on
+     with the usual double-append guard (marker "renders ANSI SGR colors")
+     in GUI + CLI;
+  2. ``md_to_ansi`` passthrough was all-or-nothing: ONE ESC anywhere made
+     the whole reply skip markdown - now the check is per source line: ESC
+     lines are emitted verbatim (terminal passthrough), the other lines
+     keep their formatting. Accepted limit: an inline colored word makes
+     that one line skip markdown.
+- ``--tool-test`` gained three assertions (prompt present, line-level
+  passthrough, utf8_clean keeps ESC). UITEST seed gained an "ANSI art
+  check" sample (amber background blocks between a heading and a list
+  item) - screenshot verified: colors render, markdown around them intact,
+  full-line diff backgrounds unchanged.
+- Screenshot harness learned: wheel injection is ~2 lines/notch and the
+  scroll-up must run AFTER the final scroll-down burst (the auto-send
+  reply lands late and re-pins the view).
+- Both toolchains clean; all ``--*-test`` PASS.

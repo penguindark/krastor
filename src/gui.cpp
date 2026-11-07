@@ -530,6 +530,10 @@ struct AppState : AskHandler {
         // double-append when a saved config already contains it.
         if (c.llm.system_prompt.find("[image: ") == std::string::npos)
             c.llm.system_prompt += kMediaUsagePrompt;
+        // ANSI color guidance (the chat renderer speaks SGR), same guard.
+        if (c.llm.system_prompt.find("renders ANSI SGR colors") ==
+                std::string::npos)
+            c.llm.system_prompt += kAnsiUsagePrompt;
         conv.set_system_prompt(c.llm.system_prompt);
         // Syntax highlighting for fenced code blocks (data/languages/*.json).
         if (hl.load_default())
@@ -577,6 +581,13 @@ struct AppState : AskHandler {
                 E + "[48;2;20;60;30m+  full-width green diff line" + E + "[0m"});
             lines.push_back({"krastor",
                 E + "[48;2;80;20;20m-  full-width red diff line" + E + "[0m"});
+            // ANSI art sample: raw SGR colors must render as colors while
+            // the markdown around them survives (line-level passthrough).
+            lines.push_back({"krastor", fmt.format(
+                "### ANSI art check\n"
+                "\x1b[48;2;255;215;0m        \x1b[48;2;230;180;0m        "
+                "\x1b[48;2;200;140;0m        \x1b[0m amber blocks\n"
+                "- markdown list item **still styled**")});
             // Sample file-edit diff block (side-by-side renderer test).
             {
                 ChatLine dl{"sys", "", ""};

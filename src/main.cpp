@@ -456,6 +456,23 @@ int run_tool_test()
                   up.find("NEVER run python just to read") != std::string::npos);
     }
 
+    // ANSI color guidance for the model + line-level markdown passthrough:
+    // ESC lines survive verbatim, the rest of the message stays formatted.
+    {
+        check("ansi prompt: SGR guidance present",
+              std::string(krastor::kAnsiUsagePrompt).
+                  find("renders ANSI SGR colors") != std::string::npos);
+        const std::string mixed = krastor::md_to_ansi(
+            "## Head\n\x1b[31mraw red\x1b[0m\nplain **bold**");
+        check("md passthrough is line-level",
+              mixed.find("\x1b[31mraw red\x1b[0m") != std::string::npos &&
+                  mixed.find("## ") == std::string::npos &&
+                  mixed.find("Head") != std::string::npos);
+        check("utf8_clean keeps ESC bytes",
+              krastor::utf8_clean("\x1b[32mgreen\x1b[0m").find('\x1b') !=
+                  std::string::npos);
+    }
+
     krastor::GrantStore grants;
     krastor::ToolRegistry reg;
     std::vector<std::string> log;
@@ -1156,6 +1173,10 @@ int main(int argc, char** argv)
     // GUI; guarded so a config that already stores the text is not doubled.
     if (cfg.llm.system_prompt.find("[image: ") == std::string::npos)
         cfg.llm.system_prompt += krastor::kMediaUsagePrompt;
+    // ANSI color guidance (the chat renderer speaks SGR), same guard.
+    if (cfg.llm.system_prompt.find("renders ANSI SGR colors") ==
+            std::string::npos)
+        cfg.llm.system_prompt += krastor::kAnsiUsagePrompt;
     krastor::OutputFormatter fmt(cfg);
     krastor::Highlighter hl;
     if (hl.load_default())
