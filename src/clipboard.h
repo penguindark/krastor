@@ -28,4 +28,10 @@ PastedImage load_image_file(const std::string& path);
 // Standard base64 (no line breaks) for data: URLs.
 std::string base64_encode(const unsigned char* data, size_t len);
 
+// Decode image bytes (any stb-readable format) and place them on the
+// clipboard as CF_DIB so any app can paste them as a picture (the reverse of
+// clipboard_get_image). Used by click-to-copy on chat images.
+bool copy_image_to_clipboard(const std::vector<unsigned char>& image_bytes,
+                             std::string& err);
+
 } // namespace krastor

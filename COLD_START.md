@@ -158,6 +158,15 @@ sessione): `Ctrl+O` apre il gestore sessioni, `Ctrl+Shift+O` cicla le
 recenti, `/compact` riassume la sessione con il modello attivo, `/clean`
 (pulsante gomma) pulisce lo schermo senza toccare la sessione, `F1` o
 `/help` apre l'elenco di comandi e scorciatoie.
+Media nel chat: `/image <file|clipboard|base64:...> [w [h]]` mostra
+un'immagine (dimensioni opzionali, `-` = automatica; l'immagine è sempre
+contenuta nell'area testo), `/play <file|beep>` riproduce un audio con un
+mini player (play/stop + avanzamento). Clic su un'immagine = copiata negli
+appunti (come la selezione di testo). Il modello può fare lo stesso con i
+token su riga dedicata `[image: src | w | h]` e `[sound: src]` (istruito
+nel system prompt a preferire `[image: ...]` per mostrare immagini); i
+token base64 sopravvivono al ripristino della sessione, i path richiedono
+che il file esista ancora.
 
 Senza argomenti parte la CLI (stessa chat, testuale): comandi `/sessions`,
 `/session new|open|delete|rename`, `/compact`; flag `--session <id>`,
@@ -166,7 +175,7 @@ Senza argomenti parte la CLI (stessa chat, testuale): comandi `/sessions`,
 ## 8. Verifiche rapide
 
 ```powershell
-# atlas delle icone SVG senza GUI: rasterizza le 11 icone, controlla
+# atlas delle icone SVG senza GUI: rasterizza le 14 icone, controlla
 # l'coverage e scrive icon_atlas_test.png da ispezionare
 .\bin\krastor.exe --icon-test
 .\bin\krastor.exe --fx-test
@@ -176,6 +185,9 @@ Senza argomenti parte la CLI (stessa chat, testuale): comandi `/sessions`,
 # sistema delle sessioni: round-trip cartella/alleati/tool call, tolleranza
 # ai crash, archivio del compact, delete — senza LLM
 .\bin\krastor.exe --session-test
+# media inline: parsing dei token [image:]/[sound:], taglie e scalatura
+# fit-inside, split delle risposte, decode di un WAV di test — senza LLM
+.\bin\krastor.exe --media-test
 ```
 
 - Icone mancanti/emoji al posto delle SVG → sei partito da una cartella che

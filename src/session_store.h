@@ -31,6 +31,10 @@ struct SessionMeta {
 inline constexpr const char* kSummaryMarker = "[Conversation summary";
 bool is_summary_message(const Message& m);
 
+// Standard base64 decode (padding/whitespace skipped); encode lives in
+// clipboard.cpp. Shared with the media system ("base64:" sources).
+std::vector<unsigned char> base64_decode(const std::string& in);
+
 class SessionStore {
 public:
     // sessions.dir from config; "" -> exe_dir()/sessions (fallback ./sessions

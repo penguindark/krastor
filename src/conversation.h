@@ -41,6 +41,11 @@ public:
     // Clears the history but keeps the system prompt.
     void reset();
 
+    // Replaces the system prompt (first message) without touching history;
+    // used when runtime text is appended after construction (tools/media
+    // usage instructions).
+    void set_system_prompt(const std::string& prompt);
+
     // Replaces the whole history (system prompt kept as first message);
     // `history` must not contain a system message. Used to restore persisted
     // sessions and compacted histories (see sessions_plan.md).

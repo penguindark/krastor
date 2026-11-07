@@ -60,33 +60,8 @@ std::string random_hex4()
     return buf;
 }
 
-// ---- base64 decode (encode lives in clipboard.cpp) ----
-
-std::vector<unsigned char> base64_decode(const std::string& in)
-{
-    auto val = [](char c) -> int {
-        if (c >= 'A' && c <= 'Z') return c - 'A';
-        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-        if (c >= '0' && c <= '9') return c - '0' + 52;
-        if (c == '+') return 62;
-        if (c == '/') return 63;
-        return -1;
-    };
-    std::vector<unsigned char> out;
-    int acc = 0, bits = 0;
-    for (const char c : in) {
-        const int v = val(c);
-        if (v < 0)
-            continue;  // skip padding/whitespace
-        acc = (acc << 6) | v;
-        bits += 6;
-        if (bits >= 8) {
-            bits -= 8;
-            out.push_back(static_cast<unsigned char>((acc >> bits) & 0xff));
-        }
-    }
-    return out;
-}
+// ---- base64 decode: declared in session_store.h (encode lives in
+// clipboard.cpp); defined below, outside this anonymous namespace. ----
 
 // ---- Message <-> jsonl line ----
 
@@ -214,6 +189,32 @@ bool meta_from_json(const json& j, SessionMeta& out)
 }
 
 } // namespace
+
+std::vector<unsigned char> base64_decode(const std::string& in)
+{
+    auto val = [](char c) -> int {
+        if (c >= 'A' && c <= 'Z') return c - 'A';
+        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+        if (c >= '0' && c <= '9') return c - '0' + 52;
+        if (c == '+') return 62;
+        if (c == '/') return 63;
+        return -1;
+    };
+    std::vector<unsigned char> out;
+    int acc = 0, bits = 0;
+    for (const char c : in) {
+        const int v = val(c);
+        if (v < 0)
+            continue;  // skip padding/whitespace
+        acc = (acc << 6) | v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<unsigned char>((acc >> bits) & 0xff));
+        }
+    }
+    return out;
+}
 
 bool is_summary_message(const Message& m)
 {

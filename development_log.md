@@ -1218,3 +1218,70 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   off-screen), restored after ``glfwCreateWindow`` only if the spot lands on
   some monitor's work area (stale positions from disconnected monitors fall
   back to the OS placement).
+
+---
+
+## 2026-11-07 (later) - inline media: images + mini sound player in the chat
+
+- New ``src/media.h/.cpp`` (+ ``krastor --media-test``): a ``ChatLine`` can
+  carry a ``MediaBlock`` rendered as its own row in the chat flow.
+  Sources: file path, ``clipboard`` or ``base64:...`` (self-contained: the
+  token lives in the message text, so base64 images survive session
+  restore; file paths show a placeholder when the file is gone).
+- **Images**: ``/image <src> [w [h]]`` in the GUI; the LLM uses a dedicated
+  reply line ``[image: src | w | h]`` (``-``/``*``/``auto`` = auto size).
+  Sizing rule: explicit w+h, one axis scaled by the native aspect, none =
+  native size - then ALWAYS a final fit-inside pass into the chat text area
+  (width = panel, height = visible chat, ratio preserved), so an image can
+  never overflow. Textures uploaded lazily on the render thread (stb decode
+  -> glTexImage2D, same pattern as the icon atlas), LRU-evicted at 40.
+  ``poll()`` splits replies into text/media segments BEFORE markdown, the
+  TTS speaks only the text segments, ``rebuild_lines_from_conv()`` does the
+  same so restored sessions re-render their blocks.
+- **Sounds**: ``/play <file|beep>`` and the reply token ``[sound: src]``;
+  new ``SoundPlayer`` (miniaudio ``ma_decoder`` from memory -> f32 PCM ->
+  dedicated ``ma_device``, independent from the TTS device). Chat mini
+  player row: Play/Stop (new ``play`` SVG, 14 icons) + name + progress
+  (``nk_progress``); one sound at a time, Stop button and session switch
+  silence it. ``beep`` plays a generated test tone (PCM buffer path).
+- ``base64_decode`` moved out of session_store's anonymous namespace and
+  declared in ``session_store.h`` (shared with media). Help overlay got a
+  "Media" section; docs synced (COLD_START, development.md).
+
+---
+
+## 2026-11-07 (later) - media: model prompt instruction + click image to copy
+
+- The system prompt now always carries a media-usage instruction
+  (``kMediaUsagePrompt`` in media.h, appended in GUI ctor and CLI, guarded
+  against double-append when a saved config already stores it): the model
+  must PREFER the ``[image: ...]`` token to show images unless the user
+  asked otherwise. Fixed on the way: the GUI appended the tools instruction
+  to ``cfg.llm.system_prompt`` AFTER ``conv`` was built from it, so it never
+  reached the model - new ``Conversation::set_system_prompt()`` re-syncs the
+  first message after the appends.
+- Click an image block = copy it to the clipboard: new
+  ``copy_image_to_clipboard()`` (clipboard.cpp: stb decode -> CF_DIB
+  bottom-up 32bpp, the format every Windows app pastes). Rects recorded per
+  frame like the Thought headers; the click is consumed (no selection
+  start), feedback is a sys line. Works for file/base64/clipboard sources
+  (bytes re-resolved when the RAM copy was freed after texture upload).
+
+---
+
+## 2026-11-07 (later) - crash fix: invalid UTF-8 in tool output aborted the app
+
+- Reported crash (Debug Error ``abort()`` after allowing a python tool call
+  while the help modal was open): ``krastor_error.log`` showed
+  ``json.exception.type_error.316 invalid UTF-8 byte at index 8000`` -
+  ``cap_text()`` truncated the tool output at exactly 8000 BYTES, cutting a
+  UTF-8 codepoint in half; the broken string entered the conversation and
+  the session autosave (main thread) threw while serializing it to JSON.
+  The modal was unrelated.
+- Fixes: ``cap_text`` now backs the cut off to a codepoint boundary, and
+  every tool result passes through the new ``utf8_clean()`` (invalid bytes
+  -> ``?``; python on Windows prints cp1252/cp850, which would have broken
+  JSON even without truncation). Defense in depth: ``autosave_turn()``
+  catches JSON errors (sys line + cursor not advanced, so the turn is
+  retried next save) instead of dying. ``utf8_clean`` covered by
+  ``--tool-test``.

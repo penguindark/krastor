@@ -31,7 +31,9 @@
 #include <fstream>
 #include <future>
 #include <initializer_list>
+#include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -56,11 +58,13 @@
 #include "audio_fx.h"
 #include <algorithm>
 #include "permissions.h"
+#include "media.h"
 #include "tool_registry.h"
 #include "tool_runner.h"
 #include "tool_loop.h"
 #include "session_store.h"
 #include "compactor.h"
+#include "stb_image.h"
 
 namespace krastor {
 
@@ -90,6 +94,7 @@ struct ChatLine {
     std::string think_meta;  // duration suffix, e.g. "5.4s"
     std::string think_label; // "" = "Thought"
     bool thought_open = false;
+    MediaRef media;          // image/sound block shown in the chat flow
     ChatLine() = default;
     ChatLine(std::string w, std::string t, std::string m = {})
         : who(std::move(w)), text(std::move(t)), meta(std::move(m)) {}
@@ -374,6 +379,12 @@ struct AppState : AskHandler {
     float chat_bottom = 0.0f;    // last frame's max scroll offset (wheel clamp)
                                  // scrolled back up (wheel/keys clear the flag)
 
+    // ---- Inline media (see media.h) ----
+    SoundPlayer player;  // mini sound player (own output device)
+    // Loaded image textures in load order (oldest first) for LRU eviction;
+    // blocks are owned by `lines`, these are just observers.
+    std::vector<std::weak_ptr<MediaBlock>> tex_lru;
+
     // ---- Hands-free pipeline (mic -> STT -> chat -> LLM -> TTS) ----
     // The Stt feeder thread pushes closed VAD segments into `utterances`; a
     // pipeline worker recognizes them and pushes the text into `heard`, which
@@ -466,6 +477,9 @@ struct AppState : AskHandler {
     // Clickable "Thought" header rects recorded during the last frame:
     // (ChatLine index, header rect in window coords). Clicking one toggles.
     std::vector<std::pair<int, struct nk_rect>> thought_rects;
+    // Image blocks drawn last frame: (ChatLine index, image rect). A click
+    // inside copies the image to the clipboard (like text selection copies).
+    std::vector<std::pair<int, struct nk_rect>> image_rects;
 
     AppState(Config& c, VoiceRegistry& v)
         : cfg(c), voices(v), conv(c.llm.system_prompt), llm(c.llm), tts(v, c), stt(c),
@@ -493,6 +507,13 @@ struct AppState : AskHandler {
                     " (other locations need user approval). Prefer small, "
                     "reversible steps and report what a tool did.";
         }
+        // Media usage (always on): the model shows images/sounds with the
+        // chat tokens. conv was built from the plain prompt in the member
+        // init list, so push the appended text into it too. Guard against
+        // double-append when a saved config already contains it.
+        if (c.llm.system_prompt.find("[image: ") == std::string::npos)
+            c.llm.system_prompt += kMediaUsagePrompt;
+        conv.set_system_prompt(c.llm.system_prompt);
         // Syntax highlighting for fenced code blocks (data/languages/*.json).
         if (hl.load_default())
             fmt.set_highlighter([this](const std::string& code,
@@ -693,6 +714,7 @@ struct AppState : AskHandler {
             lines.push_back({"sys", "(stopped)"});
         }
         tts.interrupt();  // no-op when nothing is playing
+        player.stop();    // mini sound player too
     }
 
     // ------------------------------------------------------------- sessions
@@ -705,7 +727,15 @@ struct AppState : AskHandler {
         const auto fresh = conv.messages_since(saved_count);
         if (fresh.empty())
             return;
-        store.append(session_id, fresh);
+        // A JSON error here (invalid UTF-8 sneaking into the history) must
+        // never take the GUI down: the cursor simply does not advance, so
+        // the turn is retried on the next save.
+        try {
+            store.append(session_id, fresh);
+        } catch (const std::exception& e) {
+            lines.push_back({"sys", std::string("autosave failed: ") + e.what()});
+            return;
+        }
         saved_count = conv.messages().size();
         SessionMeta sm;
         if (store.meta_of(session_id, sm) && sm.title == "New session") {
@@ -754,8 +784,20 @@ struct AppState : AskHandler {
                     tl.thinking = "args: " + tc.arguments;
                     lines.push_back(std::move(tl));
                 }
-                if (!m.content.empty())
-                    lines.push_back({"krastor", fmt.format(m.content)});
+                if (!m.content.empty()) {
+                    // Same media-token split as live replies: restored
+                    // sessions re-render their image/sound blocks (base64
+                    // tokens are self-contained; file paths need the file).
+                    for (auto& s : split_media_tokens(m.content)) {
+                        if (s.media) {
+                            ChatLine ml{"krastor", ""};
+                            ml.media = std::move(s.media);
+                            lines.push_back(std::move(ml));
+                        } else {
+                            lines.push_back({"krastor", fmt.format(s.text)});
+                        }
+                    }
+                }
             } else if (m.role == "tool") {
                 // Fold the result into the last tool block above it.
                 for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
@@ -800,6 +842,7 @@ struct AppState : AskHandler {
         if (worker != Worker::None || !store.exists(id))
             return false;
         autosave_turn();  // the outgoing session stays complete on disk
+        player.stop();    // a sound from the old session must not carry over
         if (!store.load(id, conv)) {
             lines.push_back({"sys", "could not load session " + id});
             return false;
@@ -868,6 +911,90 @@ struct AppState : AskHandler {
         lines.clear();
         sel_anchor = sel_caret = -1;
         lines.push_back({"sys", "(screen cleared - session intact)"});
+        follow_bottom = true;
+    }
+
+    // ------------------------------------------------------------- media
+    // Start playback for a sound block ("beep" is the built-in test tone).
+    bool play_block(MediaBlock& m, std::string& err)
+    {
+        if (m.src == "beep") {
+            int rate = 0;
+            const auto pcm = make_beep_pcm(rate);
+            return player.play_pcm(pcm, rate, m.src);
+        }
+        return player.play(m.src, err);
+    }
+
+    // /image <src> [w [h]] - sizes are read from the RIGHT so paths with
+    // spaces survive; a size token is digits or -/*/auto.
+    void show_image_cmd(const std::string& args)
+    {
+        std::vector<std::string> parts;
+        {
+            std::istringstream iss(args);
+            for (std::string t; iss >> t;)
+                parts.push_back(t);
+        }
+        auto size_like = [](const std::string& s) {
+            return parse_media_size(s) >= 0;
+        };
+        int w = 0, h = 0;
+        if (parts.size() >= 3 && size_like(parts[parts.size() - 1]) &&
+            size_like(parts[parts.size() - 2])) {
+            w = parse_media_size(parts[parts.size() - 2]);
+            h = parse_media_size(parts.back());
+            parts.resize(parts.size() - 2);
+        } else if (parts.size() >= 2 && size_like(parts.back())) {
+            w = parse_media_size(parts.back());
+            parts.pop_back();
+        }
+        std::string src;
+        for (const auto& p : parts) {
+            if (!src.empty())
+                src += ' ';
+            src += p;
+        }
+        if (src.empty()) {
+            lines.push_back({"sys", "usage: /image <file|clipboard|base64:...> "
+                                    "[w [h]]  ('-' = auto size)"});
+            return;
+        }
+        auto m = std::make_shared<MediaBlock>();
+        m->kind = MediaBlock::Kind::Image;
+        m->src = std::move(src);
+        m->req_w = w;
+        m->req_h = h;
+        m->label = m->src.rfind("base64:", 0) == 0
+                       ? "base64 image"
+                       : m->src.substr(m->src.find_last_of("/\\") + 1);
+        ChatLine cl{"sys", ""};
+        cl.media = std::move(m);
+        lines.push_back(std::move(cl));
+        follow_bottom = true;
+    }
+
+    // /play <file|beep> - decodes and starts playback immediately; the chat
+    // gets a mini-player block (play/stop + progress) for the sound.
+    void play_cmd(const std::string& args)
+    {
+        if (args.empty()) {
+            lines.push_back({"sys", "usage: /play <audio file|beep>"});
+            return;
+        }
+        auto m = std::make_shared<MediaBlock>();
+        m->kind = MediaBlock::Kind::Sound;
+        m->src = args;
+        m->label = args == "beep" ? "beep (test tone)"
+                                  : args.substr(args.find_last_of("/\\") + 1);
+        std::string err;
+        if (!play_block(*m, err)) {
+            lines.push_back({"sys", "play failed: " + (err.empty() ? "no audio output device" : err)});
+            return;
+        }
+        ChatLine cl{"sys", ""};
+        cl.media = std::move(m);
+        lines.push_back(std::move(cl));
         follow_bottom = true;
     }
 
@@ -978,6 +1105,14 @@ struct AppState : AskHandler {
         }
         if (line == "/help") {
             help_open = true;
+            return true;
+        }
+        if (line == "/image" || line.rfind("/image ", 0) == 0) {
+            show_image_cmd(arg_of("/image"));
+            return true;
+        }
+        if (line == "/play" || line.rfind("/play ", 0) == 0) {
+            play_cmd(arg_of("/play"));
             return true;
         }
         lines.push_back({"sys", "unknown command: " + line +
@@ -1119,10 +1254,34 @@ struct AppState : AskHandler {
                 // reply is discarded (the user turn stays in the history).
             } else if (reply.ok) {
                 conv.add_assistant(reply.content);
-                ChatLine line{"krastor", fmt.format(reply.content), ""};
+                // Media tokens ([image: ...] / [sound: ...] on their own
+                // line) split the reply into ordered text/media chat lines;
+                // the tokens never reach markdown formatting or the TTS.
+                auto segs = split_media_tokens(reply.content);
+                std::vector<ChatLine> out;
+                std::string speak_text;
+                size_t first_text = static_cast<size_t>(-1);
+                for (auto& s : segs) {
+                    if (s.media) {
+                        ChatLine ml{"krastor", ""};
+                        ml.media = std::move(s.media);
+                        out.push_back(std::move(ml));
+                    } else {
+                        if (first_text == static_cast<size_t>(-1))
+                            first_text = out.size();
+                        out.push_back({"krastor", fmt.format(s.text)});
+                        if (!speak_text.empty())
+                            speak_text += '\n';
+                        speak_text += s.text;
+                    }
+                }
+                if (out.empty())
+                    out.push_back({"krastor", ""});
+                ChatLine& head = out[first_text == static_cast<size_t>(-1)
+                                         ? 0 : first_text];
                 if (!reply.reasoning.empty()) {
-                    line.thinking = reply.reasoning;
-                    line.think_meta = fmt_elapsed(reply.elapsed_ms);
+                    head.thinking = reply.reasoning;
+                    head.think_meta = fmt_elapsed(reply.elapsed_ms);
                 }
                 // Stats sub-line: "model - time - tok/s" ("~" when the server
                 // omitted usage and the token counts are estimated).
@@ -1132,12 +1291,13 @@ struct AppState : AskHandler {
                 std::snprintf(rate, sizeof(rate), "%s%.1f tok/s",
                               reply.tokens_estimated ? "~" : "",
                               reply.completion_tokens / secs);
-                line.meta = reply.model + " - " + fmt_elapsed(reply.elapsed_ms) +
-                            " - " + rate;
+                out.back().meta = reply.model + " - " +
+                                  fmt_elapsed(reply.elapsed_ms) + " - " + rate;
                 last_prompt_tokens = reply.prompt_tokens;
-                lines.push_back(std::move(line));
+                for (auto& l : out)
+                    lines.push_back(std::move(l));
                 if (auto_speak)
-                    speak_async(reply.content);
+                    speak_async(speak_text);
             } else {
                 lines.push_back({"sys", "LLM error: " + reply.error});
             }
@@ -1473,6 +1633,13 @@ void help_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
               {"/mic", "toggle microphone capture (hands-free)"},
               {"/clean", "clear the screen, session untouched (eraser button)"},
               {"/help or F1", "this window"}});
+        section("Media");
+        rows({{"/image <src> [w [h]]", "show an image (file, clipboard or "
+                                       "base64:...) - '-' = auto size"},
+              {"/play <file|beep>", "play a sound (mini player in the chat)"},
+              {"[image: src | w | h]", "reply token: inline image block"},
+              {"[sound: src]", "reply token: sound block with play/stop"},
+              {"click an image", "copy it to the clipboard (like text)"}});
         section("Floating buttons");
         rows({{"send", "send the input box text"},
               {"paperclip", "attach the clipboard image"},
@@ -2158,6 +2325,155 @@ float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
     return total_h;
 }
 
+// ------------------------------------------------------------- media blocks
+// Image textures are uploaded lazily on the render thread at first draw (the
+// bytes come from disk, the clipboard or a base64 token; workers never touch
+// GL). Eviction is a simple LRU over the load order.
+constexpr size_t kMaxImageTextures = 40;
+
+void media_unload(MediaBlock& m)
+{
+    if (m.tex) {
+        glDeleteTextures(1, &m.tex);
+        m.tex = 0;
+    }
+    m.loaded = false;
+}
+
+void media_ensure_loaded(AppState& app, const MediaRef& m)
+{
+    if (m->kind != MediaBlock::Kind::Image || m->loaded || m->failed)
+        return;
+    if (m->bytes.empty()) {
+        std::string err;
+        if (!resolve_media_bytes(m->src, m->bytes, err)) {
+            m->failed = true;
+            m->error = err;
+            return;
+        }
+    }
+    int w = 0, h = 0, ch = 0;
+    stbi_uc* px = stbi_load_from_memory(m->bytes.data(),
+                                        (int)m->bytes.size(), &w, &h, &ch, 4);
+    if (!px) {
+        m->failed = true;
+        m->error = "cannot decode image";
+        if (m->src != "clipboard")
+            m->bytes.clear();
+        return;
+    }
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, px);
+    stbi_image_free(px);
+    // The clipboard is volatile: keep its bytes for re-upload after eviction.
+    // Files/base64 are re-resolvable from src, so free the RAM copy.
+    if (m->src != "clipboard")
+        m->bytes.clear();
+    m->tex = tex;
+    m->nat_w = w;
+    m->nat_h = h;
+    m->loaded = true;
+    // LRU bookkeeping: drop dead refs, then unload the oldest live texture
+    // when over budget (a big chat of images cannot grow VRAM forever).
+    app.tex_lru.erase(std::remove_if(app.tex_lru.begin(), app.tex_lru.end(),
+                                     [](const std::weak_ptr<MediaBlock>& w) {
+                                         return w.expired();
+                                     }),
+                      app.tex_lru.end());
+    app.tex_lru.push_back(m);
+    size_t live = 0;
+    for (const auto& w : app.tex_lru)
+        if (!w.expired())
+            ++live;
+    if (live > kMaxImageTextures) {
+        for (const auto& w : app.tex_lru) {
+            auto b = w.lock();
+            if (b && b->tex && b != m) {
+                media_unload(*b);
+                break;
+            }
+        }
+    }
+}
+
+// Image block: one flow row sized by media_fit (always contained inside the
+// text area, ratio preserved - see media.h). The drawn rect is recorded for
+// the click-to-copy handler (rects are from the previous frame, like the
+// Thought headers).
+float draw_media_image(nk_context* ctx, AppState& app, const MediaRef& m,
+                       float text_w, float max_h, int src_line)
+{
+    media_ensure_loaded(app, m);
+    if (m->failed)
+        return draw_chat_line(ctx, "! ", "image failed (" + m->error +
+                                             "): " + m->src,
+                              nk_rgb(235, 110, 110), text_w, -1, nullptr,
+                              nullptr, &app.emoji);
+    float w = 0.0f, h = 0.0f;
+    media_fit(*m, text_w, max_h, w, h);
+    nk_layout_row_dynamic(ctx, h + 4.0f, 1);
+    const struct nk_rect slot = nk_widget_bounds(ctx);
+    const struct nk_image img =
+        atlas_image(m->tex, m->nat_w, m->nat_h, 0, 0, m->nat_w, m->nat_h);
+    const struct nk_rect drawn = nk_rect(slot.x, slot.y, w, h);
+    nk_draw_image(&ctx->current->buffer, drawn, &img, nk_white);
+    app.image_rects.push_back({src_line, drawn});
+    return h + 4.0f;
+}
+
+// Sound block: mini player row - Play/Stop button, name (+progress text),
+// progress bar. Clicks never push chat lines (the chat loop is iterating):
+// playback errors land in the block and show in its label.
+float draw_media_sound(nk_context* ctx, AppState& app, const MediaRef& m,
+                       float text_w)
+{
+    const float h = ctx->style.font->height + 8.0f;
+    const bool active = app.player.playing_src(m->src);
+    nk_layout_row_begin(ctx, NK_DYNAMIC, h, 3);
+    nk_layout_row_push(ctx, 0.18f);
+    const bool clicked = button_icon(ctx, app.icons, active ? "square" : "play",
+                                     active ? "Stop" : "Play");
+    nk_layout_row_push(ctx, 0.47f);
+    std::string label = m->label;
+    if (!m->error.empty())
+        label = m->label + " - " + m->error;
+    else if (active) {
+        char t[48];
+        std::snprintf(t, sizeof(t), "  %.0f / %.0fs", app.player.position_s(),
+                      app.player.duration_s());
+        label += t;
+    }
+    nk_label_colored(ctx,
+                     fit_text(ctx->style.font, label, 0.47f * text_w).c_str(),
+                     NK_LEFT, nk_rgb(200, 200, 205));
+    nk_layout_row_push(ctx, 0.35f);
+    const double dur = active ? app.player.duration_s() : 0.0;
+    nk_size cur = 0, max = 100;
+    if (dur > 0.0)
+        cur = (nk_size)(app.player.position_s() / dur * 100.0);
+    nk_progress(ctx, &cur, max, nk_false);
+    nk_layout_row_end(ctx);
+    if (clicked) {
+        if (active) {
+            app.player.stop();
+        } else {
+            m->error.clear();
+            std::string err;
+            if (!app.play_block(*m, err))
+                m->error = err.empty() ? "no audio output device" : err;
+        }
+    }
+    return h;
+}
+
 void chat_panel(struct nk_context* ctx, AppState& app, float height)
 {
     // This Nuklear has no "fill remaining space" row: the group gets an
@@ -2231,9 +2547,31 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                             nk_input_is_mouse_hovering_rect(in, app.fab_rect);
         if (L->clicked && over && !modal_blocks && !on_fab) {
             app.chat_focused = true;
+            // A click on an image block copies it to the clipboard (like a
+            // text selection copy) and is not a selection click.
+            bool copied = false;
+            for (const auto& ir : app.image_rects) {
+                const struct nk_rect& r = ir.second;
+                if (in->mouse.pos.x >= r.x && in->mouse.pos.x < r.x + r.w &&
+                    in->mouse.pos.y >= r.y && in->mouse.pos.y < r.y + r.h) {
+                    const MediaRef& m = app.lines[ir.first].media;
+                    if (m && !m->failed) {
+                        std::vector<unsigned char> bytes = m->bytes;
+                        std::string err;
+                        if (bytes.empty())
+                            resolve_media_bytes(m->src, bytes, err);
+                        if (!bytes.empty() && copy_image_to_clipboard(bytes, err))
+                            app.lines.push_back({"sys", "image copied to clipboard"});
+                        else
+                            app.lines.push_back({"sys", "image copy failed: " + err});
+                    }
+                    copied = true;
+                    break;
+                }
+            }
             // A click on a "Thought" header toggles that block and is not a
             // selection click.
-            bool toggled = false;
+            bool toggled = copied;
             for (const auto& tr : app.thought_rects) {
                 const struct nk_rect& r = tr.second;
                 if (in->mouse.pos.x >= r.x && in->mouse.pos.x < r.x + r.w &&
@@ -2332,6 +2670,12 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         float content_h = 0.0f;
         int src = 0;
         app.thought_rects.clear();
+        app.image_rects.clear();
+        // Images are always contained inside the chat text area: the max
+        // block height is the visible group height (no scroll needed to see
+        // a whole image), the max width is text_w (media_fit does the rest).
+        const float media_max_h =
+            height - 2.0f * ctx->style.window.padding.y - 8.0f;
         for (const auto& l : app.lines) {
             const std::string prefix = l.who == "you" ? "> " :
                                        l.who == "krastor" ? app.name + ": " : "! ";
@@ -2357,8 +2701,16 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                         text_w, -1, nullptr, nullptr, &app.emoji) +
                                  spacing;
             }
+            // Media blocks (image/sound) get their own row in the flow.
+            if (l.media)
+                content_h +=
+                    (l.media->kind == MediaBlock::Kind::Image
+                         ? draw_media_image(ctx, app, l.media, text_w,
+                                            media_max_h, src)
+                         : draw_media_sound(ctx, app, l.media, text_w)) +
+                    spacing;
             // Pure tool blocks carry no text line of their own.
-            if (!l.text.empty() || l.thinking.empty())
+            if (!l.text.empty() || (l.thinking.empty() && !l.media))
                 content_h += draw_chat_line(ctx, prefix, l.text, col, text_w, src,
                                             &app.chat_hits, has_sel ? &sel : nullptr,
                                             &app.emoji) +

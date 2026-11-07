@@ -147,9 +147,73 @@ PastedImage clipboard_get_image()
     return img;
 }
 
+bool copy_image_to_clipboard(const std::vector<unsigned char>& image_bytes,
+                             std::string& err)
+{
+    int w = 0, h = 0, ch = 0;
+    unsigned char* rgba = stbi_load_from_memory(image_bytes.data(),
+                                                (int)image_bytes.size(),
+                                                &w, &h, &ch, 4);
+    if (!rgba) {
+        err = "cannot decode image";
+        return false;
+    }
+    // CF_DIB: BITMAPINFOHEADER + bottom-up BGRA rows (the format every
+    // Windows app pastes; same shape dib_to_image reads back).
+    const size_t row = (size_t)w * 4;
+    const size_t total = sizeof(BITMAPINFOHEADER) + row * (size_t)h;
+    HGLOBAL mem = GlobalAlloc(GHND, total);
+    if (!mem) {
+        stbi_image_free(rgba);
+        err = "out of memory";
+        return false;
+    }
+    auto* base = static_cast<unsigned char*>(GlobalLock(mem));
+    auto* bih = reinterpret_cast<BITMAPINFOHEADER*>(base);
+    bih->biSize = sizeof(BITMAPINFOHEADER);
+    bih->biWidth = w;
+    bih->biHeight = h;  // positive = bottom-up
+    bih->biPlanes = 1;
+    bih->biBitCount = 32;
+    bih->biCompression = BI_RGB;
+    for (int y = 0; y < h; ++y) {
+        const unsigned char* src = rgba + (size_t)y * row;          // top row
+        unsigned char* dst = base + sizeof(BITMAPINFOHEADER) +
+                             (size_t)(h - 1 - y) * row;             // bottom-up
+        for (int x = 0; x < w; ++x) {
+            dst[x * 4 + 0] = src[x * 4 + 2];  // B
+            dst[x * 4 + 1] = src[x * 4 + 1];  // G
+            dst[x * 4 + 2] = src[x * 4 + 0];  // R
+            dst[x * 4 + 3] = 0xFF;            // unused alpha
+        }
+    }
+    GlobalUnlock(mem);
+    stbi_image_free(rgba);
+    if (!OpenClipboard(nullptr)) {
+        GlobalFree(mem);
+        err = "clipboard busy";
+        return false;
+    }
+    EmptyClipboard();
+    if (!SetClipboardData(CF_DIB, mem)) {
+        GlobalFree(mem);
+        CloseClipboard();
+        err = "clipboard write failed";
+        return false;
+    }
+    CloseClipboard();  // memory now owned by the clipboard
+    return true;
+}
+
 #else  // non-Windows clipboard image access is not implemented yet
 
 PastedImage clipboard_get_image() { return {}; }
+
+bool copy_image_to_clipboard(const std::vector<unsigned char>&, std::string& err)
+{
+    err = "unsupported platform";
+    return false;
+}
 
 #endif
 

@@ -93,6 +93,7 @@ add_executable(krastor
     src/gui.cpp
     src/icons.cpp
     src/clipboard.cpp
+    src/media.cpp
     src/effects.cpp
     src/audio_analysis.cpp
     libs/glad/src/glad.c

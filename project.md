@@ -234,3 +234,10 @@ not Krastor's own voice or room noise; toggles `stt.denoise`/`stt.echo_cancel`
   LLM-driven context compaction tuned to the active model's context window,
   headless self-test `krastor --session-test`. Detailed design in
   `sessions_plan.md` (project root).
+- **Inline media (built 2026-11-07).** Images and sounds shown as blocks in
+  the chat flow (`src/media.h/.cpp`): `/image <file|clipboard|base64:> [w [h]]`
+  and `/play <file|beep>` commands plus reply tokens `[image: src | w | h]`
+  / `[sound: src]` the model is prompted to prefer for images. Images always
+  fit the chat text area (aspect-preserving fit-inside), click copies them to
+  the clipboard; sounds play through a mini player (own miniaudio device,
+  play/stop + progress). Headless self-test `krastor --media-test`.

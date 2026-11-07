@@ -8,6 +8,35 @@
 
 namespace krastor {
 
+// Replace invalid UTF-8 bytes with '?' (Windows console tools print
+// cp1252/cp850; nlohmann refuses to serialize invalid UTF-8 and the session
+// autosave would throw on the main thread, aborting the app). Declared in
+// tool_loop.h so the self-test can exercise it.
+std::string utf8_clean(const std::string& in)
+{
+    std::string out;
+    out.reserve(in.size());
+    size_t i = 0;
+    while (i < in.size()) {
+        const unsigned char c = static_cast<unsigned char>(in[i]);
+        size_t len = 0;
+        if (c < 0x80) len = 1;
+        else if ((c & 0xE0) == 0xC0) len = 2;
+        else if ((c & 0xF0) == 0xE0) len = 3;
+        else if ((c & 0xF8) == 0xF0) len = 4;
+        else { out += '?'; ++i; continue; }  // stray continuation/lead byte
+        if (i + len > in.size()) { out += '?'; ++i; continue; }  // truncated
+        bool ok = true;
+        for (size_t k = 1; k < len; ++k)
+            if ((static_cast<unsigned char>(in[i + k]) & 0xC0) != 0x80)
+                ok = false;
+        if (!ok) { out += '?'; ++i; continue; }
+        out.append(in, i, len);
+        i += len;
+    }
+    return out;
+}
+
 namespace {
 
 constexpr int kMaxRounds = 8;      // hard cap on tool-loop iterations
@@ -27,10 +56,16 @@ std::string action_of(const ToolCall& tc)
 std::string cap_text(std::string s)
 {
     if (s.size() > kToolResultCap) {
-        s.resize(kToolResultCap);
+        size_t cut = kToolResultCap;
+        // Never cut in the middle of a UTF-8 sequence (s[cut] is the first
+        // dropped byte: back off while it is a continuation byte 10xxxxxx).
+        while (cut > 0 &&
+               (static_cast<unsigned char>(s[cut]) & 0xC0) == 0x80)
+            --cut;
+        s.resize(cut);
         s += "\n[... output truncated]";
     }
-    return s;
+    return utf8_clean(std::move(s));
 }
 
 } // namespace

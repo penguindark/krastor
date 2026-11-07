@@ -36,6 +36,7 @@
 #include "icons.h"
 #include "llm_client.h"
 #include "llm_models.h"
+#include "media.h"
 #include "permissions.h"
 #include "session_store.h"
 #include "stt.h"
@@ -438,6 +439,14 @@ int run_tool_test()
             ++failed;
     };
 
+    // utf8_clean: tool output must reach the JSON layer as valid UTF-8
+    // (crash of 2026-11-07: cap_text cut a codepoint, autosave threw).
+    check("utf8_clean keeps valid", krastor::utf8_clean("caf\xc3\xa9 \xe2\x82\xac") ==
+                                        "caf\xc3\xa9 \xe2\x82\xac");
+    check("utf8_clean strips cp1252", krastor::utf8_clean("caf\xe9") == "caf?");
+    check("utf8_clean cuts truncated tail",
+          krastor::utf8_clean("ok\xe2\x82") == "ok??");
+
     krastor::GrantStore grants;
     krastor::ToolRegistry reg;
     std::vector<std::string> log;
@@ -684,6 +693,155 @@ int run_session_test()
     return failed;
 }
 
+// Headless self-test for the media system (src/media.h): token parsing,
+// size parsing, reply splitting, fit-inside scaling and WAV decoding.
+// Exit code = number of failed checks. Usage: krastor --media-test
+int run_media_test()
+{
+    using namespace krastor;
+    int failed = 0;
+    auto check = [&](const char* name, bool ok, const std::string& err = {}) {
+        if (!ok) {
+            ++failed;
+            std::cout << "  FAIL " << name << (err.empty() ? "" : " - " + err)
+                      << "\n";
+        }
+    };
+
+    // ---- size fields ----
+    check("size auto empty", parse_media_size("") == 0);
+    check("size dash", parse_media_size("-") == 0);
+    check("size star", parse_media_size("*") == 0);
+    check("size auto word", parse_media_size("auto") == 0);
+    check("size number", parse_media_size(" 400 ") == 400);
+    check("size invalid", parse_media_size("abc") == -1);
+
+    // ---- tokens ----
+    MediaBlock mb;
+    check("image token full",
+          parse_media_token("  [image: C:\\a\\b.png | 400 | 300] ", mb) &&
+              mb.kind == MediaBlock::Kind::Image && mb.src == "C:\\a\\b.png" &&
+              mb.req_w == 400 && mb.req_h == 300 && mb.label == "b.png");
+    check("image token auto sizes",
+          parse_media_token("[image: x.png]", mb) && mb.req_w == 0 &&
+              mb.req_h == 0);
+    check("image token one size",
+          parse_media_token("[image: x.png | 250]", mb) && mb.req_w == 250 &&
+              mb.req_h == 0);
+    check("image token dash",
+          parse_media_token("[image: x.png | - | 120]", mb) && mb.req_w == 0 &&
+              mb.req_h == 120);
+    check("image token base64",
+          parse_media_token("[image: base64:AAAA]", mb) &&
+              mb.src == "base64:AAAA" && mb.label == "base64 image");
+    check("image token no src", !parse_media_token("[image:  | 400]", mb));
+    check("image token bad size", !parse_media_token("[image: a.png | zz]", mb));
+    check("sound token",
+          parse_media_token("[sound: C:\\s\\ding.wav]", mb) &&
+              mb.kind == MediaBlock::Kind::Sound && mb.src == "C:\\s\\ding.wav");
+    check("not a token", !parse_media_token("see [image: a.png] inline", mb));
+
+    // ---- reply splitting ----
+    const auto segs = split_media_tokens(
+        "before\n[image: a.png | 100]\nmiddle\n[sound: b.wav]\nafter");
+    check("split count", segs.size() == 5, std::to_string(segs.size()));
+    check("split text 0", segs.size() == 5 && segs[0].text == "before");
+    check("split media 1",
+          segs.size() == 5 && segs[1].media && segs[1].media->src == "a.png");
+    check("split text 2", segs.size() == 5 && segs[2].text == "middle");
+    check("split media 3",
+          segs.size() == 5 && segs[3].media &&
+              segs[3].media->kind == MediaBlock::Kind::Sound);
+    check("split text 4", segs.size() == 5 && segs[4].text == "after");
+    const auto plain = split_media_tokens("no media here");
+    check("split plain", plain.size() == 1 && plain[0].text == "no media here");
+    std::string speak;
+    for (const auto& s : split_media_tokens("l1\n[image: a.png]\nl2")) {
+        if (s.media)
+            continue;
+        if (!speak.empty())
+            speak += '\n';
+        speak += s.text;
+    }
+    check("tokens stripped from speak text", speak == "l1\nl2", speak);
+
+    // ---- fit-inside (native 1000x500, box 400x300) ----
+    MediaBlock img;
+    img.nat_w = 1000;
+    img.nat_h = 500;
+    float w = 0, h = 0;
+    media_fit(img, 400, 300, w, h);  // auto: width-limited (400x200)
+    check("fit auto", w > 399.0f && w < 401.0f && h > 199.0f && h < 201.0f,
+          std::to_string((int)w) + "x" + std::to_string((int)h));
+    img.req_w = 800;  // over the box: must be scaled back inside
+    media_fit(img, 400, 300, w, h);
+    check("fit req_w clamped", w <= 400.5f && h <= 300.5f && w > 399.0f,
+          std::to_string((int)w) + "x" + std::to_string((int)h));
+    img = MediaBlock{};
+    img.nat_w = 1000;
+    img.nat_h = 500;
+    img.req_h = 100;  // only height: width follows the aspect
+    media_fit(img, 400, 300, w, h);
+    check("fit req_h aspect", w > 199.0f && w < 201.0f && h > 99.0f &&
+                                  h < 101.0f,
+          std::to_string((int)w) + "x" + std::to_string((int)h));
+    img.req_w = 100;
+    img.req_h = 50;  // both, fits: no scaling
+    media_fit(img, 400, 300, w, h);
+    check("fit exact", w > 99.0f && w < 101.0f && h > 49.0f && h < 51.0f);
+    img.req_w = 5000;
+    img.req_h = 4000;  // both, way over: contained, ratio kept
+    media_fit(img, 400, 300, w, h);
+    check("fit both clamped", w <= 400.5f && h <= 300.5f &&
+                                  (std::fabs(w / h - 5.0 / 4.0) < 0.02f),
+          std::to_string((int)w) + "x" + std::to_string((int)h));
+
+    // ---- audio: beep buffer + WAV decode ----
+    int rate = 0;
+    const auto beep = make_beep_pcm(rate);
+    check("beep pcm", rate == 48000 && beep.size() > 1000);
+    // Build a tiny PCM16 mono 8 kHz WAV in memory and decode it.
+    {
+        std::vector<unsigned char> wav;
+        auto put32 = [&](uint32_t v) {
+            wav.push_back((unsigned char)v);
+            wav.push_back((unsigned char)(v >> 8));
+            wav.push_back((unsigned char)(v >> 16));
+            wav.push_back((unsigned char)(v >> 24));
+        };
+        auto put16 = [&](uint16_t v) {
+            wav.push_back((unsigned char)v);
+            wav.push_back((unsigned char)(v >> 8));
+        };
+        const int samples = 800;
+        wav.insert(wav.end(), {'R', 'I', 'F', 'F'});
+        put32(36 + (uint32_t)samples * 2);
+        wav.insert(wav.end(), {'W', 'A', 'V', 'E', 'f', 'm', 't', ' '});
+        put32(16);
+        put16(1);          // PCM
+        put16(1);          // mono
+        put32(8000);       // rate
+        put32(16000);      // byte rate
+        put16(2);          // block align
+        put16(16);         // bits
+        wav.insert(wav.end(), {'d', 'a', 't', 'a'});
+        put32((uint32_t)samples * 2);
+        for (int i = 0; i < samples; ++i)
+            put16((uint16_t)(1000 * (i / 40 % 2 ? 1 : -1)));
+        std::vector<float> pcm;
+        int drate = 0, dch = 0;
+        std::string err;
+        check("wav decode",
+              decode_audio_bytes(wav, pcm, drate, dch, err) && drate == 8000 &&
+                  dch == 2 && pcm.size() == (size_t)samples * 2,
+              err);
+    }
+
+    std::cout << "media-test: " << (failed ? std::to_string(failed) : "0")
+              << " failed" << (failed ? "" : " - PASS") << "\n";
+    return failed;
+}
+
 int main(int argc, char** argv)
 {
 #ifdef _WIN32
@@ -718,7 +876,8 @@ int main(int argc, char** argv)
     });
 
     // Args: [--gui] [--icon-test] [--fx-test] [--tts-filter-test]
-    //       [--session-test] [--session <id>] [--new-session] [--list-sessions]
+    //       [--session-test] [--media-test] [--session <id>] [--new-session]
+    //       [--list-sessions]
     //       [--delete-session <id>] [--compact [focus]] [config.json]
     bool use_gui = false;
     std::string config_path;  // empty -> default (exe dir, legacy CWD fallback)
@@ -735,6 +894,7 @@ int main(int argc, char** argv)
         else if (a == "--tool-run") return run_tool_run(argc, argv, i);
         else if (a == "--tool-test") return run_tool_test();
         else if (a == "--session-test") return run_session_test();
+        else if (a == "--media-test") return run_media_test();
         else if (a == "--new-session") new_session_flag = true;
         else if (a == "--list-sessions") list_sessions_flag = true;
         else if (a == "--session" && i + 1 < argc) session_flag = argv[++i];
@@ -893,6 +1053,10 @@ int main(int argc, char** argv)
                 " (other locations need user approval). Prefer small, "
                 "reversible steps and report what a tool did.";
     }
+    // Media usage instructions (chat [image:]/[sound:] tokens), same as the
+    // GUI; guarded so a config that already stores the text is not doubled.
+    if (cfg.llm.system_prompt.find("[image: ") == std::string::npos)
+        cfg.llm.system_prompt += krastor::kMediaUsagePrompt;
     krastor::OutputFormatter fmt(cfg);
     krastor::Highlighter hl;
     if (hl.load_default())

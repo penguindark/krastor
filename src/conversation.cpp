@@ -49,6 +49,15 @@ void Conversation::reset()
     messages_.push_back({"system", system_prompt_});
 }
 
+void Conversation::set_system_prompt(const std::string& prompt)
+{
+    system_prompt_ = prompt;
+    if (!messages_.empty() && messages_.front().role == "system")
+        messages_.front().content = prompt;
+    else
+        messages_.insert(messages_.begin(), {"system", prompt});
+}
+
 void Conversation::replace_history(std::vector<Message> history)
 {
     std::vector<Message> msgs;

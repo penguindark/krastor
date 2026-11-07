@@ -18,6 +18,12 @@ namespace krastor {
 
 class CancelToken;
 
+// Replace invalid UTF-8 bytes with '?' (Windows console tools print
+// cp1252/cp850; nlohmann refuses to serialize invalid UTF-8 and the session
+// autosave would throw on the main thread). Applied to every tool result
+// before it enters the conversation.
+std::string utf8_clean(const std::string& in);
+
 // Info about one requested call, for UI/status rendering.
 struct ToolCallInfo {
     std::string tool;    // manifest name

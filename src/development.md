@@ -27,7 +27,8 @@ executables are emitted to `../bin`, intermediates to `../obj`.
 | `tts_text.h/.cpp` | **tts_filter()**: pure Markdown -> plain-speech text transform, the voice-side mirror of `md_to_ansi` (applied once inside `Tts::speak()`, so no markup can reach the synthesizer from GUI, CLI `/say` or the voice-test FAB). Drops fenced code blocks silently (code-only reply -> nothing spoken), inline-code backticks, heading/bold/italic/strike/quote/list markers (text kept), links keep their text and drop the URL, bare URLs dropped, tables flattened to comma-separated cells, horizontal rules, HTML tags, emoji (UTF-8-aware, Italian accents preserved) and ANSI escapes; collapses whitespace. `snake_case` identifiers survive (word-boundary `_` kept). Self-test: `krastor --tts-filter-test` (table-driven, 20 cases) |
 | `stt.h/.cpp` | **STT engine**: NVIDIA Parakeet TDT 0.6B v3 int8 (`nemo_transducer`) + Silero VAD via sherpa-onnx C API, mic capture via miniaudio (16 kHz mono float). The mic callback first passes every block through `AudioFx::instance().process()` (echo cancel + denoise, see `audio_fx.h`) before publishing it to the level meters, the visualization ring and the VAD feeders. `listen()` returns the first VAD-closed utterance (~0.5 s after speech ends); `transcribe_file()` decodes wav/mp3/flac to 16 kHz mono for headless tests; `list_input_devices()` + explicit `device_index` selection (`stt.input_device` in config, -1 = system default); `monitor()` prints a live level meter to diagnose muted/blocked/wrong mics. **Stream mode** (`start_stream()/stop_stream()/streaming()`): feeder thread drains the mic ring, runs the VAD in 512-sample windows and hands every closed segment to a callback; `recognize()` decodes raw PCM on the caller's thread (used by the GUI hands-free pipeline). All thread bodies are exception-guarded (an escaping exception would `terminate()` the process). EN+IT auto-detected, punctuation + capitalization included |
 | `ansi.h` | header-only **ANSI/SGR parser**: splits text with escape codes into styled runs (fg/bg 16+256+truecolor, bold); unsupported sequences stripped. Powers the terminal-style chat renderer |
-| `clipboard.h/.cpp` | clipboard **image** capture (Win32 `CF_DIB` → RGBA → PNG via stb; Linux stub), `load_image_file()` (any stb-readable image → PNG, used by drag & drop), `base64_encode()` for data URLs |
+| `clipboard.h/.cpp` | clipboard **image** capture (Win32 `CF_DIB` → RGBA → PNG via stb; Linux stub), `load_image_file()` (any stb-readable image → PNG, used by drag & drop), `base64_encode()` for data URLs, `copy_image_to_clipboard()` (image bytes → CF_DIB bottom-up 32bpp — powers click-to-copy on chat images) |
+| `media.h/.cpp` | **inline chat media** (images + mini sound player): `MediaBlock` (kind/src/req sizes/GL texture/native size, owned by a `ChatLine`), token parsing (`[image: src \| w \| h]`, `[sound: src]` on a dedicated reply line; sizes `-`/`*`/`auto` = auto, `base64:` payload = self-contained buffer, `clipboard` = volatile), `split_media_tokens()` (reply → ordered text/media segments; tokens never reach markdown or TTS), `media_fit()` (requested size, missing axis from the native aspect, then ALWAYS contained inside the text-area box, ratio preserved), `resolve_media_bytes()` (file/clipboard/base64), `SoundPlayer` (miniaudio `ma_decoder` from memory → full f32 PCM → own `ma_device`, separate from the TTS device; play/stop + position/duration for the UI, `make_beep_pcm()` test tone), `kMediaUsagePrompt` (system-prompt text: the model prefers `[image: ...]` to show images; appended in GUI + CLI, `Conversation::set_system_prompt()` re-syncs it after construction). Chat: click an image = copy to clipboard (CF_DIB). Headless self-test: `krastor --media-test` |
 | `fft.h` | header-only iterative radix-2 FFT (512-pt, Hann window applied by caller) |
 | `audio_analysis.h/.cpp` | **SpectrumAnalyzer**: mic window → 64 log-spaced amplitude bands (dB-compressed, fast-attack/slow-release smoothing) + 128×64 scrolling history ring uploaded as R8 texture; `synthetic(t)` feed keeps effects alive without the mic |
 | `effects.h/.cpp` | **EffectEngine**: pluggable GLSL background — built-in gradient + `data/shaders/*.frag` plugins compiled at runtime on a shared fullscreen-triangle vertex shader with a fixed uniform contract (`u_resolution/u_time/u_level/u_spectrum/u_spec_head/u_listening/u_speaking/u_intensity`); the plugin's `main()` is renamed via `#define main effect_main` and a real `main()` applies the global brightness (`u_intensity`, Settings "Effect brightness"); `scan()` lists plugins (display name from `// krastor-effect:` header), `select()` validates by compiling (broken plugin never replaces the running one), `check_reload()` hot-reloads on file change |
@@ -267,6 +268,20 @@ session switching and LLM-driven compaction.
   rendered immediately (wheel bounce at the end); and the follow-bottom pin
   must be released when the post-`group_end` offset is below the bottom
   (scrollbar drag), or dragging up is impossible.
+- Media tokens must be split out of an LLM reply BEFORE `fmt.format()`
+  (markdown would eat the square brackets) and out of the TTS text (the
+  voice must not read them). Image textures are uploaded lazily on the
+  RENDER thread at first draw - worker threads never touch GL; the bytes
+  are freed after upload except for volatile `clipboard` sources.
+- This vendored miniaudio is pre-0.7 API: `ma_device_init/uninit` on a
+  value (no `ma_device_open`), format enum is lowercase `ma_format_f32`,
+  decoded rate read from `decoder.outputSampleRate` (no getter). Nuklear
+  4.13 `nk_progress` takes `nk_size*` + max (0..100 style), not a float.
+- Tool output is untrusted bytes: truncating at a fixed BYTE count can cut
+  a UTF-8 codepoint, and nlohmann then throws `type_error.316` at dump time
+  - fatal when the throw lands on the main thread (session autosave).
+  `cap_text` cuts at a codepoint boundary and `utf8_clean()` sanitizes
+  every tool result before it enters the conversation.
 
 ## Planned layout (roadmap)
 - `gui/` — GLSL effect passes, terminal I/O panel, attachments input (Phase 5)
