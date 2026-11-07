@@ -1652,3 +1652,33 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   grants (or says there are none), `/grants clear` revokes them all.
   Also in the GUI help palette and the CLI `/help`.
 - Both toolchains clean; all `--*-test` PASS.
+
+---
+
+## 2026-11-08 (later) - "Copied to clipboard" toast + `u_copy` shader event
+
+- Request: an opencode-style toast whenever text or an image is copied to
+  the clipboard (chat selection Ctrl+C, input-box Ctrl+C, image click).
+  It stays 2 s; a new copy resets the timer; the event also feeds the
+  background shader.
+- `AppState::notify_copied()` sets `copy_toast_until = glfwGetTime() + 2`
+  and a `copy_pulse = 1` (decays x0.92/frame like `typing_pulse`); called
+  from all three copy paths. The input box needed a copy hook: `krastor_copy`
+  overrides `device.ctx.clip.copy` (Nuklear's text-edit calls it on
+  Ctrl+C) and mirrors the backend's clipboard write before firing the toast.
+- Toast rendering: a separate Nuklear window "CopyToast"
+  (`NO_INPUT | NOT_INTERACTIVE | NO_SCROLLBAR`, transparent
+  `fixed_background`) drawn after the modals so it floats on top; dark
+  rounded pill + two 3 px cyan side bars + centered text, alpha fade over
+  the last 0.3 s. Trap: the window clip is the *content* area (inside
+  `style.window.padding`), so the edge bars were clipped away entirely
+  while the pill and text survived - zeroing the padding for this window
+  (`nk_style_push_vec2`, this Nuklear build has `padding` as vec2, no
+  `nk_vec4`) fixed it; bars are inset 4 px vertically to stay inside the
+  pill's rounded corners.
+- Shader feed: `EffectInput::copy` -> new `u_copy` uniform (kHeader
+  contract + `draw()` upload); the built-in gradient adds a soft cyan lift
+  scaled by `u_copy`. Test hook: `KRASTOR_UITEST_TOAST` pre-arms the toast
+  in the UITEST seed; verified with a bottom-center screenshot + pixel
+  scan (bars exactly 86,190,240 at both pill edges).
+- Both toolchains clean; all `--*-test` PASS.

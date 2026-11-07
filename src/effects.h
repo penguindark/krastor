@@ -33,6 +33,7 @@ struct EffectInput {
     bool speaking = false;              // TTS playback running
     bool thinking = false;              // LLM request in flight (incl. tools)
     float typing = 0.0f;                // decaying keypress pulse 0..1
+    float copy = 0.0f;                  // decaying clipboard-copy pulse 0..1
     float intensity = 1.0f;             // global brightness (Settings)
 };
 

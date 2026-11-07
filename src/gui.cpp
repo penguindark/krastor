@@ -383,6 +383,16 @@ struct AppState : AskHandler {
     // 1 whenever the input buffer changes, drained every frame.
     float typing_pulse = 0.0f;
     std::string input_prev;  // last frame's input text (typing detector)
+    // Clipboard-copy toast (opencode-style): visible 2 s after any copy
+    // (chat selection, input box, image block); a new copy resets the
+    // timer. copy_pulse feeds the shader event feed (u_copy) like typing.
+    double copy_toast_until = 0.0;
+    float copy_pulse = 0.0f;
+    void notify_copied()
+    {
+        copy_toast_until = glfwGetTime() + 2.0;
+        copy_pulse = 1.0f;
+    }
     bool auto_speak = false;  // seeded from cfg.tts.auto_speak (off by default)
     int last_prompt_tokens = 0;  // context occupancy = last request's prompt size
     bool follow_bottom = true;   // chat auto-scrolls to newest unless the user
@@ -575,6 +585,8 @@ struct AppState : AskHandler {
         // Screenshot-test hook: seed a styled sample line and attach whatever
         // image (if any) is on the clipboard, so renderers can be verified.
         if (std::getenv("KRASTOR_UITEST")) {
+            if (std::getenv("KRASTOR_UITEST_TOAST"))  // toast render check
+                copy_toast_until = glfwGetTime() + 6.0;
             const std::string E(1, '\x1b');
             lines.push_back({"krastor",
                 "ANSI: " + E + "[31mRED" + E + "[0m " + E + "[32mGREEN" + E + "[0m " +
@@ -3094,8 +3106,10 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                         std::string err;
                         if (bytes.empty())
                             resolve_media_bytes(m->src, bytes, err);
-                        if (!bytes.empty() && copy_image_to_clipboard(bytes, err))
+                        if (!bytes.empty() && copy_image_to_clipboard(bytes, err)) {
                             app.lines.push_back({"sys", "image copied to clipboard"});
+                            app.notify_copied();
+                        }
                         else
                             app.lines.push_back({"sys", "image copy failed: " + err});
                     }
@@ -3389,6 +3403,19 @@ static void krastor_paste(nk_handle usr, struct nk_text_edit* edit)
         g_paste_app->pending_image_paste = true;
 }
 
+// Copy plugin for the input box (Nuklear's edit calls it on Ctrl+C): same
+// clipboard write as the backend default, plus the copy toast + shader pulse.
+static void krastor_copy(nk_handle usr, const char* text, int len)
+{
+    struct nk_glfw* glfw = (struct nk_glfw*)usr.ptr;
+    if (len <= 0)
+        return;
+    const std::string s(text, (size_t)len);
+    glfwSetClipboardString(glfw->win, s.c_str());
+    if (g_paste_app)
+        g_paste_app->notify_copied();
+}
+
 int run_gui(Config& cfg, VoiceRegistry& voices)
 {
     if (!glfwInit()) {
@@ -3531,6 +3558,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
     // Override the backend paste plugin so Ctrl+V can also grab clipboard images.
     g_paste_app = &app;
     device.ctx.clip.paste = krastor_paste;
+    device.ctx.clip.copy = krastor_copy;
     glfwSetDropCallback(win, drop_callback);
 
     while (!glfwWindowShouldClose(win)) {
@@ -3772,8 +3800,10 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 const int hi = app.sel_anchor < app.sel_caret ? app.sel_caret
                                                              : app.sel_anchor;
                 const std::string txt = chat_extract(app, lo, hi);
-                if (!txt.empty())
+                if (!txt.empty()) {
                     glfwSetClipboardString(win, txt.c_str());  // raw UTF-8
+                    app.notify_copied();
+                }
             }
             if (pressed(kn.esc, kprev.esc)) {
                 app.sel_anchor = app.sel_caret = -1;
@@ -4227,6 +4257,49 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         // External-tool permission dialog (blocks the worker until answered).
         permission_modal(ctx, app, w, h);
 
+        // Copy toast (opencode-style): dark pill with cyan side bars, bottom
+        // center; lives 2 s (a new copy resets the timer), fades over the
+        // last 0.3 s. Non-interactive, drawn last so it floats on top.
+        if (const double left = app.copy_toast_until - glfwGetTime();
+            left > 0.0) {
+            const int al = static_cast<int>(255.0 * std::min(1.0, left / 0.3));
+            const char* msg = "Copied to clipboard";
+            const int mlen = (int)std::strlen(msg);
+            const float fh = ctx->style.font->height;
+            const float tw = text_w_px(ctx->style.font, msg, mlen);
+            const float bw = tw + 56.0f, bh = fh + 20.0f;
+            const float bx = (float)w / 2.0f - bw / 2.0f;
+            const float by = (float)h - bh - 150.0f;
+            nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
+                                     nk_style_item_color(nk_rgba(0, 0, 0, 0)));
+            // Zero padding: the window clip is the content area, so with the
+            // default padding the 3 px side bars at the pill edge would be
+            // clipped away entirely (pill and text survived, bars did not).
+            nk_style_push_vec2(ctx, &ctx->style.window.padding, nk_vec2(0, 0));
+            if (nk_begin(ctx, "CopyToast", nk_rect(bx, by, bw, bh),
+                         NK_WINDOW_NO_INPUT | NK_WINDOW_NOT_INTERACTIVE |
+                             NK_WINDOW_NO_SCROLLBAR)) {
+                struct nk_command_buffer* cv = &ctx->current->buffer;
+                nk_fill_rect(cv, nk_rect(bx, by, bw, bh), 6.0f,
+                             nk_rgba(24, 28, 36, al));
+                // Bars inset a few px vertically so they stay inside the
+                // pill's rounded corners.
+                nk_fill_rect(cv, nk_rect(bx, by + 4.0f, 3.0f, bh - 8.0f), 0,
+                             nk_rgba(86, 190, 240, al));
+                nk_fill_rect(cv, nk_rect(bx + bw - 3.0f, by + 4.0f, 3.0f,
+                                         bh - 8.0f),
+                             0, nk_rgba(86, 190, 240, al));
+                nk_draw_text(cv,
+                             nk_rect(bx + (bw - tw) / 2.0f, by + (bh - fh) / 2.0f,
+                                     tw + 2.0f, fh),
+                             msg, mlen, ctx->style.font, nk_rgba(0, 0, 0, 0),
+                             nk_rgba(232, 236, 242, al));
+            }
+            nk_end(ctx);
+            nk_style_pop_vec2(ctx);
+            nk_style_pop_style_item(ctx);
+        }
+
         // A saved name change propagates to the top bar and the window title
         // (the title also follows the current session).
         if (cfg.agent.name != app.name)
@@ -4253,6 +4326,8 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         }
         app.typing_pulse = app.typing_pulse > 0.001f ? app.typing_pulse * 0.90f
                                                     : 0.0f;
+        app.copy_pulse = app.copy_pulse > 0.001f ? app.copy_pulse * 0.92f
+                                                 : 0.0f;
         krastor::EffectInput fxin;
         fxin.level = spec.level();
         fxin.hist = spec.history();
@@ -4265,6 +4340,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         fxin.thinking = app.worker == AppState::Worker::Thinking ||
                         app.worker == AppState::Worker::Compacting;
         fxin.typing = app.typing_pulse;
+        fxin.copy = app.copy_pulse;
         fxin.intensity = static_cast<float>(cfg.gui.effect_intensity);
         fx.draw(fb_w, fb_h, float(glfwGetTime() - t0), fxin);
         nk_glfw3_render(&device, NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);

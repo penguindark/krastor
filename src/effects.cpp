@@ -27,6 +27,7 @@ constexpr const char* kHeader =
     "uniform float u_speaking;    // 1 while TTS playback runs\n"
     "uniform float u_thinking;    // 1 while an LLM request is in flight\n"
     "uniform float u_typing;      // decaying pulse on key presses (0..1)\n"
+    "uniform float u_copy;        // decaying pulse on clipboard copies (0..1)\n"
     "uniform float u_intensity;   // global brightness multiplier (settings)\n"
     "out vec4 frag_color;\n"
     // The plugin's main() is renamed; the real main applies the brightness.
@@ -49,6 +50,8 @@ constexpr const char* kBuiltinSource =
     "  float vig = smoothstep(1.2, 0.35, length(uv - 0.5));\n"
     "  vec3 col = mix(vec3(0.045, 0.050, 0.075),\n"
     "                 vec3(0.090, 0.120, 0.190), v) * (0.55 + 0.45 * vig);\n"
+    "  // clipboard-copy flash: a soft cyan lift that decays with u_copy\n"
+    "  col += vec3(0.02, 0.07, 0.10) * u_copy * (0.4 + 0.6 * vig);\n"
     "  frag_color = vec4(col, 1.0);\n"
     "}\n";
 
@@ -275,6 +278,7 @@ void EffectEngine::draw(int w, int h, float t, const EffectInput& in)
     glUniform1f(glGetUniformLocation(prog_, "u_speaking"), in.speaking ? 1.0f : 0.0f);
     glUniform1f(glGetUniformLocation(prog_, "u_thinking"), in.thinking ? 1.0f : 0.0f);
     glUniform1f(glGetUniformLocation(prog_, "u_typing"), in.typing);
+    glUniform1f(glGetUniformLocation(prog_, "u_copy"), in.copy);
     glUniform1f(glGetUniformLocation(prog_, "u_intensity"), in.intensity);
     glBindVertexArray(vao_);
     glDrawArrays(GL_TRIANGLES, 0, 3);
