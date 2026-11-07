@@ -483,6 +483,20 @@ int run_tool_test()
                   std::string::npos);
         check("ansi_repair keeps escaped sequences untouched",
               krastor::md_to_ansi("\x1b[31mred\x1b[0m") == "\x1b[31mred\x1b[0m");
+        // ANSI payload pasted inside a language-less fence (the model wraps
+        // colored tool output in ```) is repaired too: the highlighter never
+        // runs there, so without this the bare SGR text renders literally.
+        const std::string fenced = krastor::md_to_ansi(
+            "```\n[48;5;26m[1m SASSARI [0m\n[48;5;236m alba [0m\n```");
+        check("md repairs ESC-less ANSI inside a fence",
+              fenced.find("\x1b[48;5;26m") != std::string::npos);
+        // A code sample that merely mentions bracketed numbers stays literal:
+        // one repairable line is below the two-line block threshold.
+        const std::string sample = krastor::md_to_ansi(
+            "```\nputs(\"[31m[0m red\");\nint a[5];\n```");
+        check("md keeps literal SGR-looking code in fences",
+              sample.find("\x1b[31m") == std::string::npos &&
+                  sample.find("[31m") != std::string::npos);
     }
 
     krastor::GrantStore grants;

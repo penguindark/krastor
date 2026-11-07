@@ -397,7 +397,29 @@ std::string md_to_ansi(const std::string& md, const CodeHighlightFn& hl)
                 // full-line fill makes one continuous rectangle.
                 out.push_back(std::string(kBlockBg) + kDim + "  " + lang + kReset);
             const std::string styled = hl ? hl(code, lang) : std::string();
-            append_block_bg(out, styled.empty() ? code : styled);
+            // A block the highlighter never touched (no language, or unknown)
+            // that carries an ANSI payload (the model pasted colored output
+            // but dropped the ESC bytes) is repaired like a passthrough line:
+            // without this the bare "[31m" text renders literally. Requires
+            // two or more repairable lines so a short literal sample (e.g.
+            // one printf("[50m]") line) stays untouched.
+            std::string content = styled.empty() ? code : styled;
+            if (styled.empty()) {
+                size_t repairable = 0, pos = 0;
+                while (pos <= code.size()) {
+                    const size_t e = code.find('\n', pos);
+                    const std::string line =
+                        code.substr(pos, (e == std::string::npos ? code.size() : e) - pos);
+                    if (!line.empty() && ansi_repair(line) != line)
+                        ++repairable;
+                    if (e == std::string::npos)
+                        break;
+                    pos = e + 1;
+                }
+                if (repairable >= 2)
+                    content = ansi_repair(code);
+            }
+            append_block_bg(out, content);
             continue;
         }
 

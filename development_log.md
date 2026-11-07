@@ -1511,3 +1511,25 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   `CopyFromScreen` pair captures only the top-left virtualized part of a
   DPI-scaled window and fakes "content below the window is missing".
 - Both toolchains clean; all `--*-test` PASS.
+
+---
+
+## 2026-11-07 (later) - ESC-less ANSI inside fenced blocks repaired
+
+- Report: colored banners still rendered as literal `[48;5;26m` text. The
+  previous `ansi_repair` hook only ran on the markdown passthrough line
+  check, but the model had wrapped the ESC-dropped banner in a
+  language-less ``` fence - fenced content never reaches that check, and
+  with no language tag the syntax highlighter never runs either, so the
+  bare SGR text went through verbatim.
+- Fix in `md_to_ansi`: when a fence produces no highlighter output and at
+  least two of its lines are individually repairable by `ansi_repair`
+  (2+ SGR sequences or an explicit `[0m`), the whole block is repaired
+  before rendering. The two-line threshold keeps short literal samples
+  (`printf("wait [50m]")`) untouched; already-escaped blocks are
+  unchanged because `ansi_repair` skips `[` preceded by ESC.
+- Two new `--tool-test` checks: ESC-less fence gets repaired, literal
+  SGR-looking code stays literal. Verified end-to-end on the real
+  session: the METEO SASSARI banner renders with its blue/dark
+  backgrounds again.
+- Both toolchains clean; all `--*-test` PASS.
