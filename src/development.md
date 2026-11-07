@@ -251,6 +251,15 @@ session switching and LLM-driven compaction.
   than its layout column bleeds over neighbouring widgets and past the window
   border. Truncate to the column width first (`fit_text` in gui.cpp: UTF-8
   codepoint-safe, appends "..", measures with `text_w_px`).
+- The vendored nuklear.h dark table sets `NK_COLOR_TOGGLE_CURSOR` to the
+  window color: a checked checkbox looked empty and the unchecked gray one
+  looked filled (state read inverted). gui.cpp overrides
+  `style.checkbox.cursor_normal/cursor_hover` with a bright accent after
+  `nk_glfw3_init`.
+- `style.window.padding` is cached into the layout clip by `nk_begin` - to
+  inset a window's content, push it BEFORE `nk_begin` (pop after `nk_end`).
+  `style.window.spacing` is different: `nk_panel_layout` reads it live per
+  row, so pushing it after `nk_begin` works.
 
 ## Planned layout (roadmap)
 - `gui/` — GLSL effect passes, terminal I/O panel, attachments input (Phase 5)

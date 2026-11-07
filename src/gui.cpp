@@ -191,19 +191,29 @@ bool button_icon(nk_context* ctx, const IconAtlas& icons, const char* icon,
 // consistent at any font zoom. Falls back to a short text button when the
 // SVG atlas is unavailable.
 bool button_icon_only(nk_context* ctx, const IconAtlas& icons, const char* icon,
-                      const char* fallback_text)
+                      const char* fallback_text,
+                      bool* hovered = nullptr,
+                      struct nk_rect* slot_out = nullptr)
 {
     const IconAtlas::Rect* r = icons.ok() ? icons.find(icon) : nullptr;
-    if (!r)
-        return nk_button_label(ctx, fallback_text) != 0;
+    if (!r) {
+        const bool clicked = nk_button_label(ctx, fallback_text) != 0;
+        if (hovered)
+            *hovered = (ctx->last_widget_state & NK_WIDGET_STATE_HOVER) != 0;
+        return clicked;
+    }
 
     struct nk_rect slot;
     nk_panel_alloc_space(&slot, ctx);  // consume the layout slot
+    if (slot_out)
+        *slot_out = slot;
     nk_flags state = 0;
     struct nk_rect content;
     const bool clicked = nk_do_button(&state, &ctx->current->buffer, slot,
                                        &ctx->style.button, &ctx->input,
                                        NK_BUTTON_DEFAULT, &content) != 0;
+    if (hovered)
+        *hovered = (state & NK_WIDGET_STATE_HOVER) != 0;
 
     const struct nk_style_button* st = &ctx->style.button;
     const struct nk_image img =
@@ -1603,6 +1613,10 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     // fixed_background is fully transparent so the shader shows through.
     nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
                              nk_style_item_color(nk_rgba(16, 18, 24, 235)));
+    // Horizontal breathing room from the window edges. The padding is cached
+    // by nk_begin into the layout clip, so it MUST be pushed before opening
+    // the window (spacing instead is read live per row, see below).
+    nk_style_push_vec2(ctx, &ctx->style.window.padding, nk_vec2(14.0f, 6.0f));
     // NOTE: the title-bar X button in Nuklear 4.13.3 only sets NK_WINDOW_HIDDEN
     // (never NK_WINDOW_CLOSED), so nk_window_is_closed() can't detect it. When
     // the window is hidden, nk_begin() returns 0 with win->layout == 0 and any
@@ -1613,6 +1627,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
                   NK_WINDOW_TITLE | NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE)) {
         nk_end(ctx);
         nk_window_show(ctx, "Settings", NK_SHOWN);
+        nk_style_pop_vec2(ctx);       // padding
         nk_style_pop_style_item(ctx);
         s.open = false;
         s.status.clear();
@@ -1621,7 +1636,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
 
     // Vertical breathing room between the fields (the default 4 px makes the
     // label/input pairs and the property rows visually collide).
-    nk_style_push_vec2(ctx, &ctx->style.window.spacing, nk_vec2(4.0f, 8.0f));
+    nk_style_push_vec2(ctx, &ctx->style.window.spacing, nk_vec2(6.0f, 12.0f));
 
     nk_layout_row_dynamic(ctx, 18, 1);
     nk_label(ctx, "Agent name", NK_LEFT);
@@ -1717,7 +1732,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     }
 
     // Hands-free echo guard (saved immediately: a plain validated toggle).
-    nk_layout_row_dynamic(ctx, 24, 1);
+    nk_layout_row_dynamic(ctx, 28, 1);
     {
         nk_bool ignore = cfg.agent.ignore_while_speaking ? nk_true : nk_false;
         if (nk_checkbox_label(ctx, "Ignore mic while thinking/speaking", &ignore)) {
@@ -1733,7 +1748,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
 
     // External tools master switch (see tools_plan.md). The manifest scan
     // happens at startup, so toggling takes effect after a restart.
-    nk_layout_row_dynamic(ctx, 24, 1);
+    nk_layout_row_dynamic(ctx, 28, 1);
     {
         nk_bool tools = cfg.tools.enabled ? nk_true : nk_false;
         if (nk_checkbox_label(ctx, "Enable external tools (restart)", &tools)) {
@@ -1748,7 +1763,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     }
 
     // Input DSP (applied live to the shared AudioFx pipeline + saved).
-    nk_layout_row_dynamic(ctx, 24, 1);
+    nk_layout_row_dynamic(ctx, 28, 1);
     {
         nk_bool dn = cfg.stt.denoise ? nk_true : nk_false;
         if (nk_checkbox_label(ctx, "Noise suppression (mic)", &dn)) {
@@ -1762,7 +1777,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
                        (cfg.stt.denoise ? "on" : "off");
         }
     }
-    nk_layout_row_dynamic(ctx, 24, 1);
+    nk_layout_row_dynamic(ctx, 28, 1);
     {
         nk_bool ec = cfg.stt.echo_cancel ? nk_true : nk_false;
         if (nk_checkbox_label(ctx, "Echo cancellation (mic hears TTS)", &ec)) {
@@ -1820,8 +1835,9 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         s.status.clear();
     }
 
-    nk_style_pop_vec2(ctx);
+    nk_style_pop_vec2(ctx);   // spacing
     nk_end(ctx);
+    nk_style_pop_vec2(ctx);   // padding
     nk_style_pop_style_item(ctx);
     return true;
 }
@@ -2532,6 +2548,14 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
     // only colors dynamic panels (groups, popups).
     device.ctx.style.window.fixed_background = nk_style_item_color(nk_rgba(16, 18, 24, 0));
     device.ctx.style.window.background = nk_rgba(16, 18, 24, 200);
+    // Checkbox readability: the vendored dark color table fills the CHECKED
+    // cursor with the window color (45,45,45) - the checked box looked like
+    // an empty hole and the unchecked gray one looked "filled", i.e. the
+    // state read inverted. A bright accent square = checked, unmistakable.
+    device.ctx.style.checkbox.cursor_normal =
+        nk_style_item_color(nk_rgb(120, 180, 255));
+    device.ctx.style.checkbox.cursor_hover =
+        nk_style_item_color(nk_rgb(150, 200, 255));
 
     AppState app(cfg, voices);
     app.settings.load_from(cfg, voices);
@@ -2875,21 +2899,47 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                     nk_combo_end(ctx);
                 }
             }
+            // Tooltips for the icon-only buttons: hover + slot rect are
+            // captured here, the bubble is drawn at the end of the frame
+            // (same place as the FAB tooltip) so the chat group cannot
+            // paint over it.
+            int top_tip = -1;
+            struct nk_rect top_tip_rect = {0, 0, 0, 0};
+            const char* top_tip_text = "";
+            auto top_hover = [&](int i, bool hov, const struct nk_rect& rc,
+                                 const char* tip) {
+                if (hov) {
+                    top_tip = i;
+                    top_tip_rect = rc;
+                    top_tip_text = tip;
+                }
+            };
+            bool hov = false;
+            struct nk_rect rc;
             nk_layout_row_push(ctx, 0.12f);
             if (button_icon_only(ctx, app.icons,
-                                 app.hands_free() ? "mic" : "mic-off", "HF")) {
+                                 app.hands_free() ? "mic" : "mic-off", "HF",
+                                 &hov, &rc)) {
                 if (app.hands_free())
                     app.stop_hands_free();
                 else
                     app.start_hands_free();
             }
+            top_hover(0, hov, rc,
+                      app.hands_free() ? "Hands-free: ON (/mic)"
+                                       : "Hands-free: OFF (/mic)");
             nk_layout_row_push(ctx, 0.12f);
             if (button_icon_only(ctx, app.icons,
-                                 app.auto_speak ? "volume-2" : "volume-x", "SPK"))
+                                 app.auto_speak ? "volume-2" : "volume-x",
+                                 "SPK", &hov, &rc))
                 app.auto_speak = !app.auto_speak;
+            top_hover(1, hov, rc,
+                      app.auto_speak ? "Voice output: ON (/voice)"
+                                     : "Voice output: OFF (/voice)");
             nk_layout_row_push(ctx, 0.12f);
-            if (button_icon_only(ctx, app.icons, "settings", "Cfg"))
+            if (button_icon_only(ctx, app.icons, "settings", "Cfg", &hov, &rc))
                 app.settings.open = !app.settings.open;
+            top_hover(2, hov, rc, "Settings");
             nk_layout_row_end(ctx);
 
             // Chat history: this Nuklear has no "fill remaining" row, so the
@@ -2990,6 +3040,30 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                     if (tx + tw > (float)w - 4.0f) tx = (float)w - 4.0f - tw;
                     const struct nk_rect tr =
                         nk_rect(tx, fab_strip.y - th - 6.0f, tw, th);
+                    nk_fill_rect(&ctx->current->buffer, tr, 4.0f,
+                                 nk_rgba(16, 18, 24, 245));
+                    nk_draw_text(&ctx->current->buffer,
+                                 nk_rect(tr.x + (tr.w - text_w_px(ctx->style.font, t, tl)) / 2.0f,
+                                         tr.y + (tr.h - fh) / 2.0f, tw, fh),
+                                 t, tl, ctx->style.font, nk_rgba(0, 0, 0, 0),
+                                 nk_rgb(232, 236, 242));
+                }
+                // Top-bar tooltip: same bubble as the FABs, below the hovered
+                // action button (mic / speak / settings).
+                if (top_tip >= 0) {
+                    const char* t = top_tip_text;
+                    const int tl = (int)std::strlen(t);
+                    const float tw = text_w_px(ctx->style.font, t, tl) + 18.0f;
+                    const float th = fh * 1.4f;
+                    float tx =
+                        top_tip_rect.x + top_tip_rect.w / 2.0f - tw / 2.0f;
+                    if (tx < 4.0f)
+                        tx = 4.0f;
+                    if (tx + tw > (float)w - 4.0f)
+                        tx = (float)w - 4.0f - tw;
+                    const struct nk_rect tr =
+                        nk_rect(tx, top_tip_rect.y + top_tip_rect.h + 6.0f,
+                                tw, th);
                     nk_fill_rect(&ctx->current->buffer, tr, 4.0f,
                                  nk_rgba(16, 18, 24, 245));
                     nk_draw_text(&ctx->current->buffer,

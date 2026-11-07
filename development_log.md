@@ -1165,3 +1165,24 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   buttons), same sizing discipline as the other modals (NO_SCROLLBAR +
   remaining-height group + scroll reset). Unknown commands now point to
   ``/help``.
+
+---
+
+## 2026-11-07 (later) - checkbox look inverted + settings padding
+
+- The checkboxes were NOT logically inverted (value/click/save chain verified
+  correct): the vendored Nuklear dark color table fills the CHECKED cursor
+  with ``NK_COLOR_TOGGLE_CURSOR = 45,45,45`` - the same tone as the window
+  background, so a checked box looked like an empty hole while the unchecked
+  gray one looked "filled". Fixed at app level after ``nk_glfw3_init``:
+  ``style.checkbox.cursor_normal/cursor_hover`` = bright blue accent, so
+  checked = bright square, unmistakable.
+- Settings modal padding: horizontal ``window.padding (14,6)`` pushed BEFORE
+  ``nk_begin`` (the padding is cached into the layout clip at begin time -
+  unlike ``window.spacing``, which ``nk_panel_layout`` reads live per row)
+  and vertical spacing raised 8 -> 12 px; the four checkbox rows 24 -> 28 px.
+- Top-bar icon buttons got tooltips: ``button_icon_only`` now optionally
+  reports hover + slot rect; the bubble (same style as the FABs) is drawn at
+  the end of the frame below the hovered button so the chat group cannot
+  paint over it - hands-free (shows ON/OFF + /mic), voice output (ON/OFF +
+  /voice), Settings.
