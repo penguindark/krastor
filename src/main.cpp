@@ -703,6 +703,20 @@ int run_session_test()
     check("attachment file written",
           fs::exists(dir / id / "attachments" / "img-1.png"));
 
+    // --- predicted attachment paths (the GUI tells the model these paths) ---
+    const std::string id_pred = store.create("attach predict", "test/model");
+    const auto predicted = store.attachment_paths(id_pred, 2);
+    check("attachment_paths predicts the next slots",
+          predicted.size() == 2 &&
+              fs::path(predicted[0]) == dir / id_pred / "attachments" / "img-1.png" &&
+              fs::path(predicted[1]) == dir / id_pred / "attachments" / "img-2.png");
+    krastor::Conversation conv2("SYS");
+    conv2.add_user("two images", {b64, b64});
+    check("append predicted-slot turn", store.append(id_pred, conv2.messages_since(1)));
+    check("predicted paths are the written files",
+          fs::exists(predicted[0]) && fs::exists(predicted[1]));
+    store.remove(id_pred);  // keep the session-count checks below unaffected
+
     krastor::Conversation back("SYS");
     check("load", store.load(id, back, &m));
     const auto& ms = back.messages();

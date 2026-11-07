@@ -55,6 +55,13 @@ public:
     // images are written to attachments/ and replaced by file references.
     bool append(const std::string& id, const std::vector<Message>& msgs);
 
+    // Absolute paths the next `count` images will be written to by append()
+    // (img-<n>.png under <dir>/<id>/attachments/, same numbering append()
+    // uses). Lets the GUI tell the model where its attachments live before
+    // persistence runs. Empty when the session does not exist.
+    std::vector<std::string> attachment_paths(const std::string& id,
+                                              int count) const;
+
     // Reads the log back into `conv` (its system prompt is kept). Malformed
     // lines are skipped (crash tolerance: a half-written last line is lost,
     // the rest of the session is not).

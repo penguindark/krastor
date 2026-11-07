@@ -1533,3 +1533,24 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   session: the METEO SASSARI banner renders with its blue/dark
   backgrounds again.
 - Both toolchains clean; all `--*-test` PASS.
+
+---
+
+## 2026-11-07 (later) - the agent could not find session attachments
+
+- Report: after a pasted image, "mostramela in chat" failed - the agent
+  claimed the photo "is not saved anywhere" and, when pushed, found it
+  only after several `files list` + python detours. The images ARE
+  persisted (`sessions/<id>/attachments/img-<n>.png`), but nothing ever
+  told the model that path exists.
+- Fix: `SessionStore::attachment_paths(id, count)` predicts the exact
+  paths `append()` will write (same slot search as `store_images`). The
+  GUI `send()` appends `[attached files saved at: <paths>]` to the user
+  message (only when autosave is on and the session exists), so the
+  model sees the file paths of every attachment right where it needs
+  them - and the note persists into the log, so restored sessions keep
+  it. `kMediaUsagePrompt` now also tells the model attachments are saved
+  to disk and listed in the message.
+- Three new `--session-test` checks: predicted paths match the next
+  slots, and they are exactly the files `append()` writes.
+- Both toolchains clean; all `--*-test` PASS.

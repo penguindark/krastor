@@ -715,14 +715,32 @@ struct AppState : AskHandler {
         for (const auto& a : attachments)
             b64.push_back(base64_encode(a.png.data(), a.png.size()));
         std::string shown = text;
+        std::string model_text = text;
         if (!b64.empty()) {
             if (!shown.empty())
                 shown += ' ';
             shown += "[+" + std::to_string(b64.size()) +
                      (b64.size() == 1 ? " image]" : " images]");
+            // Tell the model where the images WILL be saved (autosave writes
+            // them to the session's attachments/ at the end of the turn,
+            // same numbering as attachment_paths): without this the agent
+            // cannot re-find a pasted image later and claims it is gone.
+            if (cfg.sessions.autosave && !session_id.empty()) {
+                const auto paths =
+                    store.attachment_paths(session_id, (int)b64.size());
+                if (!paths.empty()) {
+                    model_text += "\n[attached files saved at: ";
+                    for (size_t k = 0; k < paths.size(); ++k) {
+                        if (k)
+                            model_text += ", ";
+                        model_text += paths[k];
+                    }
+                    model_text += "]";
+                }
+            }
         }
         lines.push_back({"you", shown});
-        conv.add_user(text, std::move(b64));
+        conv.add_user(model_text, std::move(b64));
         attachments.clear();
         overflow_retried = false;  // fresh turn: the retry budget resets
         launch_llm();

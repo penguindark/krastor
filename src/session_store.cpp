@@ -332,6 +332,24 @@ bool SessionStore::append(const std::string& id, const std::vector<Message>& msg
     return bool(log) && write_meta(m);
 }
 
+std::vector<std::string> SessionStore::attachment_paths(const std::string& id,
+                                                        int count) const
+{
+    std::vector<std::string> out;
+    if (count <= 0 || !exists(id))
+        return out;
+    const fs::path sdir = fs::path(dir_) / id;
+    int seq = next_attach_seq(sdir);
+    for (int i = 0; i < count; ++i) {
+        std::string ref;
+        do {  // same slot search store_images() performs at append() time
+            ref = "img-" + std::to_string(++seq) + ".png";
+        } while (fs::exists(sdir / "attachments" / ref));
+        out.push_back((sdir / "attachments" / ref).string());
+    }
+    return out;
+}
+
 bool SessionStore::load(const std::string& id, Conversation& conv,
                         SessionMeta* meta) const
 {

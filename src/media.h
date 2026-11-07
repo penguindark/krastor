@@ -50,7 +50,10 @@ inline constexpr const char* kMediaUsagePrompt =
     "optional pixels ('-' or empty = automatic); the media is always scaled "
     "to fit the chat area. To show an image to the user ALWAYS prefer the "
     "[image: ...] token over merely describing or naming the file, unless "
-    "the user asked for something else.";
+    "the user asked for something else. Images the user attaches to the chat "
+    "are saved to disk and their file paths are listed in the user message "
+    "([attached files saved at: ...]) - look there before saying an "
+    "attachment is unavailable.";
 
 // Parse one size field: "" | "-" | "*" | "auto" -> 0 (auto); digits -> value;
 // anything else -> -1 (invalid, caller reports usage).
