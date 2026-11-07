@@ -385,12 +385,12 @@ ToolResult ToolRunner::run(const ToolManifest& tool,
             tr.error = "permission required but no interactive handler";
             return finish();
         }
-        std::string detail = "action: " + action;
+        std::string detail;
         for (const auto& p : paths)
-            detail += "\n  path: " + p;
+            detail += "path: " + p + "\n";
         for (const auto& u : urls)
-            detail += "\n  url: " + u;
-        detail += "\nargs: " + truncate(args.dump(2), 2000);
+            detail += "url: " + u + "\n";
+        detail += "args: " + truncate(args.dump(), 2000);
         const Decision answer = ask->ask(tool.name, action, detail);
         if (answer == Decision::Deny) {
             tr.error = "denied by user";

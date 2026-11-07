@@ -1050,3 +1050,14 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   sliver (Nuklear groups need their row sized): it now takes the free
   window height with a tall wrapped row that scrolls.
 - Both toolchains clean; GUI smoke OK.
+
+---
+
+## 2026-11-07 (later) - permission modal: proper scaling and readable detail
+
+- The detail block rendered literal ``\n`` as "?" glyphs (nk_label_wrap
+  does not break on them) and the verbose ``dump(2)`` args JSON overflowed
+  the fixed 500x380 dialog. The modal now scales with the window
+  (clamped 360..560 x 260..440), splits the detail one row per line
+  (scrollable group), and the runner builds a compact detail: one
+  ``path:``/``url:`` line each + single-line ``args:`` JSON.

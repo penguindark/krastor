@@ -53,6 +53,7 @@
 #include "effects.h"
 #include "audio_analysis.h"
 #include "audio_fx.h"
+#include <algorithm>
 #include "permissions.h"
 #include "tool_registry.h"
 #include "tool_runner.h"
@@ -898,10 +899,16 @@ void permission_modal(struct nk_context* ctx, AppState& app, int win_w, int win_
 
     nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
                              nk_style_item_color(nk_rgba(24, 14, 10, 245)));
-    const int mw = 500, mh = 380;
+    // Scale with the window (never larger than it, never absurdly small).
+    const int mw = (std::max)(360, (std::min)(560, win_w - 80));
+    const int mh = (std::max)(260, (std::min)(440, win_h - 100));
+    const float row_h = ctx->style.font && ctx->style.font->height > 0.0f
+                            ? ctx->style.font->height
+                            : 18.0f;
     bool answered = false;
     if (nk_begin(ctx, "Tool permission",
-                 nk_rect((win_w - mw) / 2.0f, (win_h - mh) / 2.0f, mw, mh),
+                 nk_rect((win_w - mw) / 2.0f, (win_h - mh) / 2.0f,
+                         (float)mw, (float)mh),
                  NK_WINDOW_TITLE | NK_WINDOW_BORDER)) {
         nk_layout_row_dynamic(ctx, 26, 1);
         nk_label_colored(ctx, ("Tool '" + pa->tool + "' asks permission").c_str(),
@@ -910,11 +917,22 @@ void permission_modal(struct nk_context* ctx, AppState& app, int win_w, int win_
         nk_label(ctx, pa->action.c_str(), NK_LEFT);
         // Explicit row height: without it the group collapses to a sliver
         // and the detail text is unreachable.
-        nk_layout_row_dynamic(ctx, mh - 130, 1);
+        nk_layout_row_dynamic(ctx, (float)mh - 130.0f, 1);
         if (nk_group_begin(ctx, "##perm_detail", NK_WINDOW_BORDER)) {
-            // Tall row so the wrapped detail scrolls inside the group.
-            nk_layout_row_dynamic(ctx, 600, 1);
-            nk_label_wrap(ctx, pa->detail.c_str());
+            // One row per detail line: nk_label_wrap renders literal '\n'
+            // as a "?" glyph, so the lines are split here instead.
+            size_t pos = 0;
+            while (pos <= pa->detail.size()) {
+                const size_t nl = pa->detail.find('\n', pos);
+                const std::string line = pa->detail.substr(
+                    pos, nl == std::string::npos ? std::string::npos
+                                                 : nl - pos);
+                nk_layout_row_dynamic(ctx, row_h, 1);
+                nk_label_wrap(ctx, line.c_str());
+                if (nl == std::string::npos)
+                    break;
+                pos = nl + 1;
+            }
             nk_group_end(ctx);
         }
         nk_layout_row_dynamic(ctx, 32, 3);
