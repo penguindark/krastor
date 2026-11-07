@@ -185,6 +185,38 @@ bool button_icon(nk_context* ctx, const IconAtlas& icons, const char* icon,
     return clicked;
 }
 
+// Icon-only button filling the current layout slot (top bar): the icon is
+// centered and sized from the button height, so the bar stays clean and
+// consistent at any font zoom. Falls back to a short text button when the
+// SVG atlas is unavailable.
+bool button_icon_only(nk_context* ctx, const IconAtlas& icons, const char* icon,
+                      const char* fallback_text)
+{
+    const IconAtlas::Rect* r = icons.ok() ? icons.find(icon) : nullptr;
+    if (!r)
+        return nk_button_label(ctx, fallback_text) != 0;
+
+    struct nk_rect slot;
+    nk_panel_alloc_space(&slot, ctx);  // consume the layout slot
+    nk_flags state = 0;
+    struct nk_rect content;
+    const bool clicked = nk_do_button(&state, &ctx->current->buffer, slot,
+                                       &ctx->style.button, &ctx->input,
+                                       NK_BUTTON_DEFAULT, &content) != 0;
+
+    const struct nk_style_button* st = &ctx->style.button;
+    const struct nk_image img =
+        atlas_image(icons.texture(), icons.tex_w(), icons.tex_h(), r->x, r->y,
+                    r->w, r->h);
+    const float ih = slot.h - 2.0f * st->padding.y;
+    const float iw = ih * (float)r->w / (float)(r->h > 0 ? r->h : 1);
+    nk_draw_image(&ctx->current->buffer,
+                  nk_rect(slot.x + (slot.w - iw) / 2.0f,
+                          slot.y + (slot.h - ih) / 2.0f, iw, ih),
+                  &img, nk_white);
+    return clicked;
+}
+
 // ---- UTF-8 codepoint helpers (selection maps on codepoints, not bytes, so
 // Italian accents and emoji stay one position each) ----
 int cp_len(unsigned char c)
@@ -790,6 +822,16 @@ struct AppState : AskHandler {
         });
     }
 
+    // Clears the visible chat WITHOUT touching the session or the LLM
+    // conversation: pure screen cleanup (/clean or the eraser FAB).
+    void clean_screen()
+    {
+        lines.clear();
+        sel_anchor = sel_caret = -1;
+        lines.push_back({"sys", "(screen cleared - session intact)"});
+        follow_bottom = true;
+    }
+
     // Slash commands typed in the input box (opencode-style). Returns true
     // when the text was consumed as a command (send() then skips the LLM).
     bool handle_command(const std::string& line)
@@ -848,6 +890,10 @@ struct AppState : AskHandler {
             }
             return true;
         }
+        if (line == "/clean") {
+            clean_screen();
+            return true;
+        }
         if (line == "/compact" || line.rfind("/compact ", 0) == 0) {
             run_compact(arg_of("/compact"));
             return true;
@@ -861,7 +907,7 @@ struct AppState : AskHandler {
             return true;
         }
         lines.push_back({"sys", "unknown command: " + line +
-                                "  (try /sessions, /compact)"});
+                                "  (try /sessions, /compact, /clean)"});
         return true;
     }
 
@@ -1296,13 +1342,15 @@ void session_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
         return;
     }
 
+    // Scrollable list: title + date + counts per row, delete needs a second
+    // confirming click on the same row. The group height is computed so the
+    // whole content (header + list + footer) fits the window exactly: any
+    // overflow would add a second scrollbar around the modal itself.
     nk_layout_row_dynamic(ctx, row_h + 4, 1);
     nk_label_colored(ctx, "Sessions - click a row to open it", NK_LEFT,
                      nk_rgb(110, 160, 220));
-
-    // Scrollable list: title + date + counts per row, delete needs a second
-    // confirming click on the same row.
-    nk_layout_row_dynamic(ctx, (float)mh - 4.0f * row_h - 110.0f, 1);
+    const float list_h = (std::max)(80.0f, (float)mh - 2.0f * row_h - 78.0f);
+    nk_layout_row_dynamic(ctx, list_h, 1);
     if (nk_group_begin(ctx, "##sess_list", NK_WINDOW_BORDER)) {
         const auto sessions = app.store.list();
         int idx = 0;
@@ -1342,8 +1390,9 @@ void session_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
         nk_group_end(ctx);
     }
 
-    // Footer: new / rename / close.
-    nk_layout_row_dynamic(ctx, 28, 3);
+    // Footer on a single row so it always stays visible inside the window:
+    // new / rename field / apply / close.
+    nk_layout_row_dynamic(ctx, 30, 4);
     if (nk_button_label(ctx, "New session")) {
         app.new_session();
         close = true;
@@ -1351,14 +1400,13 @@ void session_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
     nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, app.rename_buf,
                                    sizeof(app.rename_buf) - 1,
                                    nk_filter_default);
-    if (nk_button_label(ctx, "Rename current")) {
+    if (nk_button_label(ctx, "Rename")) {
         if (app.rename_buf[0] &&
             app.store.rename(app.session_id, app.rename_buf)) {
             app.session_title = app.rename_buf;
             app.rename_buf[0] = '\0';
         }
     }
-    nk_layout_row_dynamic(ctx, 28, 1);
     if (nk_button_label(ctx, "Close"))
         close = true;
     nk_end(ctx);
@@ -2618,11 +2666,13 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             const float chip_h = fh * 1.45f;
             const float fab_sz = fh * 1.45f;  // floating action button size
 
-            // Top bar: title | session quick switcher | hands-free | speak | settings
+            // Top bar: title | session quick switcher | hands-free | speak | settings.
+            // The three action buttons are icon-only (centered, sized from the
+            // row height): no labels, no overlap, consistent at any font zoom.
             nk_layout_row_begin(ctx, NK_DYNAMIC, top_h, 5);
             nk_layout_row_push(ctx, 0.22f);
             nk_label(ctx, app.name.c_str(), NK_MIDDLE_LEFT);
-            nk_layout_row_push(ctx, 0.30f);
+            nk_layout_row_push(ctx, 0.40f);
             {
                 // One-click switch over the most recent sessions; the combo
                 // lives inside the main window, so it cannot ROM the UI the
@@ -2646,22 +2696,20 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                     nk_combo_end(ctx);
                 }
             }
-            nk_layout_row_push(ctx, 0.16f);
-            if (button_icon(ctx, app.icons, app.hands_free() ? "mic" : "mic-off",
-                            app.hands_free() ? "Hands-free: ON"
-                                             : "Hands-free: OFF")) {
+            nk_layout_row_push(ctx, 0.12f);
+            if (button_icon_only(ctx, app.icons,
+                                 app.hands_free() ? "mic" : "mic-off", "HF")) {
                 if (app.hands_free())
                     app.stop_hands_free();
                 else
                     app.start_hands_free();
             }
-            nk_layout_row_push(ctx, 0.15f);
-            if (button_icon(ctx, app.icons,
-                            app.auto_speak ? "volume-2" : "volume-x",
-                            app.auto_speak ? "Speak: ON" : "Speak: OFF"))
+            nk_layout_row_push(ctx, 0.12f);
+            if (button_icon_only(ctx, app.icons,
+                                 app.auto_speak ? "volume-2" : "volume-x", "SPK"))
                 app.auto_speak = !app.auto_speak;
-            nk_layout_row_push(ctx, 0.17f);
-            if (button_icon(ctx, app.icons, "settings", "Settings"))
+            nk_layout_row_push(ctx, 0.12f);
+            if (button_icon_only(ctx, app.icons, "settings", "Cfg"))
                 app.settings.open = !app.settings.open;
             nk_layout_row_end(ctx);
 
@@ -2676,10 +2724,10 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             // the selection handler can ignore clicks on it.
             const float fab_gap = 6.0f, fab_pad = 6.0f;
             const struct nk_rect fab_strip = nk_rect(
-                (float)w - (5.0f * fab_sz + 4.0f * fab_gap + 2.0f * fab_pad) - 10.0f,
+                (float)w - (6.0f * fab_sz + 5.0f * fab_gap + 2.0f * fab_pad) - 10.0f,
                 (float)h - (status_h + input_h + attach_h + 14.0f) -
                     (fab_sz + 2.0f * fab_pad),
-                5.0f * fab_sz + 4.0f * fab_gap + 2.0f * fab_pad,
+                6.0f * fab_sz + 5.0f * fab_gap + 2.0f * fab_pad,
                 fab_sz + 2.0f * fab_pad);
             app.fab_rect = fab_strip;
             chat_panel(ctx, app, chat_h > 60.0f ? chat_h : 60.0f);
@@ -2701,16 +2749,17 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                     bool enabled;
                 };
                 const bool busy = app.worker != AppState::Worker::None;
-                const FabBtn fabs[5] = {
+                const FabBtn fabs[6] = {
                     {"send", 0x1F680, "Send", "Send", !busy},
                     {"paperclip", 0x1F4CE, "Attach image from clipboard", "Img", true},
                     {"ear", 0x1F442, "Listen (mic, max 10 s)", "Mic", !busy},
                     {"volume-2", 0x1F3B5, "Test voice", "Voice", true},
+                    {"eraser", 0x1F9F9, "Clear screen (keeps the session)", "Clr", true},
                     {"square", 0x274C, "Stop: cancel request + silence", "Stop", true},
                 };
-                bool fab_click[5] = {false, false, false, false, false};
+                bool fab_click[6] = {false, false, false, false, false, false};
                 int fab_hover = -1;
-                for (int i = 0; i < 5; ++i) {
+                for (int i = 0; i < 6; ++i) {
                     const struct nk_rect slot = nk_rect(
                         fab_strip.x + fab_pad + (float)i * (fab_sz + fab_gap),
                         fab_strip.y + fab_pad, fab_sz, fab_sz);
@@ -2773,6 +2822,8 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 if (fab_click[1])
                     app.attach_clipboard_image();
                 if (fab_click[4])
+                    app.clean_screen();
+                if (fab_click[5])
                     app.stop();
                 if (fab_click[0] && app.worker == AppState::Worker::None &&
                     app.input[0]) {

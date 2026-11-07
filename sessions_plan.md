@@ -160,6 +160,7 @@ leading `/` as a command instead of sending to the LLM).
 | `/session delete <id or #>` | delete permanently (GUI asks confirm) |
 | `/session rename <title>` | rename current session |
 | `/compact [focus]` | compact current session (section 3) |
+| `/clean` | clear the visible chat only — session and LLM history untouched (GUI: also the eraser floating button) |
 | `/title [title]` | alias for `/session rename` |
 
 CLI-only flags (pre-loop): `--session <id>` start with a session,

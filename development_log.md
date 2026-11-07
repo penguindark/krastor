@@ -1099,3 +1099,23 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   compact archive, delete) - PASS on both toolchains. E2E via CLI against
   the active model: two turns autosaved, ``/compact`` shrank 4 -> 1 messages
   with a faithful summary, archive intact. Both toolchains clean; GUI smoke OK.
+
+---
+
+## 2026-11-07 (later) - top bar cleanup, session-modal layout, /clean
+
+- Field report on the new GUI: the top bar was messy (icon buttons drew their
+  text labels next to/over the icons, mixed sizes) and the session modal's
+  footer buttons were pushed below the window with two scrollbars stacked at
+  its top-right corner.
+- Top bar: the three action buttons are now **icon-only** (new
+  ``button_icon_only`` helper: centered icon sized from the row height, text
+  fallback only when the SVG atlas is missing); ratios rebalanced
+  (name 0.22 / session combo 0.40 / mic / speak / settings 0.12 each).
+- Session modal: the list group height is computed so header + list + footer
+  exactly fill the window (no outer scrollbar - the list keeps its single
+  internal one); the footer collapsed to one row: New / rename field /
+  Rename / Close.
+- **``/clean``** clears the visible chat WITHOUT touching the session or the
+  LLM conversation (``clean_screen()``); also a 6th floating button (new
+  ``eraser`` Lucide icon, ``--icon-test`` now 12 icons) next to Stop.
