@@ -194,10 +194,13 @@ Each tracked folder has a `development.md` describing its development in detail.
 12–30 px, layout rows scale with font height, size auto-saved debounced to the
 exe-folder config). **Pluggable GLSL background effects**: `data/shaders/*.frag`
 plugins with a fixed uniform contract (mic level + 64-band spectrum history
-texture + brightness), Settings dropdown, compile-validated selection persisted to
-`gui.effect`, hot-reload on file edit; first plugin `ring_spectrogram.frag`
-draws audio-reactive cyan/magenta mesh ribbons (synthetic animation when the mic
-is closed). **Hands-free continuous cycle**: mic → VAD → STT → LLM → text → TTS
+texture + assistant state `u_thinking` + key-press pulse `u_typing` +
+brightness, fed through the extensible `EffectInput` struct), Settings
+dropdown with an "off" choice (flat background), compile-validated selection
+persisted to `gui.effect`, hot-reload on file edit; plugins
+`ring_spectrogram.frag` (audio mesh ribbons), `thinking_pulse.frag`
+(breathing core, violet while the LLM thinks, typing ripples) and
+`plasma_drift.frag` (plasma field with a thinking-only harmonic). **Hands-free continuous cycle**: mic → VAD → STT → LLM → text → TTS
 with echo guard and `agent.continuous` auto-start; **barge-in** (speak over the
 TTS to cut it short when the ignore-guard is off). **Configurable agent name**
 and **effect brightness** in Settings. **Chat UX increment**:

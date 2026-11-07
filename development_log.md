@@ -1395,3 +1395,33 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   scroll-up must run AFTER the final scroll-down burst (the auto-send
   reply lands late and re-pins the view).
 - Both toolchains clean; all ``--*-test`` PASS.
+
+---
+
+## 2026-11-07 (later) - shader effects: full event feed, "off" choice, block glyphs (effects_plan.md)
+
+- Reported "background totally dark": nothing was broken - ``gui.effect``
+  was ``""`` (built-in gradient, intentionally near-black) and the only
+  plugin (ring_spectrogram) is audio-only, so with the mic closed it reads
+  as black. The architecture was already modular (scan/select/hot-reload);
+  what was missing was the event feed and an off switch.
+- Uniform contract redesigned (no back-compat constraint, user decision):
+  added ``u_thinking`` (LLM request in flight, incl. tool loop/compaction)
+  and ``u_typing`` (decaying key-press pulse: the frame loop diffs the
+  input buffer, pulse decays x0.9/frame). No ``u_streaming`` - llm_client
+  has no token streaming, a flag would be a lie; the new ``EffectInput``
+  struct (effects.h) bundles the whole feed so future events never change
+  ``draw()``'s signature.
+- "off" is now a first-class choice: ``select("off")`` disables the pass
+  (flat clear color), ``scan()`` lists it first, Settings combo + 
+  ``gui.effect: "off"`` persist it.
+- Shaders: ``ring_spectrogram.frag`` gained thinking shimmer + typing
+  ripple; new ``thinking_pulse.frag`` (breathing core, violet while
+  thinking, typing ring, warm speaking glow, cool listening tint) and
+  ``plasma_drift.frag`` (plasma field whose second harmonic fades in only
+  while thinking). All screenshot-verified, "off" verified flat.
+- Found while screenshotting: block-element glyphs (``▓▒░`` U+2580-259F,
+  used by ANSI art) rendered as ``?`` - the font atlas range stopped at
+  0x257F; extended to 0x259F. The user's cube art now renders as shaded
+  blocks with colors.
+- Both toolchains clean; all ``--*-test`` PASS.

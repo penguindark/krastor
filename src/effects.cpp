@@ -13,7 +13,9 @@ namespace krastor {
 namespace {
 
 // Uniform contract prepended to every plugin source. Plugins must not declare
-// #version or out_color themselves; they write to `frag_color`.
+// #version or out_color themselves; they write to `frag_color`. The event
+// feed mirrors EffectInput (effects.h): audio (level/spectrum/listening/
+// speaking) plus assistant state (thinking) and input activity (typing).
 constexpr const char* kHeader =
     "#version 330 core\n"
     "uniform vec2 u_resolution;   // framebuffer size in px\n"
@@ -23,6 +25,8 @@ constexpr const char* kHeader =
     "uniform float u_spec_head;   // newest column of u_spectrum.x (0..1)\n"
     "uniform float u_listening;   // 1 while hands-free listening is active\n"
     "uniform float u_speaking;    // 1 while TTS playback runs\n"
+    "uniform float u_thinking;    // 1 while an LLM request is in flight\n"
+    "uniform float u_typing;      // decaying pulse on key presses (0..1)\n"
     "uniform float u_intensity;   // global brightness multiplier (settings)\n"
     "out vec4 frag_color;\n"
     // The plugin's main() is renamed; the real main applies the brightness.
@@ -151,7 +155,7 @@ void EffectEngine::init()
 
 std::vector<EffectInfo> EffectEngine::scan(const std::string& dir) const
 {
-    std::vector<EffectInfo> out{{kBuiltinName, "", true}};
+    std::vector<EffectInfo> out{{"off", "", false}, {kBuiltinName, "", true}};
     std::error_code ec;
     if (!std::filesystem::is_directory(dir, ec))
         return out;
@@ -174,6 +178,13 @@ std::vector<EffectInfo> EffectEngine::scan(const std::string& dir) const
 bool EffectEngine::select(const std::string& name, const std::string& dir)
 {
     error_.clear();
+    if (name == "off") {
+        enabled_ = false;
+        current_ = "off";
+        active_path_.clear();
+        return true;
+    }
+    enabled_ = true;
     if (name.empty() || name == kBuiltinName) {
         const GLuint p = compile_prog(std::string(kHeader) + kBuiltinSource + kFooter);
         if (!p)
@@ -229,13 +240,12 @@ bool EffectEngine::check_reload()
     return true;
 }
 
-void EffectEngine::draw(int w, int h, float t, float level,
-                        const unsigned char* hist, int hist_w, int hist_bands,
-                        int hist_head, bool listening, bool speaking,
-                        float intensity)
+void EffectEngine::draw(int w, int h, float t, const EffectInput& in)
 {
-    if (!prog_)
+    if (!enabled_ || !prog_)
         return;
+    const unsigned char* hist = in.hist;
+    const int hist_w = in.hist_w, hist_bands = in.hist_bands;
     // (Re)allocate + upload the spectrum history texture.
     glBindTexture(GL_TEXTURE_2D, tex_);
     if (hist_w != tex_w_ || hist_bands != tex_h_) {
@@ -257,13 +267,15 @@ void EffectEngine::draw(int w, int h, float t, float level,
     glUseProgram(prog_);
     glUniform2f(glGetUniformLocation(prog_, "u_resolution"), float(w), float(h));
     glUniform1f(glGetUniformLocation(prog_, "u_time"), t);
-    glUniform1f(glGetUniformLocation(prog_, "u_level"), level);
+    glUniform1f(glGetUniformLocation(prog_, "u_level"), in.level);
     glUniform1i(glGetUniformLocation(prog_, "u_spectrum"), 0);
     glUniform1f(glGetUniformLocation(prog_, "u_spec_head"),
-                hist_w ? float(hist_head) / float(hist_w) : 0.0f);
-    glUniform1f(glGetUniformLocation(prog_, "u_listening"), listening ? 1.0f : 0.0f);
-    glUniform1f(glGetUniformLocation(prog_, "u_speaking"), speaking ? 1.0f : 0.0f);
-    glUniform1f(glGetUniformLocation(prog_, "u_intensity"), intensity);
+                hist_w ? float(in.hist_head) / float(hist_w) : 0.0f);
+    glUniform1f(glGetUniformLocation(prog_, "u_listening"), in.listening ? 1.0f : 0.0f);
+    glUniform1f(glGetUniformLocation(prog_, "u_speaking"), in.speaking ? 1.0f : 0.0f);
+    glUniform1f(glGetUniformLocation(prog_, "u_thinking"), in.thinking ? 1.0f : 0.0f);
+    glUniform1f(glGetUniformLocation(prog_, "u_typing"), in.typing);
+    glUniform1f(glGetUniformLocation(prog_, "u_intensity"), in.intensity);
     glBindVertexArray(vao_);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glUseProgram(0);

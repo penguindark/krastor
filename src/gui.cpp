@@ -379,6 +379,10 @@ struct AppState : AskHandler {
     std::shared_ptr<CancelToken> llm_cancel;  // Stop button aborts the request
     std::future<std::string> stt_fut;
     std::atomic<bool> speaking{false};
+    // Decaying key-press pulse for the shader event feed (u_typing): set to
+    // 1 whenever the input buffer changes, drained every frame.
+    float typing_pulse = 0.0f;
+    std::string input_prev;  // last frame's input text (typing detector)
     bool auto_speak = true;
     int last_prompt_tokens = 0;  // context occupancy = last request's prompt size
     bool follow_bottom = true;   // chat auto-scrolls to newest unless the user
@@ -3308,11 +3312,12 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
     }
     std::vector<struct nk_font*> fonts;  // index i -> kFontMin + i*kFontStep px
     // Glyph ranges baked into the atlas: ASCII + Latin-1 (Italian accents) +
-    // general punctuation (curly quotes, dashes, ellipsis) + box drawing
-    // (the │ ─ bars used by quotes/tables/rules). Without this Nuklear bakes
-    // ASCII only and everything else renders as "?".
+    // general punctuation (curly quotes, dashes, ellipsis) + box drawing and
+    // block elements (the │ ─ bars used by quotes/tables/rules, the ▓▒░
+    // shades used by ANSI art). Without this Nuklear bakes ASCII only and
+    // everything else renders as "?".
     static const nk_rune kGlyphRanges[] = {
-        32, 0x00FF, 0x2000, 0x205B, 0x2500, 0x257F, 0
+        32, 0x00FF, 0x2000, 0x205B, 0x2500, 0x259F, 0
     };
     for (int px = kFontMin; px <= kFontMax; px += kFontStep) {
         struct nk_font_config fcfg = nk_font_config((float)px);
@@ -4057,11 +4062,27 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         glViewport(0, 0, fb_w, fb_h);
         glClearColor(0.04f, 0.05f, 0.07f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-        fx.draw(fb_w, fb_h, float(glfwGetTime() - t0), spec.level(),
-                spec.history(), SpectrumAnalyzer::kHistory, SpectrumAnalyzer::kBands,
-                spec.head(), app.worker == AppState::Worker::Listening ||
-                                 app.stt.streaming(),
-                app.speaking.load(), static_cast<float>(cfg.gui.effect_intensity));
+        // Shader event feed: audio + assistant state + input activity.
+        if (app.input != app.input_prev) {  // typed/pasted/edited this frame
+            app.typing_pulse = 1.0f;
+            app.input_prev = app.input;
+        }
+        app.typing_pulse = app.typing_pulse > 0.001f ? app.typing_pulse * 0.90f
+                                                    : 0.0f;
+        krastor::EffectInput fxin;
+        fxin.level = spec.level();
+        fxin.hist = spec.history();
+        fxin.hist_w = SpectrumAnalyzer::kHistory;
+        fxin.hist_bands = SpectrumAnalyzer::kBands;
+        fxin.hist_head = spec.head();
+        fxin.listening = app.worker == AppState::Worker::Listening ||
+                         app.stt.streaming();
+        fxin.speaking = app.speaking.load();
+        fxin.thinking = app.worker == AppState::Worker::Thinking ||
+                        app.worker == AppState::Worker::Compacting;
+        fxin.typing = app.typing_pulse;
+        fxin.intensity = static_cast<float>(cfg.gui.effect_intensity);
+        fx.draw(fb_w, fb_h, float(glfwGetTime() - t0), fxin);
         nk_glfw3_render(&device, NK_ANTI_ALIASING_ON, 512 * 1024, 128 * 1024);
 
         glfwSwapBuffers(win);

@@ -65,6 +65,12 @@ void main()
          * (0.5 + 0.5 * sin(u_time * 2.0)) * halo;
     // speaking glow
     col += vec3(0.09, 0.10, 0.17) * u_speaking * halo;
+    // thinking shimmer: the strands brighten violet while the LLM works
+    col += vec3(0.12, 0.07, 0.20) * u_thinking
+         * (0.5 + 0.5 * sin(u_time * 1.6)) * (halo + 0.25);
+    // typing ripple: a quick ring expands outward on key presses
+    float tr = (r - 0.30 - 0.55 * (1.0 - u_typing)) / 0.035;
+    col += vec3(0.30, 0.50, 0.90) * exp(-tr * tr) * u_typing * 0.7;
 
     frag_color = vec4(col, 1.0);
 }
