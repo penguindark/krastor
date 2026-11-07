@@ -106,4 +106,11 @@ No mocks — the test modes exercise the real subsystems:
 
 ## License
 
-No license file has been chosen yet — all rights reserved by the author.
+Licensed under the **Apache License 2.0** — free to use, modify and
+redistribute (even commercially), as long as the copyright and attribution
+notices are kept.
+
+**"Krastor" is a trademark of Dario Deledda.** Apache-2.0 Section 6 does not
+grant any trademark rights: you may describe the origin of the code, but
+forks and redistributed derivatives must use a different name. See
+[LICENSE](LICENSE) for details.

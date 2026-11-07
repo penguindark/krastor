@@ -1425,3 +1425,15 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   0x257F; extended to 0x259F. The user's cube art now renders as shaded
   blocks with colors.
 - Both toolchains clean; all ``--*-test`` PASS.
+
+---
+
+## 2026-11-07 (later) - GitHub: remote, README, Apache-2.0 license
+
+- Remote ``origin`` = git@github.com:penguindark/krastor.git, ``main`` pushed.
+- ``README.md``: GitHub-facing overview (features, quick start, self-tests,
+  tech stack, doc map).
+- ``LICENSE``: Apache-2.0 (chosen for "open source + attribution + reserved
+  trademark"): Section 6 grants no trademark rights; an explicit TRADEMARK
+  NOTICE appended reserves "Krastor" (Dario Deledda) and requires forks to
+  be renamed. README License section updated accordingly.
