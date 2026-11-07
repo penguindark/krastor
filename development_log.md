@@ -1712,3 +1712,65 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   bottom-pin): frames show the block blinking under the last line and
   the meter wave at different positions; text stays fixed-length.
 - Both toolchains clean; all `--*-test` PASS.
+
+---
+
+## 2026-11-08 (later) - multi-agent: switchable personas, JSONC config, state.json
+
+- Request: several agents defined in the config (`krastor` is the base one),
+  switched circularly with **Shift+Tab** or from a menu where the top-left
+  name label was; hand-written project files move from JSON to **JSONC** so
+  they can carry comments; each agent has a **color** shown on the accent bar
+  at the left of the input box (the current azzurro is the base agent's).
+- **Two-level config** (the reason JSONC was needed at all): nlohmann cannot
+  *write* comments, and the app saves on many small changes (font zoom, window
+  move, toggles), so a single file would lose the comments on the first save.
+  Now `config.jsonc` is **user-owned and never written by the app**; every
+  runtime-mutable key goes to `state.json` next to the exe (same atomic
+  tmp+rename write). Precedence: defaults < config.jsonc < state.json < env
+  API key. `Config::load()` parses both through one `apply_json(cfg, root,
+  with_agents)`; `save()` serializes the mutable subset and deliberately
+  never emits the `agents` map. A broken `state.json` is ignored (the app
+  still starts); a broken `config.jsonc` still throws.
+- Trap: `nlohmann::json::parse(f, nullptr, true, true)` enables `//` and
+  `/* */` comments but **not trailing commas** — the example config and the
+  self-test avoid them.
+- Lookup order keeps old setups working: `exe/config.jsonc`, then
+  `exe/config.json`, then `./config.jsonc`, then `./config.json`; same for
+  `llm_models.jsonc` (renamed, `.json` still read). `config.example.json`
+  became `config.example.jsonc`, fully commented.
+- **Agents** (`AgentDef { id, name, color, system_prompt, model_ref, thinking }`):
+  empty fields inherit (name -> id, prompt -> `llm.system_prompt`,
+  model_ref -> `llm.model_ref`, thinking -> the model entry's). A base
+  `krastor` agent is synthesized when the file defines none, and an unknown
+  `agent.active` falls back to it, so the UI always has one entry.
+  `compose_system_prompt(cfg, agent, tools_active)` moved the guarded
+  tool/media/ANSI suffix appends out of the GUI/CLI startup so a switch
+  recomposes exactly what a fresh start would build (never doubled).
+- **Thinking effort**: `LlmConfig.reasoning_effort` -> `body["reasoning_effort"]`
+  when non-empty (omitted otherwise, so strict servers never see it).
+  Precedence agent > model entry (`"thinking": "medium"` on the halogen
+  qwen entry) > none; `apply_agent_llm()` resolves it with the agent's
+  `model_ref` override.
+- GUI: `AppState::apply_agent(id)` is the single switch path (combo, Shift+Tab,
+  session restore, harness hook) — name, accent color, effective LLM config,
+  client and system prompt; refused while the worker is busy. The name label
+  became an `nk_combo` listing every agent in its own color with `*` on the
+  active one, plus a 3 px identity bar echoing the input accent. The agent
+  color now drives the input accent bar + caret, the `thinking…` sweep and
+  the block meter (`draw_block_meter` takes the color); the chat block cursor
+  stays white (terminal style). Shift+Tab is edge-detected and also drops the
+  buffered `\t` from the glfw backend's char queue so a focused input box
+  never eats a tabulator.
+- Sessions: `meta.json` gained `"agent"` (absent in old metas, tolerated);
+  opening a session restores its agent, new sessions record the current one.
+- CLI: `--agent <id>`, `/agent`, `/agent use <id>`; `/config` now prints the
+  agent and the effective thinking effort.
+- New `--config-test` (20 checks): JSONC parse, agent synthesis/fields,
+  state.json precedence, circular cycle, hex colors, prompt composition
+  (incl. no double suffixes), thinking precedence, save() round-trip and the
+  "no agents in state.json" rule.
+- Verified with the screenshot harness on a two-agent config: the amber
+  `Poeta` shows in the top-left combo, the input accent bar and the thinking
+  sweep/meter (162 + 270 amber px in the two crops).
+- Both toolchains clean; all `--*-test` PASS.

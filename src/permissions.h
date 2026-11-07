@@ -72,7 +72,7 @@ struct ToolPolicy {
     // read/write unrestricted-with-ask, net open, run always asks.
     static ToolPolicy from_json(const nlohmann::json& j);
 
-    // Merges a config.json override over the manifest policy (same shape);
+    // Merges a config.jsonc override over the manifest policy (same shape);
     // deny_always entries are never removed.
     void merge_override(const nlohmann::json& j);
 

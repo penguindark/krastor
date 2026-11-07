@@ -113,6 +113,11 @@ LlmReply LlmClient::complete(const Conversation& conversation,
             // malformed registry JSON: send the request without tools
         }
     }
+    // Thinking effort (OpenAI-compat reasoning knob accepted by llama.cpp /
+    // vLLM for reasoning models): omitted when unset so plain models and
+    // strict servers never see an unknown field.
+    if (!config_.reasoning_effort.empty())
+        body["reasoning_effort"] = config_.reasoning_effort;
 
     const std::map<std::string, std::string> headers = {
         {"Authorization", "Bearer " + config_.api_key},

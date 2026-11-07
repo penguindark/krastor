@@ -1,0 +1,86 @@
+{
+  // Krastor user config — JSONC: // and /* */ comments are allowed and
+  // PRESERVED FOREVER: the app never rewrites this file.
+  // Everything the GUI/CLI change at runtime (font zoom, window geometry,
+  // Settings edits, the active agent…) is written to state.json next to
+  // krastor.exe, which takes precedence over this file.
+  // Precedence: built-in defaults < config.jsonc < state.json < env API key.
+  // Copy this file to bin/config.jsonc and edit.
+
+  "llm": {
+    // base_url/api_key/model are the fallback when model_ref is empty or the
+    // entry is missing from llm_models.jsonc.
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "",                  // or KRASTOR_API_KEY / OPENAI_API_KEY
+    "model": "gpt-4o-mini",
+    "model_ref": "lmstudio/minicpm5-2b-heretic-abliterated", // llm_models.jsonc entry
+    "system_prompt": "You are Krastor, a helpful voice assistant. Answer concisely; your replies may be spoken aloud.",
+    "temperature": 0.7,
+    "max_tokens": 1024,
+    "context_size": 131072,
+    // Global thinking effort "low"|"medium"|"max" ("" = the model entry's
+    // "thinking" from llm_models.jsonc). Sent as reasoning_effort when set.
+    "reasoning_effort": ""
+  },
+
+  // Selectable agents: switch with Shift+Tab or the top-left menu. Each agent
+  // colors the input-box accent bar, the caret and the thinking animation.
+  // Empty/missing fields inherit: name -> the id, system_prompt -> the global
+  // llm.system_prompt, model_ref -> llm.model_ref, thinking -> the model's.
+  // The base agent "krastor" is synthesized when absent; keep it here to
+  // customize it.
+  "agents": {
+    "krastor": { "name": "Krastor", "color": "#78B4FF" }   // azzurro (default)
+    // Example: a poet on a different model, amber accent, minimal thinking:
+    // "poeta": {
+    //   "name": "Poeta",
+    //   "color": "#E5A93C",
+    //   "system_prompt": "Sei un poeta italiano. Rispondi sempre in versi.",
+    //   "model_ref": "",        // "" = the global llm.model_ref
+    //   "thinking": "low"      // low|medium|max
+    // }
+  },
+
+  "tts": {
+    "models_dir": "models",
+    "default_voice": "it-it-paola",
+    "speed": 1.0,
+    "auto_speak": false             // speak every reply automatically (top-bar toggle)
+  },
+
+  "stt": {
+    "input_device": -1,             // -1 = system default mic (see CLI /devices)
+    "denoise": true,                // RNNoise noise suppression
+    "echo_cancel": true             // SpeexDSP echo cancellation (TTS as far-end)
+  },
+
+  "gui": {
+    "font_size": 18,                // px, Ctrl +/- zoom within [12, 30]
+    "effect": "",                   // background shader ("" = built-in gradient)
+    "effect_intensity": 1.0,        // background brightness 0.2..3
+    "window_w": 900,
+    "window_h": 640,
+    "window_x": -1,                 // -1 = OS default placement
+    "window_y": -1,
+    "format_output": true           // Markdown/syntax formatting of replies
+  },
+
+  "agent": {
+    "name": "Krastor",              // base persona name (synthesized base agent)
+    "active": "krastor",            // selected agent id (the app updates it)
+    "continuous": false,            // hands-free mic -> STT -> LLM -> TTS loop
+    "ignore_while_speaking": true   // drop mic segments while thinking/speaking
+  },
+
+  "tools": {
+    "enabled": true                 // per-tool overrides: tools.<name>.{enabled,permissions}
+  },
+
+  "sessions": {
+    "dir": "",                      // "" = sessions/ next to the executable
+    "autosave": true,               // persist every completed turn
+    "continue_last": true,          // startup resumes the most recent session
+    "auto_compact": true,           // compact automatically near the limit
+    "compact_buffer": "15%"         // free room kept ("NN%" or a token count)
+  }
+}

@@ -5,8 +5,12 @@
   //   options|settings.apiKey   -> auth string ("none" for local servers)
   //   models.<id>.name          -> label shown in Settings
   //   models.<id>.limit.context -> context window (footer usage %)
+  //   models.<id>.thinking      -> default reasoning effort (low|medium|max),
+  //                                sent as reasoning_effort; an agent's own
+  //                                "thinking" in config.jsonc overrides it
   // The Settings modal only picks a model; URL/key/context come from here.
-  // Lookup order: llm_models.json next to krastor.exe, then the working dir.
+  // Lookup order: llm_models.jsonc next to krastor.exe, then the legacy
+  // llm_models.json, then the working directory.
   "provider": {
 
     "lmstudio": {
@@ -59,6 +63,7 @@
             "context": 262144,
             "output": 65536
           },
+          "thinking": "medium",
           "capabilities": {
             "tools": true,
             "input": ["text", "image"],

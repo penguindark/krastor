@@ -4,8 +4,9 @@
 //   <id>/log.jsonl       append-only message log, one JSON object per line
 //   <id>/attachments/    images referenced by log.jsonl (img-<n>.png)
 //   <id>/archive/        log.jsonl copies made by /compact (nothing is lost)
-// The system prompt is NOT persisted: it always comes from config.json, so a
-// session restored after a prompt change uses the new prompt.
+// The system prompt is NOT persisted: it always comes from the config (plus
+// the session's agent), so a session restored after a prompt change uses the
+// new prompt.
 
 #pragma once
 
@@ -22,6 +23,7 @@ struct SessionMeta {
     std::string created;    // UTC ISO-8601 ("YYYY-MM-DDTHH:MM:SSZ")
     std::string updated;
     std::string model_ref;  // model in use at creation (informational)
+    std::string agent;      // active agent id (restored when the session opens)
     int messages = 0;       // message count in log.jsonl
     int compactions = 0;    // how many times /compact ran on this session
 };
@@ -49,7 +51,8 @@ public:
 
     // Creates <dir>/<id>/ with meta.json + empty log.jsonl; returns the id
     // ("" on failure). id = YYYYMMDD-HHMMSS-xxxx (chronologically sortable).
-    std::string create(const std::string& title, const std::string& model_ref);
+    std::string create(const std::string& title, const std::string& model_ref,
+                       const std::string& agent = {});
 
     // Appends messages (none of them the system message) to the log. Base64
     // images are written to attachments/ and replaced by file references.
@@ -70,6 +73,8 @@ public:
 
     bool meta_of(const std::string& id, SessionMeta& out) const;
     bool rename(const std::string& id, const std::string& title);
+    // Records the agent active in this session (restored on open).
+    bool set_agent(const std::string& id, const std::string& agent);
     bool remove(const std::string& id);
     std::vector<SessionMeta> list() const;  // newest `updated` first
 

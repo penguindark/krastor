@@ -351,7 +351,7 @@ std::string Stt::list_input_devices()
             out += "  [default]";
         out += '\n';
     }
-    out += "Select one with: /listen <sec> <index>  or set stt.input_device in config.json\n";
+    out += "Select one with: /listen <sec> <index>  or set stt.input_device in config.jsonc\n";
     return out;
 }
 

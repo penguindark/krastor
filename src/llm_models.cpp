@@ -2,6 +2,7 @@
 
 #include "config.h"
 
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 
@@ -11,11 +12,22 @@ namespace krastor {
 
 std::string LlmModelRegistry::default_path()
 {
-    const std::string exe = Config::exe_dir() + "/llm_models.json";
-    std::ifstream probe(exe);
-    if (probe)
-        return exe;
-    return "llm_models.json";  // working directory fallback
+    std::error_code ec;
+    namespace fs = std::filesystem;
+    const std::string exe = Config::exe_dir();
+    for (const std::string& name :
+         {"llm_models.jsonc", "llm_models.json"}) {
+        const std::string p = exe + "/" + name;
+        if (fs::exists(p, ec))
+            return p;
+    }
+    for (const std::string& name :
+         {"llm_models.jsonc", "llm_models.json"}) {
+        std::ifstream probe(name);
+        if (probe)
+            return name;  // working directory fallback
+    }
+    return "llm_models.jsonc";
 }
 
 bool LlmModelRegistry::load(const std::string& path)
@@ -72,6 +84,8 @@ bool LlmModelRegistry::load(const std::string& path)
             if (m.is_object() && m.contains("capabilities") &&
                 m["capabilities"].is_object())
                 e.tools = m["capabilities"].value("tools", false);
+            if (m.is_object())
+                e.thinking = m.value("thinking", std::string());
             if (e.base_url.empty())
                 continue;  // unusable without an endpoint
             entries_.push_back(std::move(e));
@@ -105,7 +119,24 @@ bool apply_model_ref(LlmConfig& llm, const LlmModelRegistry& reg)
     if (e->context > 0)
         llm.context_size = e->context;
     llm.supports_tools = e->tools;
+    // The model entry's "thinking" is the default reasoning effort; the
+    // active agent's thinking overrides it afterwards (apply_agent_llm).
+    llm.reasoning_effort = e->thinking;
     return true;
+}
+
+void apply_agent_llm(LlmConfig& out, const LlmConfig& base,
+                     const AgentDef* agent, const LlmModelRegistry& reg)
+{
+    out = base;  // global config, model_ref already resolved at startup
+    if (!agent)
+        return;
+    if (!agent->model_ref.empty() && agent->model_ref != out.model_ref) {
+        out.model_ref = agent->model_ref;
+        apply_model_ref(out, reg);  // refreshes reasoning_effort from the entry
+    }
+    if (!agent->thinking.empty())
+        out.reasoning_effort = agent->thinking;
 }
 
 } // namespace krastor

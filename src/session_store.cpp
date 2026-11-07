@@ -166,12 +166,15 @@ int next_attach_seq(const fs::path& sdir)
 
 json meta_to_json(const SessionMeta& m)
 {
-    return {
+    json j = {
         {"id", m.id},        {"title", m.title},
         {"created", m.created}, {"updated", m.updated},
         {"model_ref", m.model_ref}, {"messages", m.messages},
         {"compactions", m.compactions},
     };
+    if (!m.agent.empty())
+        j["agent"] = m.agent;  // absent in pre-agent metas: tolerated on read
+    return j;
 }
 
 bool meta_from_json(const json& j, SessionMeta& out)
@@ -183,6 +186,7 @@ bool meta_from_json(const json& j, SessionMeta& out)
     out.created = j.value("created", "");
     out.updated = j.value("updated", "");
     out.model_ref = j.value("model_ref", "");
+    out.agent = j.value("agent", "");
     out.messages = j.value("messages", 0);
     out.compactions = j.value("compactions", 0);
     return !out.id.empty();
@@ -277,7 +281,8 @@ bool SessionStore::read_meta(const std::string& id, SessionMeta& out) const
 }
 
 std::string SessionStore::create(const std::string& title,
-                                 const std::string& model_ref)
+                                 const std::string& model_ref,
+                                 const std::string& agent)
 {
     std::error_code ec;
     fs::create_directories(dir_, ec);
@@ -299,6 +304,7 @@ std::string SessionStore::create(const std::string& title,
     m.title = title.empty() ? "New session" : title;
     m.created = m.updated = iso_now();
     m.model_ref = model_ref;
+    m.agent = agent;
     if (!write_meta(m))
         return {};
     std::ofstream log(session_path(id) + "/log.jsonl", std::ios::app);
@@ -391,6 +397,17 @@ bool SessionStore::rename(const std::string& id, const std::string& title)
         return false;
     m.title = title;
     m.updated = iso_now();
+    return write_meta(m);
+}
+
+bool SessionStore::set_agent(const std::string& id, const std::string& agent)
+{
+    SessionMeta m;
+    if (!read_meta(id, m))
+        return false;
+    if (m.agent == agent)
+        return true;  // no rewrite: keeps `updated` and the disk quiet
+    m.agent = agent;
     return write_meta(m);
 }
 

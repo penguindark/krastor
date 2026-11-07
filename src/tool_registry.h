@@ -37,7 +37,7 @@ struct ToolManifest {
 class ToolRegistry {
 public:
     // Loads every `tool_*.jsonc` in `dir` (sorted by name for determinism).
-    // `overrides` is the optional config.json "tools" object: per-tool
+    // `overrides` is the optional config.jsonc "tools" object: per-tool
     // `enabled` and `permissions` overrides. Unreadable/malformed manifests
     // are skipped with a message appended to `log`.
     void load_dir(const std::string& dir, const nlohmann::json& overrides,

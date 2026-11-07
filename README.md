@@ -63,8 +63,8 @@ python tools\download_models.py --only stt-parakeet-multilingual
 .\scripts\build.ps1 -Toolchain mingw -Config Release
 
 # 5. configure + run  (from the repo root!)
-copy config.example.json bin\config.json
-# edit bin\llm_models.json with your LLM endpoint
+copy config.example.jsonc bin\config.jsonc
+# edit bin\llm_models.jsonc with your LLM endpoint (comments allowed)
 .\bin\krastor.exe --gui
 ```
 

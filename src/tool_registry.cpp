@@ -112,7 +112,7 @@ void ToolRegistry::load_dir(const std::string& dir,
             log.push_back("tools: " + file.filename().string() + ": " + err);
             continue;
         }
-        // config.json overrides: tools.<name>.enabled / .permissions
+        // config.jsonc overrides: tools.<name>.enabled / .permissions
         if (overrides.is_object() && overrides.contains(m.name)) {
             const auto& ov = overrides[m.name];
             if (ov.is_object()) {

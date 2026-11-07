@@ -1,12 +1,19 @@
 // Krastor — application configuration.
-// Loads settings from a JSON file with environment variable fallback for the API
-// key. The runtime config lives next to the executable (exe_dir()/config.json);
-// a legacy config.json in the working directory is still read as a fallback and
-// migrated on first save. See config.example.json for the schema.
+// Two-level layout, so hand-written comments survive forever:
+//   config.jsonc  user-owned, JSONC (// and /* */ comments); the app NEVER
+//                 writes it. Lives next to the executable
+//                 (exe_dir()/config.jsonc); legacy config.json names in the
+//                 exe dir or working directory are still read as fallback.
+//   state.json    app-owned (Config::save()): every runtime-mutable setting
+//                 (font zoom, window geometry, Settings edits, active agent).
+//                 Read after config.jsonc, so it takes precedence.
+// Precedence: defaults < config.jsonc < state.json < env API key.
+// See config.example.jsonc for the schema.
 
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace krastor {
 
@@ -14,7 +21,7 @@ struct LlmConfig {
     std::string base_url = "https://api.openai.com/v1";
     std::string api_key;            // resolved from config or environment
     std::string model = "gpt-4o-mini";
-    // Selected entry in llm_models.json ("provider_id/model_id"). When set and
+    // Selected entry in llm_models.jsonc ("provider_id/model_id"). When set and
     // found, it overrides base_url/api_key/model (and context_size when the
     // file declares limit.context). See llm_models.h.
     std::string model_ref;
@@ -24,9 +31,25 @@ struct LlmConfig {
     double temperature = 0.7;
     int max_tokens = 1024;
     int context_size = 131072;      // model context window (footer usage %)
-    // Set from llm_models.json capabilities.tools by apply_model_ref():
+    // Set from llm_models.jsonc capabilities.tools by apply_model_ref():
     // external tools are only offered to models that support function calling.
     bool supports_tools = false;
+    // "low"|"medium"|"max" — sent as body["reasoning_effort"] when non-empty
+    // (OpenAI-compat thinking knob). Filled by apply_model_ref() from the
+    // model entry's "thinking", overridden by the active agent's thinking.
+    std::string reasoning_effort;
+};
+
+// One selectable agent (config.jsonc "agents" map). Empty fields inherit:
+// system_prompt -> llm.system_prompt, model_ref -> llm.model_ref,
+// thinking -> the model entry's thinking (llm_models.jsonc).
+struct AgentDef {
+    std::string id;
+    std::string name;           // display name (top bar, title); default = id
+    std::string color = "#78B4FF";  // accent color: input bar, caret, thinking
+    std::string system_prompt;
+    std::string model_ref;
+    std::string thinking;
 };
 
 struct TtsConfig {
@@ -60,7 +83,8 @@ struct GuiConfig {
 };
 
 struct AgentConfig {
-    std::string name = "Krastor";       // agent persona name (UI + window title)
+    std::string name = "Krastor";       // base persona name (UI + window title)
+    std::string active;                 // id of the selected agent in `agents`
     bool continuous = false;            // hands-free mic -> STT -> LLM -> TTS loop
     bool ignore_while_speaking = true;  // drop mic segments while thinking/speaking
 };
@@ -90,28 +114,58 @@ struct Config {
     AgentConfig agent;
     ToolsConfig tools;
     SessionsConfig sessions;
+    // Selectable agents from config.jsonc "agents" (file order). When the
+    // file defines none, a base agent is synthesized from agent.name +
+    // llm.system_prompt so the UI always has at least one entry.
+    std::vector<AgentDef> agents;
 
     // Directory containing the running executable ("." when undetectable).
     static std::string exe_dir();
 
-    // Canonical runtime config path: <exe_dir>/config.json.
+    // Canonical user config path: <exe_dir>/config.jsonc.
     static std::string runtime_path();
 
-    // Path to load from: the runtime path when it exists, else a "config.json"
-    // in the working directory (legacy location, migrated on first save).
+    // App-owned mutable state: <exe_dir>/state.json (written by save()).
+    static std::string state_path();
+
+    // Path to load from: exe_dir()/config.jsonc, then the legacy names
+    // exe_dir()/config.json, ./config.jsonc, ./config.json (in that order);
+    // falls back to the canonical path (created on first save).
     static std::string default_path();
 
-    // Loads config from `path`. Missing file is not an error (defaults apply);
-    // malformed JSON throws std::runtime_error. The api key falls back to the
-    // KRASTOR_API_KEY then OPENAI_API_KEY environment variables when empty.
+    // Loads config from `path` (JSONC: // and /* */ comments allowed),
+    // then overlays state.json — the one next to `path`, else exe_dir()'s —
+    // on top. Missing files are not errors (defaults apply); malformed JSON
+    // in `path` throws std::runtime_error (a broken state.json is ignored).
+    // The api key falls back to the KRASTOR_API_KEY then OPENAI_API_KEY
+    // environment variables when empty.
     static Config load(const std::string& path);
 
-    // Writes the current settings as JSON (same schema as load()). Used by the
+    // Writes the runtime-mutable settings (the state.json schema: same keys
+    // as load() understands, minus the user-only "agents" map). Used by the
     // GUI settings modal and by the auto-save on every validated change.
     // Atomic: serialized to `<path>.tmp` then renamed over the target, so a
     // crash can never leave a half-written file. Throws on write failure.
     void save(const std::string& path) const;
-    void save() const { save(runtime_path()); }
+    void save() const { save(state_path()); }
+
+    // The agent with `id`, or nullptr. An empty id matches the active agent.
+    const AgentDef* find_agent(const std::string& id) const;
+    // Circular next agent after `id` (never null when agents is non-empty).
+    const AgentDef* next_agent(const std::string& id) const;
 };
+
+// "#rrggbb" (or "rrggbb") -> rgb components; anything invalid yields the
+// fallback (the base agent's azzurro 120,180,255).
+void parse_hex_color(const std::string& hex, int& r, int& g, int& b);
+
+// The system prompt actually sent for `agent`: the agent's own prompt (or the
+// global llm.system_prompt when empty) plus the usage suffixes (tool sandbox,
+// media tokens, ANSI colors), each guarded so an already-suffixed base is
+// never doubled. `tools_active` = tool registry loaded and model supports
+// function calling. Shared by GUI and CLI so switching agents recomposes the
+// exact same prompt a fresh start would build.
+std::string compose_system_prompt(const Config& cfg, const AgentDef* agent,
+                                  bool tools_active);
 
 } // namespace krastor

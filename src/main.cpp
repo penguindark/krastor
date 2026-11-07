@@ -71,6 +71,8 @@ void print_help()
         "  /session delete <x>  delete a session permanently\n"
         "  /session rename <t>  rename the current session\n"
         "  /compact [focus]   summarize + shrink the session with the LLM\n"
+        "  /agent             list the configured agents (config.jsonc)\n"
+        "  /agent use <id>    switch agent (persona, model_ref, thinking, color)\n"
         "  /grants            list this session's always-allow tool permissions\n"
         "  /grants clear      revoke all always-allow tool permissions\n"
         "  /config            show the active LLM configuration\n"
@@ -1001,6 +1003,172 @@ int run_media_test()
     return failed;
 }
 
+// Config self-test (multiagent_plan.md): JSONC parsing with comments, the
+// two-level override (state.json over config.jsonc), the agents map
+// (synthesized base, fields, unknown-active fallback, circular cycle),
+// hex colors, system-prompt composition, thinking-effort precedence and the
+// save() round-trip (state.json must never carry the agents map).
+// Usage: krastor --config-test
+int run_config_test()
+{
+    namespace fs = std::filesystem;
+    int failed = 0;
+    auto check = [&](const char* name, bool ok, const std::string& err = {}) {
+        std::cout << (ok ? "PASS " : "FAIL ") << name
+                  << (ok || err.empty() ? "" : " - " + err) << "\n";
+        if (!ok)
+            ++failed;
+    };
+
+    std::error_code ec;
+    const fs::path dir = fs::temp_directory_path() / "krastor_config_test";
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    // An empty state.json beside the config shadows the real exe-dir state,
+    // so the test never picks up the developer's own runtime state.
+    { std::ofstream(dir / "state.json") << "{}\n"; }
+
+    // --- JSONC: comments + agents map ------------------------------------------
+    {
+        std::ofstream f(dir / "config.jsonc");
+        f << "{\n"
+             "  // base model\n"
+             "  \"llm\": { \"model\": \"m1\", /* inline */ \"model_ref\": \"p/m1\" },\n"
+             "  \"gui\": { \"font_size\": 22 },\n"
+             "  \"agents\": {\n"
+             "    \"poeta\": { \"name\": \"Poeta\", \"color\": \"#E5A93C\",\n"
+             "                 \"system_prompt\": \"Sei un poeta.\", \"thinking\": \"max\" },\n"
+             "    \"sec\": { \"color\": \"#FF0000\" }\n"
+             "  },\n"
+             "  \"agent\": { \"active\": \"poeta\" }\n"
+             "}\n";
+    }
+    krastor::Config cfg = krastor::Config::load((dir / "config.jsonc").string());
+    check("jsonc comments parse",
+          cfg.llm.model == "m1" && cfg.gui.font_size == 22);
+    check("agents parsed + base synthesized",
+          cfg.agents.size() == 3 && cfg.agents[0].id == "krastor" &&
+              cfg.agents[1].id == "poeta" && cfg.agents[2].id == "sec");
+    const krastor::AgentDef* poeta = cfg.find_agent("poeta");
+    check("agent fields", poeta && poeta->name == "Poeta" &&
+                              poeta->color == "#E5A93C" &&
+                              poeta->thinking == "max" &&
+                              poeta->system_prompt == "Sei un poeta.");
+    check("active from config.jsonc", cfg.agent.active == "poeta");
+    check("base agent synthesized from agent.name",
+          cfg.find_agent("krastor")->name == "Krastor");
+
+    // --- state.json overlay (app-owned, takes precedence) ----------------------
+    {
+        std::ofstream f(dir / "state.json");
+        f << "{ \"gui\": { \"font_size\": 26 }, \"agent\": { \"active\": \"sec\" } }\n";
+    }
+    cfg = krastor::Config::load((dir / "config.jsonc").string());
+    check("state.json overrides config.jsonc",
+          cfg.gui.font_size == 26 && cfg.agent.active == "sec");
+    check("agents survive the state overlay", cfg.agents.size() == 3);
+
+    // --- circular cycle ----------------------------------------------------------
+    check("next_agent circular",
+          cfg.next_agent("sec")->id == "krastor" &&
+          cfg.next_agent("krastor")->id == "poeta" &&
+          cfg.next_agent("poeta")->id == "sec");
+
+    // --- unknown active falls back to the base agent -----------------------------
+    fs::remove(dir / "state.json", ec);
+    {
+        std::ofstream f(dir / "config.jsonc");  // trunc: minimal config
+        f << "{ \"agent\": { \"active\": \"ghost\" } }\n";
+    }
+    { std::ofstream(dir / "state.json") << "{}\n"; }
+    cfg = krastor::Config::load((dir / "config.jsonc").string());
+    check("unknown active falls back to krastor",
+          cfg.agent.active == "krastor" && cfg.agents.size() == 1);
+
+    // --- hex colors ---------------------------------------------------------------
+    int r = 0, g = 0, b = 0;
+    krastor::parse_hex_color("#E5A93C", r, g, b);
+    check("hex color parsed", r == 0xE5 && g == 0xA9 && b == 0x3C);
+    krastor::parse_hex_color("zz", r, g, b);
+    check("bad hex falls back to azzurro", r == 120 && g == 180 && b == 255);
+
+    // --- system-prompt composition -------------------------------------------------
+    krastor::Config c2;
+    c2.llm.system_prompt = "BASE.";
+    const std::string p1 = krastor::compose_system_prompt(c2, nullptr, false);
+    check("compose appends media + ansi suffixes",
+          p1.rfind("BASE.", 0) == 0 &&
+          p1.find("[image: ") != std::string::npos &&
+          p1.find("renders ANSI SGR colors") != std::string::npos);
+    krastor::AgentDef ag;
+    ag.id = "x";
+    ag.system_prompt = "AGENT.";
+    const std::string p2 = krastor::compose_system_prompt(c2, &ag, false);
+    check("agent prompt replaces the base",
+          p2.rfind("AGENT.", 0) == 0 && p2.find("BASE.") == std::string::npos);
+    krastor::Config c3;
+    c3.llm.system_prompt = p1;  // already-suffixed base (old saved configs)
+    check("suffixes never doubled",
+          krastor::compose_system_prompt(c3, nullptr, false) == p1);
+
+    // --- thinking precedence: agent > model entry -----------------------------------
+    {
+        std::ofstream f(dir / "llm_models.jsonc");
+        f << "{ \"provider\": { \"p\": { \"name\": \"P\","
+             " \"settings\": { \"baseURL\": \"http://x/v1\", \"apiKey\": \"k\" },"
+             " \"models\": { \"m1\": { \"limit\": { \"context\": 4096 },"
+             " \"thinking\": \"medium\" } } } } }\n";
+    }
+    krastor::LlmModelRegistry reg;
+    check("registry loads", reg.load((dir / "llm_models.jsonc").string()));
+    krastor::LlmConfig base;
+    base.model_ref = "p/m1";
+    check("apply_model_ref sets the model thinking default",
+          krastor::apply_model_ref(base, reg) && base.reasoning_effort == "medium" &&
+              base.context_size == 4096);
+    krastor::AgentDef ag2;
+    ag2.id = "t";
+    ag2.thinking = "max";
+    krastor::LlmConfig eff;
+    krastor::apply_agent_llm(eff, base, &ag2, reg);
+    check("agent thinking overrides the model default",
+          eff.reasoning_effort == "max");
+    krastor::apply_agent_llm(eff, base, nullptr, reg);
+    check("no agent keeps the model default", eff.reasoning_effort == "medium");
+
+    // --- save() round-trip: state schema, no agents map ------------------------------
+    {
+        std::ofstream f(dir / "config.jsonc");
+        f << "{ \"gui\": { \"font_size\": 22 }, \"agents\": { \"a\": {} } }\n";
+    }
+    krastor::Config c4 = krastor::Config::load((dir / "config.jsonc").string());
+    c4.gui.font_size = 30;
+    const std::string sp = (dir / "state2.json").string();
+    c4.save(sp);
+    check("save() round-trips through load()", [&] {
+        { std::ofstream(dir / "state.json") << "{}\n"; }
+        std::ofstream(dir / "config.jsonc", std::ios::trunc)
+            << "{ \"gui\": { \"font_size\": 22 }, \"agents\": { \"a\": {} } }\n";
+        // simulate the two-level layout: state beside the config
+        fs::copy_file(sp, dir / "state.json", fs::copy_options::overwrite_existing, ec);
+        const krastor::Config c5 =
+            krastor::Config::load((dir / "config.jsonc").string());
+        return c5.gui.font_size == 30;
+    }());
+    {
+        std::ifstream f(sp);
+        const auto j = nlohmann::json::parse(f, nullptr, false);
+        check("save() never writes the agents map",
+              !j.is_discarded() && !j.contains("agents") &&
+                  j.contains("gui") && j["gui"]["font_size"] == 30);
+    }
+
+    fs::remove_all(dir, ec);
+    std::cout << "config-test: " << failed << " failed - "
+              << (failed ? "FAIL" : "PASS") << "\n";
+    return failed;
+}
+
 int main(int argc, char** argv)
 {
 #ifdef _WIN32
@@ -1035,12 +1203,13 @@ int main(int argc, char** argv)
     });
 
     // Args: [--gui] [--icon-test] [--fx-test] [--tts-filter-test] [--gui-test]
-    //       [--session-test] [--media-test] [--session <id>] [--new-session]
-    //       [--list-sessions]
-    //       [--delete-session <id>] [--compact [focus]] [config.json]
+    //       [--config-test] [--session-test] [--media-test] [--session <id>]
+    //       [--new-session] [--agent <id>]
+    //       [--delete-session <id>] [--compact [focus]] [config.jsonc]
     bool use_gui = false;
     std::string config_path;  // empty -> default (exe dir, legacy CWD fallback)
     std::string session_flag, delete_session_flag;
+    std::string agent_flag;   // --agent <id>: start on that config.jsonc agent
     bool new_session_flag = false, list_sessions_flag = false,
          compact_flag = false;
     std::string compact_focus;
@@ -1052,11 +1221,13 @@ int main(int argc, char** argv)
         else if (a == "--tts-filter-test") return run_tts_filter_test();
         else if (a == "--tool-run") return run_tool_run(argc, argv, i);
         else if (a == "--tool-test") return run_tool_test();
+        else if (a == "--config-test") return run_config_test();
         else if (a == "--session-test") return run_session_test();
         else if (a == "--media-test") return run_media_test();
         else if (a == "--gui-test") return krastor::run_gui_stack_test();
         else if (a == "--new-session") new_session_flag = true;
         else if (a == "--list-sessions") list_sessions_flag = true;
+        else if (a == "--agent" && i + 1 < argc) agent_flag = argv[++i];
         else if (a == "--session" && i + 1 < argc) session_flag = argv[++i];
         else if (a == "--delete-session" && i + 1 < argc)
             delete_session_flag = argv[++i];
@@ -1080,11 +1251,12 @@ int main(int argc, char** argv)
         }
     }();
     // Show which file was actually loaded: a stale ./config.json in the working
-    // directory is ignored once bin/config.json exists (see default_path()).
+    // directory is ignored once the exe-dir config exists (see default_path()).
     std::cout << "config: " << config_path << '\n';
-    // Migrate a legacy working-directory config to the canonical location next
-    // to the executable so future auto-saves have a complete file to update.
-    if (config_path == "config.json") {
+    // A legacy working-directory config (config.json/.jsonc): persist everything
+    // into state.json next to the executable so the app has a complete mutable
+    // copy there (the user file itself is never rewritten).
+    if (config_path == "config.json" || config_path == "config.jsonc") {
         try {
             cfg.save();
         } catch (const std::exception& e) {
@@ -1096,15 +1268,29 @@ int main(int argc, char** argv)
     krastor::AudioFx::instance().set_denoise(cfg.stt.denoise);
     krastor::AudioFx::instance().set_echo_cancel(cfg.stt.echo_cancel);
 
-    // llm_models.json (opencode.jsonc format): when llm.model_ref names an
+    // llm_models.jsonc (opencode.jsonc format): when llm.model_ref names an
     // entry there, its URL/key/model/context override the explicit fields.
     krastor::LlmModelRegistry models;
     if (!models.load(krastor::LlmModelRegistry::default_path()))
         std::cout << "note: " << models.error()
-                  << " — using llm.base_url/model from config.json\n";
+                  << " — using llm.base_url/model from the config\n";
     else if (krastor::apply_model_ref(cfg.llm, models))
         std::cout << "model: " << cfg.llm.model_ref << " -> " << cfg.llm.base_url
                   << "\n";
+    // Multi-agent: the active agent (--agent flag or agent.active) overrides
+    // the global llm config (model_ref + thinking). base_llm keeps the
+    // untouched global so /agent use can switch back cleanly.
+    const krastor::LlmConfig base_llm = cfg.llm;
+    if (!agent_flag.empty()) {
+        if (!cfg.find_agent(agent_flag)) {
+            std::cerr << "unknown agent '" << agent_flag
+                      << "' (config.jsonc \"agents\")\n";
+            return 1;
+        }
+        cfg.agent.active = agent_flag;
+    }
+    krastor::apply_agent_llm(cfg.llm, base_llm,
+                             cfg.find_agent(cfg.agent.active), models);
 
     // ---- session CLI flags (sessions_plan.md) --------------------------------
     // Handled before the heavy voice stack: pure store operations exit here.
@@ -1162,8 +1348,12 @@ int main(int argc, char** argv)
                       << "' not found, using first discovered voice\n";
     }
 
-    if (use_gui)
+    if (use_gui) {
+        // The GUI owns the effective config per agent (apply_agent recomputes
+        // it from the global one on every switch), so hand it the global back.
+        cfg.llm = base_llm;
         return krastor::run_gui(cfg, voices);
+    }
 
     print_voice(voices);
 
@@ -1172,7 +1362,7 @@ int main(int argc, char** argv)
     krastor::Stt stt(cfg);
 
     if (cfg.llm.api_key.empty())
-        std::cout << "note: no API key configured (config.json llm.api_key or "
+        std::cout << "note: no API key configured (config.jsonc llm.api_key or "
                      "KRASTOR_API_KEY) — LLM calls will fail\n";
 
     krastor::LlmClient llm(cfg.llm);
@@ -1197,6 +1387,7 @@ int main(int argc, char** argv)
             return krastor::Decision::Deny;
         }
     } tool_ask;
+    bool tools_active = false;
     if (cfg.tools.enabled && cfg.llm.supports_tools) {
         nlohmann::json ov = nlohmann::json::parse(
             cfg.tools.overrides_json.empty() ? "{}" : cfg.tools.overrides_json,
@@ -1206,32 +1397,26 @@ int main(int argc, char** argv)
                                ov.is_object() ? ov : nlohmann::json(), tlog);
         for (auto& l : tlog)
             std::cout << l << "\n";
-        // Guard against double-append (a saved config already carries it).
-        if (!tool_registry.empty() &&
-            cfg.llm.system_prompt.find("provided tools to inspect") ==
-                std::string::npos)
-            cfg.llm.system_prompt += krastor::tool_usage_prompt();
+        tools_active = !tool_registry.empty();
     }
-    // Media usage instructions (chat [image:]/[sound:] tokens), same as the
-    // GUI; guarded so a config that already stores the text is not doubled.
-    if (cfg.llm.system_prompt.find("[image: ") == std::string::npos)
-        cfg.llm.system_prompt += krastor::kMediaUsagePrompt;
-    // ANSI color guidance (the chat renderer speaks SGR), same guard.
-    if (cfg.llm.system_prompt.find("renders ANSI SGR colors") ==
-            std::string::npos)
-        cfg.llm.system_prompt += krastor::kAnsiUsagePrompt;
+    // System prompt: the active agent's persona (or the global one) plus the
+    // usage suffixes (tool sandbox, media tokens, ANSI colors), each guarded
+    // against double-append — the same composition the GUI uses per agent.
+    std::string sys_prompt = krastor::compose_system_prompt(
+        cfg, cfg.find_agent(cfg.agent.active), tools_active);
     krastor::OutputFormatter fmt(cfg);
     krastor::Highlighter hl;
     if (hl.load_default())
         fmt.set_highlighter([&hl](const std::string& code, const std::string& lang) {
             return hl.highlight(code, lang);
         });
-    krastor::Conversation conversation(cfg.llm.system_prompt);
+    krastor::Conversation conversation(sys_prompt);
 
     // ---- session selection (sessions_plan.md) ---------------------------------
     // --session <id> > --new-session > continue the most recent > fresh session.
     std::string session_id;
     std::string session_title;
+    std::string pending_session_agent;  // agent recorded in a restored session
     if (!session_flag.empty() && !new_session_flag) {
         session_id = resolve_session(store, session_flag);
         if (session_id.empty()) {
@@ -1250,12 +1435,36 @@ int main(int argc, char** argv)
         session_title = sm.title;
         std::cout << "session: " << session_id << " \"" << session_title
                   << "\" (" << sm.messages << " msgs restored)\n";
+        // The session's agent comes back with it (an explicit --agent wins).
+        if (agent_flag.empty() && !sm.agent.empty())
+            pending_session_agent = sm.agent;
     } else {
-        session_id = store.create("New session", cfg.llm.model_ref);
+        session_id = store.create("New session", cfg.llm.model_ref,
+                                  cfg.agent.active);
         session_title = "New session";
         std::cout << "session: " << session_id << " (new)\n";
     }
     size_t saved_count = conversation.messages().size();
+
+    // Switch the whole CLI stack to an agent: effective llm config, client,
+    // system prompt and the session's recorded agent. Shared by /agent use
+    // and the session-restore above.
+    auto apply_cli_agent = [&](const std::string& id) -> bool {
+        const krastor::AgentDef* a = cfg.find_agent(id);
+        if (!a)
+            return false;
+        cfg.agent.active = a->id;
+        krastor::apply_agent_llm(cfg.llm, base_llm, a, models);
+        llm = krastor::LlmClient(cfg.llm);
+        sys_prompt = krastor::compose_system_prompt(cfg, a, tools_active);
+        conversation.set_system_prompt(sys_prompt);
+        if (!session_id.empty())
+            store.set_agent(session_id, a->id);
+        return true;
+    };
+    if (!pending_session_agent.empty() &&
+        apply_cli_agent(pending_session_agent))
+        std::cout << "agent: " << cfg.agent.active << " (from session)\n";
 
     // Persist everything appended since the last save; auto-title the session
     // from its first user message while it is still untitled.
@@ -1334,7 +1543,8 @@ int main(int argc, char** argv)
         if (line == "/voices") { list_voices(voices); continue; }
         if (line == "/reset") {
             conversation.reset();
-            session_id = store.create("New session", cfg.llm.model_ref);
+            session_id = store.create("New session", cfg.llm.model_ref,
+                                      cfg.agent.active);
             session_title = "New session";
             saved_count = conversation.messages().size();
             std::cout << "(conversation cleared, new session " << session_id
@@ -1364,7 +1574,7 @@ int main(int argc, char** argv)
                 autosave();  // flush the outgoing session first
                 conversation.reset();
                 session_id = store.create(title.empty() ? "New session" : title,
-                                          cfg.llm.model_ref);
+                                          cfg.llm.model_ref, cfg.agent.active);
                 session_title = title.empty() ? "New session" : title;
                 saved_count = conversation.messages().size();
                 std::cout << "new session " << session_id << "\n";
@@ -1384,6 +1594,10 @@ int main(int argc, char** argv)
                         saved_count = conversation.messages().size();
                         std::cout << "opened session " << id << " \""
                                   << session_title << "\"\n";
+                        if (!sm.agent.empty() && sm.agent != cfg.agent.active &&
+                            apply_cli_agent(sm.agent))
+                            std::cout << "agent: " << cfg.agent.active
+                                      << " (from session)\n";
                     } else {
                         std::cout << "cannot load session " << id << "\n";
                     }
@@ -1399,7 +1613,8 @@ int main(int argc, char** argv)
                     std::cout << "deleted session " << id << "\n";
                     if (id == session_id) {  // the ground vanished under us
                         conversation.reset();
-                        session_id = store.create("New session", cfg.llm.model_ref);
+                        session_id = store.create("New session", cfg.llm.model_ref,
+                                                  cfg.agent.active);
                         session_title = "New session";
                         saved_count = conversation.messages().size();
                         std::cout << "started a new session " << session_id << "\n";
@@ -1450,9 +1665,38 @@ int main(int argc, char** argv)
             }
             continue;
         }
+        if (line == "/agent" || line.rfind("/agent ", 0) == 0) {
+            std::string arg = line.size() > 6 ? line.substr(6) : "";
+            arg.erase(0, arg.find_first_not_of(" \t"));
+            if (arg.empty() || arg == "list") {
+                std::cout << "agents (config.jsonc \"agents\"):\n";
+                for (const auto& a : cfg.agents)
+                    std::cout << (a.id == cfg.agent.active ? "  * " : "    ")
+                              << a.id << "  ("
+                              << (a.name.empty() ? a.id : a.name)
+                              << ", " << a.color << ")\n";
+                std::cout << "switch with: /agent use <id>\n";
+            } else if (arg.rfind("use ", 0) == 0) {
+                const std::string id = trim_arg(arg.substr(4));
+                if (apply_cli_agent(id))
+                    std::cout << "agent -> " << cfg.agent.active << " ["
+                              << cfg.llm.model << "]\n";
+                else
+                    std::cout << "unknown agent '" << id
+                              << "' (see /agent list)\n";
+            } else
+                std::cout << "usage: /agent [list|use <id>]\n";
+            continue;
+        }
         if (line == "/config") {
-            std::cout << "base_url: " << cfg.llm.base_url << "\n"
+            std::cout << "agent:    " << cfg.agent.active << "\n"
+                      << "base_url: " << cfg.llm.base_url << "\n"
                       << "model:    " << cfg.llm.model << "\n"
+                      << "thinking: "
+                      << (cfg.llm.reasoning_effort.empty()
+                              ? "(model default)"
+                              : cfg.llm.reasoning_effort)
+                      << "\n"
                       << "api_key:  " << (cfg.llm.api_key.empty() ? "(not set)" : "(set)") << "\n";
             print_voice(voices);
             continue;

@@ -37,8 +37,10 @@ models/*
 opencode.exe
 opencode.jsonc
 
-# Local configuration (may contain API keys) - copy config.example.json
+# Local configuration (may contain API keys) - copy config.example.jsonc
 config.json
+config.jsonc
+state.json
 
 # Chat sessions (personal data, one folder per session - see sessions_plan.md)
 sessions/

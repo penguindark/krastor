@@ -317,7 +317,7 @@ struct SelRange {
 
 struct SettingsState {
     char name[128] = {0};
-    // Selected llm_models.json entry ("provider/model"); URL/key/context come
+    // Selected llm_models.jsonc entry ("provider/model"); URL/key/context come
     // from the file, so Settings no longer edits them directly.
     std::string model_ref;
     char system_prompt[4096] = {0};
@@ -358,7 +358,12 @@ struct AppState : AskHandler {
     std::vector<ChatLine> lines;   // main thread only
     SettingsState settings;
     std::string name = "Krastor";  // agent persona (agent.name), live-editable
-    LlmModelRegistry models;       // llm_models.json (Settings model combo)
+    // ---- multi-agent (config.jsonc "agents") ----
+    std::string agent_id;          // active agent id (cfg.agent.active)
+    int agent_r = 120, agent_g = 180, agent_b = 255;  // accent color (rgb)
+    LlmConfig eff;                 // effective LLM config for the active agent
+    bool tools_active = false;     // tool-usage suffix applies to the prompt
+    LlmModelRegistry models;       // llm_models.jsonc (Settings model combo)
     OutputFormatter fmt;           // raw reply -> ANSI-styled display text
     Highlighter hl;                // data/languages/*.json code-block packs
     EmojiAtlas emoji;              // color emoji sprite atlas (data/fonts)
@@ -522,8 +527,11 @@ struct AppState : AskHandler {
         // Model list for the Settings combo (URL/key/context come from this file).
         models.load(LlmModelRegistry::default_path());
         // External tools: manifests load only when the system is enabled and
-        // the selected model declares capabilities.tools (function calling).
-        if (c.tools.enabled && c.llm.supports_tools) {
+        // the active agent's model declares capabilities.tools (function
+        // calling) — the agent may override the global model_ref.
+        LlmConfig probe;
+        apply_agent_llm(probe, c.llm, c.find_agent(c.agent.active), models);
+        if (c.tools.enabled && probe.supports_tools) {
             nlohmann::json ov = nlohmann::json::parse(
                 c.tools.overrides_json.empty() ? "{}" : c.tools.overrides_json,
                 nullptr, false);
@@ -532,24 +540,12 @@ struct AppState : AskHandler {
                                    ov.is_object() ? ov : nlohmann::json(), tlog);
             for (auto& l : tlog)
                 lines.push_back({"sys", l});
-            // Guard against double-append: the GUI persists the prompt into
-            // config.json on every save, so a saved config already carries it.
-            if (!tool_registry.empty() &&
-                c.llm.system_prompt.find("provided tools to inspect") ==
-                    std::string::npos)
-                c.llm.system_prompt += tool_usage_prompt();
+            tools_active = !tool_registry.empty();
         }
-        // Media usage (always on): the model shows images/sounds with the
-        // chat tokens. conv was built from the plain prompt in the member
-        // init list, so push the appended text into it too. Guard against
-        // double-append when a saved config already contains it.
-        if (c.llm.system_prompt.find("[image: ") == std::string::npos)
-            c.llm.system_prompt += kMediaUsagePrompt;
-        // ANSI color guidance (the chat renderer speaks SGR), same guard.
-        if (c.llm.system_prompt.find("renders ANSI SGR colors") ==
-                std::string::npos)
-            c.llm.system_prompt += kAnsiUsagePrompt;
-        conv.set_system_prompt(c.llm.system_prompt);
+        // Agent bootstrap: effective LLM config (model_ref + thinking), the
+        // composed system prompt (base + usage suffixes) and the persona
+        // name/color — the exact same path Shift+Tab and session restore use.
+        apply_agent(c.agent.active, /*persist=*/false);
         // Syntax highlighting for fenced code blocks (data/languages/*.json).
         if (hl.load_default())
             fmt.set_highlighter([this](const std::string& code,
@@ -564,16 +560,20 @@ struct AppState : AskHandler {
                                   "Shift+Enter = newline). Ctrl+V pastes text or "
                                   "an image. Settings = LLM/voice config."});
         // ---- session restore (sessions_plan.md): continue the most recent
-        // session or start a fresh one; a restored history rebuilds the chat.
+        // session or start a fresh one; a restored history rebuilds the chat
+        // and the session's agent is restored with it.
         {
             const auto l = store.list();
             if (!l.empty() && c.sessions.continue_last &&
                 store.load(l.front().id, conv)) {
                 session_id = l.front().id;
                 session_title = l.front().title;
+                if (!l.front().agent.empty())
+                    apply_agent(l.front().agent, /*persist=*/false);
             }
             if (session_id.empty()) {
-                session_id = store.create("New session", c.llm.model_ref);
+                session_id = store.create("New session", c.llm.model_ref,
+                                          agent_id);
                 session_title = "New session";
             }
             saved_count = conv.messages().size();
@@ -582,6 +582,9 @@ struct AppState : AskHandler {
             else
                 lines.push_back({"sys", "session: " + session_title});
         }
+        // Screenshot harness hook: start on a specific agent (color check).
+        if (const char* ag = std::getenv("KRASTOR_UITEST_AGENT"))
+            apply_agent(ag, /*persist=*/false);
         // Screenshot-test hook: seed a styled sample line and attach whatever
         // image (if any) is on the clipboard, so renderers can be verified.
         if (std::getenv("KRASTOR_UITEST")) {
@@ -832,6 +835,44 @@ struct AppState : AskHandler {
         player.stop();    // mini sound player too
     }
 
+    // ------------------------------------------------------------- agents
+    // The single switch path: Shift+Tab, the top-bar combo, session restore
+    // and the harness hook all funnel here. Refused while the worker owns the
+    // conversation. Applies: persona name (top bar + title), accent color
+    // (input bar/caret, thinking shimmer + meter), effective LLM config
+    // (model_ref + thinking overrides) and the recomposed system prompt.
+    void apply_agent(const std::string& id, bool persist = true)
+    {
+        if (worker != Worker::None)
+            return;
+        const AgentDef* a = cfg.find_agent(id);
+        if (!a)
+            return;
+        agent_id = a->id;
+        cfg.agent.active = a->id;
+        name = a->name.empty() ? a->id : a->name;
+        parse_hex_color(a->color, agent_r, agent_g, agent_b);
+        apply_agent_llm(eff, cfg.llm, a, models);
+        llm = LlmClient(eff);
+        conv.set_system_prompt(compose_system_prompt(cfg, a, tools_active));
+        if (!session_id.empty())
+            store.set_agent(session_id, a->id);  // sessions remember their agent
+        if (persist) {
+            try {
+                cfg.save();
+            } catch (const std::exception&) {
+            }
+        }
+    }
+
+    // Circular Shift+Tab cycle over the config.jsonc agents.
+    void cycle_agent()
+    {
+        const AgentDef* nxt = cfg.next_agent(agent_id);
+        if (nxt)
+            apply_agent(nxt->id);
+    }
+
     // ------------------------------------------------------------- sessions
     // Persist everything appended since the last save (see sessions_plan.md);
     // auto-titles an untitled session from its first user message.
@@ -990,6 +1031,9 @@ struct AppState : AskHandler {
         session_title = sm.title;
         saved_count = conv.messages().size();
         rebuild_lines_from_conv();
+        // The session's agent comes back with it (unknown ids keep the current).
+        if (!sm.agent.empty() && sm.agent != agent_id)
+            apply_agent(sm.agent);
         return true;
     }
 
@@ -1000,7 +1044,7 @@ struct AppState : AskHandler {
         autosave_turn();
         conv.reset();
         session_title = title.empty() ? "New session" : title;
-        session_id = store.create(session_title, cfg.llm.model_ref);
+        session_id = store.create(session_title, eff.model_ref, agent_id);
         saved_count = conv.messages().size();
         lines.push_back({"sys", "new session: " + session_title});
         follow_bottom = true;
@@ -1014,7 +1058,7 @@ struct AppState : AskHandler {
         store.remove(id);
         if (was_current) {
             conv.reset();
-            session_id = store.create("New session", cfg.llm.model_ref);
+            session_id = store.create("New session", eff.model_ref, agent_id);
             session_title = "New session";
             saved_count = conv.messages().size();
             lines.clear();
@@ -1036,8 +1080,8 @@ struct AppState : AskHandler {
         lines.push_back({"sys", "compacting session..."});
         compact_fut = std::async(std::launch::async,
                                  [this, client, cancel, focus] {
-            return compact_conversation(client, conv, cfg.llm.context_size,
-                                        cfg.llm.max_tokens, focus, cancel.get());
+            return compact_conversation(client, conv, eff.context_size,
+                                        eff.max_tokens, focus, cancel.get());
         });
     }
 
@@ -1048,7 +1092,7 @@ struct AppState : AskHandler {
     {
         if (!cfg.sessions.auto_compact || worker != Worker::None)
             return;
-        const int ctx = cfg.llm.context_size;
+        const int ctx = eff.context_size;
         if (ctx <= 0 || last_prompt_tokens <= 0)
             return;
         const int buf = compact_buffer_tokens(cfg.sessions.compact_buffer, ctx);
@@ -1836,6 +1880,7 @@ void help_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
               {"drag & drop", "attach an image file"},
               {"click + drag in chat", "select text (Ctrl+C copies it)"},
               {"Esc", "interrupt the running request (or clear selection)"},
+              {"Shift+Tab", "switch to the next agent (circular)"},
               {"Ctrl++ / Ctrl+-", "font zoom in / out"}});
         section("Sessions");
         rows({{"Ctrl+O", "open the session manager"},
@@ -2037,10 +2082,10 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     nk_layout_row_dynamic(ctx, 16, 1);
     nk_label(ctx, "LLM Engine", NK_LEFT);
     nk_layout_row_dynamic(ctx, 18, 1);
-    nk_label(ctx, "Model (from llm_models.json)", NK_LEFT);
+    nk_label(ctx, "Model (from llm_models.jsonc)", NK_LEFT);
     nk_layout_row_dynamic(ctx, 26, 1);
     {
-        // The combo lists every provider/model in llm_models.json; the label is
+        // The combo lists every provider/model in llm_models.jsonc; the label is
         // the model's display name. URL, key and context come from the file.
         const LlmModelEntry* cur = models.find(s.model_ref);
         if (nk_combo_begin_label(ctx,
@@ -2201,11 +2246,17 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     nk_layout_row_dynamic(ctx, 30, 2);
     if (button_icon(ctx, icons, "check", "Save")) {
         cfg.agent.name = s.name;
+        // The Name field edits the base persona: keep the synthesized
+        // "krastor" agent's display name in sync (per-agent names otherwise
+        // live in config.jsonc, which the app never writes).
+        for (auto& a : cfg.agents)
+            if (a.id == "krastor")
+                a.name = s.name;
         cfg.llm.model_ref = s.model_ref;
         if (!apply_model_ref(cfg.llm, models))
             s.status = s.model_ref.empty()
                            ? "no model selected - keeping current llm.base_url/model"
-                           : "model not found in llm_models.json";
+                           : "model not found in llm_models.jsonc";
         cfg.llm.system_prompt = s.system_prompt;
         cfg.llm.temperature = s.temperature;
         cfg.llm.max_tokens = s.max_tokens;
@@ -2213,8 +2264,8 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         if (!s.voice.empty())
             voices.select(s.voice);
         try {
-            cfg.save();  // atomic write next to the executable
-            s.status = "Saved to " + Config::runtime_path();
+            cfg.save();  // atomic write to state.json next to the executable
+            s.status = "Saved to " + Config::state_path();
             s.dirty = true;
         } catch (const std::exception& e) {
             s.status = std::string("Save failed: ") + e.what();
@@ -2316,10 +2367,10 @@ struct nk_color shim_mix(struct nk_color a, struct nk_color b, float t)
 }
 
 // opencode-style indeterminate meter for the waiting status line: a row of
-// small squares with a light wave sweeping across them. Returns the pixel
-// width consumed.
+// small squares with a light wave sweeping across them (in the active
+// agent's color). Returns the pixel width consumed.
 float draw_block_meter(struct nk_command_buffer* cv, float x, float y_center,
-                       float h, double now)
+                       float h, double now, struct nk_color col)
 {
     constexpr int kCells = 6;
     const float s = std::max(3.0f, h * 0.40f);  // square size
@@ -2333,7 +2384,8 @@ float draw_block_meter(struct nk_command_buffer* cv, float x, float y_center,
         const float b = d < 0.0f ? shim_smootherstep(1.0f + d)
                                  : shim_smootherstep(1.0f - d / 2.0f);
         fill_px(cv, x + (s + gap) * float(i), y_center - s / 2.0f, s, s,
-                nk_rgba(80, 150, 250, static_cast<int>(60.0f + 195.0f * b)));
+                nk_rgba(col.r, col.g, col.b,
+                        static_cast<int>(60.0f + 195.0f * b)));
     }
     return float(kCells) * (s + gap);
 }
@@ -3633,7 +3685,9 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         glfwPollEvents();
         app.poll();
         if (app.settings.dirty) {
-            app.llm = LlmClient(cfg.llm);
+            // Settings saved: rebuild the effective config/client/prompt for
+            // the active agent (model_ref + thinking overrides included).
+            app.apply_agent(app.agent_id, /*persist=*/false);
             app.settings.dirty = false;
         }
 
@@ -3752,6 +3806,23 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                  app.worker == AppState::Worker::Compacting))
                 app.stop();
             prev_esc = esc;
+            // Shift+Tab cycles the active agent (circular). Edge-detected;
+            // the Tab char still buffered for Nuklear is dropped so a
+            // focused input box never eats it as a tabulator.
+            static bool prev_tab = false;
+            const bool tab = glfwGetKey(win, GLFW_KEY_TAB) != 0;
+            if (tab && !prev_tab &&
+                (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) ||
+                 glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT))) {
+                app.cycle_agent();
+                for (int i = 0; i < device.text_len; ) {
+                    if (device.text[i] == '\t')
+                        device.text[i] = device.text[--device.text_len];
+                    else
+                        ++i;
+                }
+            }
+            prev_tab = tab;
         }
 
         // ---- chat selection & scroll hotkeys (only while the chat has focus,
@@ -3925,7 +3996,49 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             // row height): no labels, no overlap, consistent at any font zoom.
             nk_layout_row_begin(ctx, NK_DYNAMIC, top_h, 5);
             nk_layout_row_push(ctx, 0.22f);
-            nk_label(ctx, app.name.c_str(), NK_MIDDLE_LEFT);
+            {
+                // Agent menu (top-left): the active agent's name in its own
+                // color with a color bar on the left edge; the combo lists
+                // every config.jsonc agent (each item in its color, "*"
+                // marks the active one). Shift+Tab cycles circularly.
+                const struct nk_rect slot = nk_layout_widget_bounds(ctx);
+                const struct nk_color acol =
+                    nk_rgb(app.agent_r, app.agent_g, app.agent_b);
+                nk_style_push_color(ctx, &ctx->style.combo.label_normal, acol);
+                nk_style_push_color(ctx, &ctx->style.combo.label_hover, acol);
+                nk_style_push_color(ctx, &ctx->style.combo.label_active, acol);
+                if (nk_combo_begin_label(ctx, app.name.c_str(),
+                                         nk_vec2(320.0f, 260.0f))) {
+                    for (const auto& a : app.cfg.agents) {
+                        nk_layout_row_dynamic(ctx, 24, 1);
+                        int ar = 120, ag = 180, ab = 255;
+                        parse_hex_color(a.color, ar, ag, ab);
+                        const struct nk_color icol = nk_rgb(ar, ag, ab);
+                        const std::string item =
+                            (a.id == app.agent_id ? "* " : "   ") +
+                            (a.name.empty() ? a.id : a.name);
+                        nk_style_push_color(ctx, &ctx->style.button.text_normal,
+                                            icol);
+                        nk_style_push_color(ctx, &ctx->style.button.text_hover,
+                                            icol);
+                        nk_style_push_color(ctx, &ctx->style.button.text_active,
+                                            icol);
+                        if (nk_combo_item_label(ctx, item.c_str(), NK_TEXT_LEFT) &&
+                            a.id != app.agent_id)
+                            app.apply_agent(a.id);
+                        nk_style_pop_color(ctx);
+                        nk_style_pop_color(ctx);
+                        nk_style_pop_color(ctx);
+                    }
+                    nk_combo_end(ctx);
+                }
+                nk_style_pop_color(ctx);
+                nk_style_pop_color(ctx);
+                nk_style_pop_color(ctx);
+                // Agent identity bar, echoing the input box accent.
+                nk_fill_rect(&ctx->current->buffer,
+                             nk_rect(slot.x, slot.y, 3.0f, slot.h), 0, acol);
+            }
             nk_layout_row_push(ctx, 0.40f);
             {
                 // One-click switch over the most recent sessions; the combo
@@ -4185,9 +4298,11 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             nk_style_push_style_item(ctx, &ctx->style.edit.active,
                                      nk_style_item_color(nk_rgba(12, 15, 21, 255)));
             nk_style_push_color(ctx, &ctx->style.edit.text_normal, nk_rgb(232, 236, 242));
-            nk_style_push_color(ctx, &ctx->style.edit.cursor_normal, nk_rgb(120, 180, 255));
+            // Caret in the active agent's accent color (see the bar below).
+            nk_style_push_color(ctx, &ctx->style.edit.cursor_normal,
+                                nk_rgb(app.agent_r, app.agent_g, app.agent_b));
             nk_style_push_color(ctx, &ctx->style.edit.cursor_text_normal,
-                                nk_rgb(120, 180, 255));
+                                nk_rgb(app.agent_r, app.agent_g, app.agent_b));
             nk_style_push_vec2(ctx, &ctx->style.edit.padding, nk_vec2(10.0f, 6.0f));
             // Visible caret: 2 px wide accent-blue bar (Nuklear's default is a
             // 1 px line that is nearly invisible on the dark field).
@@ -4198,10 +4313,10 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                     (nk_flags)NK_EDIT_CTRL_ENTER_NEWLINE,
                 app.input, sizeof(app.input) - 1, nk_filter_default);
             // Accent bar painted over the field's left edge (after the widget,
-            // so it sits on top of its background).
+            // so it sits on top of its background) in the agent's color.
             nk_fill_rect(&ctx->current->buffer,
                          nk_rect(input_box.x, input_box.y, 3.0f, input_box.h),
-                         0, nk_rgb(120, 180, 255));
+                         0, nk_rgb(app.agent_r, app.agent_g, app.agent_b));
             nk_style_pop_float(ctx);       // cursor_size
             nk_style_pop_vec2(ctx);
             nk_style_pop_color(ctx);      // cursor_text_normal
@@ -4258,7 +4373,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             // ctx: <last prompt tokens> / <model window> — the last request's
             // prompt size is the current context occupancy. Amber past 85%.
             {
-                const int total = cfg.llm.context_size > 0 ? cfg.llm.context_size : 1;
+                const int total = app.eff.context_size > 0 ? app.eff.context_size : 1;
                 const int pct = static_cast<int>(100.0 * app.last_prompt_tokens / total);
                 if (!status_buf.empty())
                     status_buf += "  |  ";
@@ -4267,7 +4382,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                               " (" + std::to_string(pct) + "%)";
             }
             const bool amber =
-                100.0 * app.last_prompt_tokens > 85.0 * cfg.llm.context_size;
+                100.0 * app.last_prompt_tokens > 85.0 * app.eff.context_size;
             if (shim && !status_buf.empty()) {
                 // Custom draw: shimmer on "thinking…", then the opencode-
                 // style block meter + "esc interrupt" hint, then the rest in
@@ -4280,13 +4395,16 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 const struct nk_color base = amber ? nk_rgb(220, 180, 90)
                                                    : ctx->style.text.color;
                 const std::string head = "thinking\xe2\x80\xa6";
+                // The sweep and the meter ride in the active agent's color.
+                const struct nk_color shim_col =
+                    nk_rgb(app.agent_r, app.agent_g, app.agent_b);
                 const float w = draw_shimmer_text(
                     &ctx->current->buffer, slot.x, ty, slot.h, head, f, base,
-                    nk_rgb(150, 200, 255), glfwGetTime());
+                    shim_col, glfwGetTime());
                 float x = slot.x + w + 14.0f;
                 x += draw_block_meter(&ctx->current->buffer, x,
                                       slot.y + slot.h / 2.0f, fh,
-                                      glfwGetTime()) +
+                                      glfwGetTime(), shim_col) +
                      10.0f;
                 static const char* kEsc = "esc";
                 static const char* kInt = "interrupt";
@@ -4365,10 +4483,8 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             nk_style_pop_style_item(ctx);
         }
 
-        // A saved name change propagates to the top bar and the window title
-        // (the title also follows the current session).
-        if (cfg.agent.name != app.name)
-            app.name = cfg.agent.name;
+        // The window title follows the active agent (apply_agent owns
+        // app.name) and the current session.
         {
             static std::string last_win_title;
             const std::string want = app.name + " \xE2\x80\x94 " + app.session_title;

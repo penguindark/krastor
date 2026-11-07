@@ -14,7 +14,7 @@ public:
     // Process-wide singleton: one microphone pipeline, one playback tap.
     static AudioFx& instance();
 
-    // Runtime toggles (config.json / Settings modal).
+    // Runtime toggles (config.jsonc / Settings modal).
     void set_denoise(bool on);
     void set_echo_cancel(bool on);
     bool denoise() const;

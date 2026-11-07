@@ -7,7 +7,7 @@ consigliato è Windows.)
 
 Il repo contiene **tutto il codice sorgente e le risorse minime** (font, icone
 SVG, shader, atlas emoji, dati linguaggi). Non contiene: binari prebuilt
-(sherpa-onnx), pesi dei modelli AI, `config.json` — si recuperano ai punti 3-5.
+(sherpa-onnx), pesi dei modelli AI, `config.jsonc` — si recuperano ai punti 3-5.
 
 ---
 
@@ -87,23 +87,28 @@ licenza). `espeak-ng-data` serve sempre se si usa una voce Piper.
 
 ## 5. Configurare LLM e config
 
-Due file JSON (entrambi cercati **accanto a `krastor.exe`**, poi nella
-working dir):
+Due file JSONC (entrambi cercati **accanto a `krastor.exe`**, poi nella
+working dir; i commenti `//` sono permessi e preservati per sempre):
 
-1. **`llm_models.json`** — registro dei modelli LLM OpenAI-compatibili
-   (URL, chiave, contesto). Nel repo c'è una copia di esempio con endpoint
-   LAN locali: **modificalo** con il tuo server (LM Studio, llama.cpp,
-   ollama, Crucible…) o un provider cloud. La sezione Settings della GUI
-   poi deve solo scegliere il modello da questa lista.
-2. **`config.json`** — config runtime (git-ignored). Dopo la build:
+1. **`llm_models.jsonc`** — registro dei modelli LLM OpenAI-compatibili
+   (URL, chiave, contesto, `thinking` di default). Nel repo c'è una copia di
+   esempio con endpoint LAN locali: **modificalo** con il tuo server
+   (LM Studio, llama.cpp, ollama, Crucible…) o un provider cloud. La sezione
+   Settings della GUI poi deve solo scegliere il modello da questa lista.
+2. **`config.jsonc`** — config utente (git-ignored). Dopo la build:
 
    ```powershell
-   copy config.example.json bin\config.json
+   copy config.example.jsonc bin\config.jsonc
    ```
 
-   Campi principali: `llm.model_ref` (voce di `llm_models.json` selezionata;
+   L'app **non riscrive mai** questo file: le modifiche fatte da GUI/CLI
+   (font, finestra, agente attivo, Settings…) finiscono in `state.json`
+   accanto all'exe, che ha precedenza sul config.jsonc.
+   Campi principali: `llm.model_ref` (voce di `llm_models.jsonc` selezionata;
    in alternativa `llm.base_url`/`api_key`/`model` per un endpoint one-off,
    con fallback env `KRASTOR_API_KEY` → `OPENAI_API_KEY`),
+   `agents` (agenti selezionabili: nome, colore, prompt, model_ref, thinking —
+   switch con Shift+Tab o il menu in alto a sinistra),
    `tts.default_voice` (`it-it-paola`), `stt.input_device` (-1 = default),
    `gui.*` (font, effetto sfondo, dimensione finestra), `agent.*`,
    `tools.enabled` (master switch dei tool esterni, vedi `tools_plan.md`),
@@ -207,7 +212,7 @@ Senza argomenti parte la CLI (stessa chat, testuale): comandi `/sessions`,
 - `--fx-test` FAIL → i pesi RNNoise mancano o sono corrotti: riesegui
   `python tools\download_deps.py`.
 - Voce muta → mancano `models\tts-piper-*` + `models\espeak-ng-data` (punto 4).
-- "LLM error" → `llm_models.json`/`config.json` puntano a un endpoint non
+- "LLM error" → `llm_models.jsonc`/`config.jsonc` puntano a un endpoint non
   raggiungibile (punto 5).
 - Errore finestra/GL → GPU o driver senza OpenGL 3.3 core.
 
@@ -219,7 +224,7 @@ Senza argomenti parte la CLI (stessa chat, testuale): comandi `/sessions`,
 | CMake: "RNNoise model data missing" | `python tools\download_deps.py` (pesi RNNoise in `libs\rnnoise-data\`) |
 | Link error su `sherpa-onnx-c-api.lib` | non hai eseguito il punto 3 |
 | `onnxruntime.dll` mancante accanto all'exe | rebuild (la copy post-build non è girata) o copia manuale da `libs\sherpa-onnx\lib\` |
-| Config non salvata | `bin\config.json` è in sola lettura / cartella protetta; sposta tutto fuori da `Program Files` |
+| Config non salvata | `bin\state.json` è in sola lettura / cartella protetta; sposta tutto fuori da `Program Files` |
 | Errore runtime non spiegato | guarda `bin\krastor_error.log` (accanto all'exe) |
 
 ---
@@ -233,8 +238,8 @@ python tools\download_models.py --only espeak-ng-data
 python tools\download_models.py --only tts-piper-it-it-paola
 python tools\download_models.py --only vad-silero
 python tools\download_models.py --only stt-parakeet-multilingual
-# (modifica llm_models.json con il tuo endpoint LLM)
+# (modifica llm_models.jsonc con il tuo endpoint LLM)
 .\scripts\build.ps1 -Toolchain mingw -Config Release
-copy config.example.json bin\config.json
+copy config.example.jsonc bin\config.jsonc
 .\bin\krastor.exe --gui
 ```
