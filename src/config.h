@@ -33,6 +33,9 @@ struct TtsConfig {
     std::string models_dir = "models";
     std::string default_voice;      // empty -> first discovered voice
     double speed = 1.0;
+    // Speak every assistant reply automatically (GUI top-bar toggle, /voice).
+    // Off by default: the user enables it when they want hands-free audio.
+    bool auto_speak = false;
 };
 
 struct SttConfig {

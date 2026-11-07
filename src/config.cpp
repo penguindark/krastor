@@ -88,6 +88,7 @@ Config Config::load(const std::string& path)
             cfg.tts.models_dir = j.value("models_dir", cfg.tts.models_dir);
             cfg.tts.default_voice = j.value("default_voice", cfg.tts.default_voice);
             cfg.tts.speed = j.value("speed", cfg.tts.speed);
+            cfg.tts.auto_speak = j.value("auto_speak", cfg.tts.auto_speak);
         }
         if (root.contains("stt")) {
             const auto& j = root["stt"];
@@ -160,6 +161,7 @@ void Config::save(const std::string& path) const
         {"models_dir", tts.models_dir},
         {"default_voice", tts.default_voice},
         {"speed", tts.speed},
+        {"auto_speak", tts.auto_speak},
     };
     root["stt"] = {
         {"input_device", stt.input_device},

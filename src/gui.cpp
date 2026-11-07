@@ -383,7 +383,7 @@ struct AppState : AskHandler {
     // 1 whenever the input buffer changes, drained every frame.
     float typing_pulse = 0.0f;
     std::string input_prev;  // last frame's input text (typing detector)
-    bool auto_speak = true;
+    bool auto_speak = false;  // seeded from cfg.tts.auto_speak (off by default)
     int last_prompt_tokens = 0;  // context occupancy = last request's prompt size
     bool follow_bottom = true;   // chat auto-scrolls to newest unless the user
     float chat_bottom = 0.0f;    // last frame's max scroll offset (wheel clamp)
@@ -508,6 +508,7 @@ struct AppState : AskHandler {
           store(SessionStore::default_dir(c.sessions.dir))
     {
         name = c.agent.name;
+        auto_speak = c.tts.auto_speak;
         // Model list for the Settings combo (URL/key/context come from this file).
         models.load(LlmModelRegistry::default_path());
         // External tools: manifests load only when the system is enabled and
@@ -1233,6 +1234,8 @@ struct AppState : AskHandler {
         }
         if (line == "/voice") {  // toggle TTS output (same as the top-bar button)
             auto_speak = !auto_speak;
+            cfg.tts.auto_speak = auto_speak;
+            cfg.save();
             lines.push_back({"sys", std::string("voice output: ") +
                                     (auto_speak ? "ON" : "OFF")});
             return true;
@@ -3795,8 +3798,11 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             nk_layout_row_push(ctx, 0.12f);
             if (button_icon_only(ctx, app.icons,
                                  app.auto_speak ? "volume-2" : "volume-x",
-                                 "SPK", &hov, &rc))
+                                 "SPK", &hov, &rc)) {
                 app.auto_speak = !app.auto_speak;
+                app.cfg.tts.auto_speak = app.auto_speak;
+                app.cfg.save();
+            }
             top_hover(1, hov, rc,
                       app.auto_speak ? "Voice output: ON (/voice)"
                                      : "Voice output: OFF (/voice)");

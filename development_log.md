@@ -1574,3 +1574,38 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
 - Verified with a crafted green-background session + 4x zoom
   screenshot: the background is continuous across spaces and rows.
 - Both toolchains clean; all `--*-test` PASS.
+
+---
+
+## 2026-11-08 (later) - crash on first TTS speak (null AEC resampler)
+
+- Report: the app crashed right after `[tts] loading voice 'it-it-paola'`.
+  WER: AV (0xc0000005) inside krastor.exe; the MAP file resolved the
+  fault offset to `speex_resampler_process_float` +0x5f - a null
+  resampler dereferenced in the AEC far-end path.
+- Race: `ensure_out()` assigned `out_rate` AFTER `ma_device_start()`.
+  The playback callback can fire immediately and calls
+  `push_playback(..., out_rate)` - with rate still 0 the far-end
+  `speex_resampler_init(1, 0, 16000)` fails, and `resample_stream()`
+  fed the null resampler to `speex_resampler_process_float`. The race
+  window is microseconds, so it only hit sometimes (first speak after
+  launch, when `out_rate` was still 0).
+- Fix: publish `out_rate` before the device starts (and reset it on
+  failure); `push_playback()` returns without feeding the AEC when the
+  resampler init fails; `resample_stream()` refuses a null resampler.
+- Debugging note: WER's fault offset + a `/MAP` relink of the same
+  objects pinpoints the crashing function without a dump - the MSVC
+  map's VA column minus the image base gives the RVA to search.
+- Both toolchains clean; all `--*-test` PASS.
+
+---
+
+## 2026-11-08 (later) - TTS auto-speak off by default (persisted)
+
+- Request: the voice should not speak by default. The GUI auto-speak
+  flag was a runtime-only `true` (reset every launch, user choice lost).
+- `tts.auto_speak` is now a persisted config field (default **false**):
+  the GUI seeds it at startup, and both toggles (top-bar speaker icon,
+  `/voice`) write it back with `cfg.save()`. The icon shows volume-x
+  when off; `/say` and the voice-test FAB still speak on demand.
+- Both toolchains clean; all `--*-test` PASS.
