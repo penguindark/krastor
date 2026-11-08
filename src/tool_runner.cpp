@@ -361,6 +361,8 @@ ToolResult ToolRunner::run(const ToolManifest& tool,
         if (args.contains(key) && args[key].is_string())
             urls.push_back(args[key].get<std::string>());
     for (const auto& u : urls) {
+        if (grants_.granted(PermClass::Net, u))
+            continue;
         const Decision d = policy.check(PermClass::Net, u);
         if (d == Decision::Deny)
             decision = Decision::Deny;
@@ -368,10 +370,12 @@ ToolResult ToolRunner::run(const ToolManifest& tool,
             decision = Decision::Ask;
     }
     // 2) class-level check without a target: only meaningful for "run"
-    //    (run.ask gates execution). Net rules match URLs (net_args); a net
-    //    tool without URL args is governed by its own self-enforcement.
+    //    (run.ask gates execution). A previous "Always allow" for THIS tool
+    //    silences it (tool-scoped: python never covers other run tools).
+    //    Net rules match URLs (net_args); a net tool without URL args is
+    //    governed by its own self-enforcement.
     if (decision == Decision::Allow && paths.empty() && urls.empty() &&
-        cls == PermClass::Run)
+        cls == PermClass::Run && !grants_.tool_allowed(tool.name))
         decision = policy.check(cls, std::string());
     // 3) ask_actions: these actions ALWAYS confirm - they override the policy
     //    AND session grants (e.g. file deletion). Deny floors still win.
@@ -397,10 +401,19 @@ ToolResult ToolRunner::run(const ToolManifest& tool,
             tr.error = "denied by user";
             return finish();
         }
-        // "Always allow" never silences a forced-ask action.
-        if (answer == Decision::Always && !forced_ask)
+        // "Always allow" never silences a forced-ask action. Record what the
+        // user actually approved: paths, URLs, or - when there was no target
+        // at all (run class, e.g. python) - the tool itself. The old code
+        // only looped over paths, so run grants were dropped and the tool
+        // asked again on every call.
+        if (answer == Decision::Always && !forced_ask) {
+            if (paths.empty() && urls.empty() && cls == PermClass::Run)
+                grants_.allow_tool(tool.name);
             for (const auto& p : paths)
                 grants_.allow(cls, p);
+            for (const auto& u : urls)
+                grants_.allow(PermClass::Net, u);
+        }
     } else if (decision == Decision::Deny) {
         std::string what = paths.empty() ? std::string(action) : paths.front();
         tr.error = std::string("blocked by permission policy: ") +

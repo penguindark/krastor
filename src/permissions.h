@@ -94,6 +94,12 @@ public:
     void allow(PermClass cls, const std::string& canonical_path);
     bool granted(PermClass cls, const std::string& canonical_path) const;
 
+    // Tool-level "always allow" for targetless run checks (e.g. the python
+    // tool: there is no path to grant, the user approves the tool itself).
+    // Scoped to the one tool - it never covers other run-class tools.
+    void allow_tool(const std::string& tool_name);
+    bool tool_allowed(const std::string& tool_name) const;
+
     // Snapshot of the live grants as (class name, path prefix) pairs, for
     // the /grants command; clear() revokes them all without a restart.
     std::vector<std::pair<std::string, std::string>> list() const;
@@ -102,6 +108,7 @@ public:
 private:
     mutable std::mutex mtx_;
     std::vector<std::pair<int, std::string>> grants_;  // (class, path prefix)
+    std::vector<std::string> tool_grants_;             // tool names (run)
 };
 
 // Blocking ask callback implemented by the GUI modal / the CLI prompt.
@@ -110,7 +117,8 @@ public:
     virtual ~AskHandler() = default;
     // `detail` is a human-readable summary of what is about to happen
     // (tool, action, resolved paths / code). Returns Allow, Always (the
-    // runner then records a session grant for the checked path) or Deny.
+    // runner then records a session grant for the checked paths/URLs, or
+    // for the tool itself when there was no target) or Deny.
     virtual Decision ask(const std::string& tool, const std::string& action,
                          const std::string& detail) = 0;
 };

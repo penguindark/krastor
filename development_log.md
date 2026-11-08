@@ -2043,3 +2043,20 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   scrollbar drag (left button down over the scrollbar strip); wheel-up and
   PageUp/Home still release it as before.
 - Both toolchains clean; all `--*-test` PASS.
+
+
+## 2026-11-08 - fix: "Always allow" for run tools (python) was forgotten on the next call
+
+- Symptom: clicking "Always allow" on the python tool asked again on every
+  following call, in the same session.
+- Cause: run-class tools have no path target - the gate is a class-level
+  `policy.check(Run, "")` - but the Always branch only recorded grants for
+  `paths`, which is empty for python, so nothing was stored. The same hole
+  existed for net URLs (never granted, never checked against grants).
+- Fix: `GrantStore` gains tool-level grants (`allow_tool`/`tool_allowed`,
+  cleared by `/grants clear`, listed as `run  tool: python`): the class-level
+  run check skips when the tool was already approved, and Always with no
+  target records the tool itself (per-tool: python never covers other run
+  tools). URL asks now grant their URL.
+- tool-test: 4 new checks (asks once / second run silent / /grants lists it /
+  clear revokes). Both toolchains clean; all `--*-test` PASS.

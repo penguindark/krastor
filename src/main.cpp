@@ -685,6 +685,40 @@ int run_tool_test()
     r = runner.run(*py, "{\"code\":\"print(1)\"}", &ask_deny, nullptr);
     check("python: run asks -> user deny honoured", !r.ok,
           "run.ask must gate execution");
+    // --- "Always allow" must stick (run class has no path target) ----------
+    {
+        krastor::GrantStore g2;
+        krastor::ToolRunner r2(g2, nlohmann::json{});
+        struct AlwaysAsk : krastor::AskHandler {
+            int asks = 0;
+            krastor::Decision ask(const std::string&, const std::string&,
+                                  const std::string&) override
+            {
+                ++asks;
+                return krastor::Decision::Always;
+            }
+        } ask_always;
+        r = r2.run(*py, "{\"code\":\"print(1)\"}", &ask_always, nullptr);
+        check("always-allow: first run asks", r.ok && ask_always.asks == 1,
+              r.error);
+        r = r2.run(*py, "{\"code\":\"print(2)\"}", &ask_always, nullptr);
+        check("always-allow: second run is silent",
+              r.ok && r.result.find("2") != std::string::npos &&
+                  ask_always.asks == 1,
+              "grant was dropped: run asks on every call");
+        check("always-allow: /grants lists the tool grant",
+              [&] {
+                  auto gs = g2.list();
+                  for (const auto& g : gs)
+                      if (g.first == "run" && g.second == "tool: python")
+                          return true;
+                  return false;
+              }());
+        g2.clear();
+        r = r2.run(*py, "{\"code\":\"print(3)\"}", &ask_always, nullptr);
+        check("always-allow: clear revokes, asks again",
+              r.ok && ask_always.asks == 2, r.error);
+    }
 
     std::cout << "tool-test: " << (failed ? std::to_string(failed) : "0")
               << " failed" << (failed ? "" : " - PASS") << "\n";

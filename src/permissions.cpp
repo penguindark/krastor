@@ -255,6 +255,21 @@ void GrantStore::allow(PermClass cls, const std::string& canonical_path)
     grants_.emplace_back(static_cast<int>(cls), std::move(p));
 }
 
+void GrantStore::allow_tool(const std::string& tool_name)
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    tool_grants_.push_back(tool_name);
+}
+
+bool GrantStore::tool_allowed(const std::string& tool_name) const
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    for (const auto& t : tool_grants_)
+        if (t == tool_name)
+            return true;
+    return false;
+}
+
 bool GrantStore::granted(PermClass cls, const std::string& canonical_path) const
 {
     std::string p = canonical_path;
@@ -292,6 +307,8 @@ std::vector<std::pair<std::string, std::string>> GrantStore::list() const
     out.reserve(grants_.size());
     for (const auto& g : grants_)
         out.emplace_back(perm_class_name(static_cast<PermClass>(g.first)), g.second);
+    for (const auto& t : tool_grants_)
+        out.emplace_back("run", "tool: " + t);
     return out;
 }
 
@@ -299,6 +316,7 @@ void GrantStore::clear()
 {
     std::lock_guard<std::mutex> lock(mtx_);
     grants_.clear();
+    tool_grants_.clear();
 }
 
 } // namespace krastor
