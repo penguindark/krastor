@@ -56,6 +56,9 @@ namespace {
 std::string norm(std::string s)
 {
     s = expand_home(s);
+    // "%TEMP%" placeholder -> platform temp folder (permission globs).
+    if (auto pos = s.find("%TEMP%"); pos != std::string::npos)
+        s.replace(pos, 6, temp_dir());
     for (auto& c : s) {
 #ifdef _WIN32
         if (c == '\\')
@@ -130,6 +133,19 @@ std::string workspace_dir()
     fs::path ws = fs::path(home_dir()) / "Documents" / "KrastorWorkspace";
     fs::create_directories(ws, ec);  // idempotent; ec ignored
     return ws.string();
+}
+
+std::string temp_dir()
+{
+    std::error_code ec;
+    fs::path t = fs::temp_directory_path(ec);
+    std::string s = ec ? std::string(".") : t.string();
+    // Windows returns a trailing separator: drop it so globs like
+    // "%TEMP%/**" do not become "Temp\//**" (double slash never matches
+    // canonical paths).
+    while (s.size() > 1 && (s.back() == '/' || s.back() == '\\'))
+        s.pop_back();
+    return s;
 }
 
 ToolPolicy ToolPolicy::from_json(const nlohmann::json& j)

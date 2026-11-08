@@ -293,6 +293,7 @@ const ToolPolicy& ToolRunner::policy_for(const ToolManifest& tool)
         return it->second.first;
     ToolPolicy pol = ToolPolicy::from_json(tool.permissions);
     pol.merge_override(global_permissions_);
+    pol.merge_override(agent_permissions_);
     auto res = cache_.insert_or_assign(tool.name,
                                        std::make_pair(pol, tool.permissions));
     return res.first->second.first;

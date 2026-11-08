@@ -623,6 +623,32 @@ int run_tool_test()
     check("files: ask outside sandbox -> user deny", !r.ok,
           "must ask and honour the deny");
 
+    // --- read-only agent override (%TEMP% placeholder) ----------------------
+    {
+        krastor::ToolRunner ro(grants, nlohmann::json{});
+        ro.set_agent_permissions(nlohmann::json::parse(
+            "{\"write\":{\"allow\":[\"%TEMP%/**\"],\"ask\":false},"
+            "\"run\":{\"deny\":[\"**\"]}}"));
+        std::string tp = krastor::temp_dir() + "/krastor_ro_selftest.txt";
+        for (auto& c : tp)
+            if (c == '\\')
+                c = '/';
+        auto rr = ro.run(*files, "{\"action\":\"write\",\"path\":\"" + tp +
+                                 "\",\"content\":\"ro\",\"overwrite\":true}",
+                         &ask_deny, nullptr);
+        check("read-only agent: temp write allowed", rr.ok, rr.error);
+        rr = ro.run(*files, "{\"action\":\"write\",\"path\":\"" +
+                            krastor::workspace_dir() + "/ro_blocked.txt\","
+                            "\"content\":\"x\",\"overwrite\":true}",
+                    &ask_allow, nullptr);
+        check("read-only agent: sandbox write denied (no ask)", !rr.ok,
+              "must deny without asking");
+        rr = ro.run(*py, "{\"code\":\"print(1)\"}", &ask_allow, nullptr);
+        check("read-only agent: python denied", !rr.ok, "run rule denies **");
+        std::error_code tec;
+        std::filesystem::remove(tp, tec);
+    }
+
     // --- webfetch ----------------------------------------------------------------
     r = runner.run(*web, "{\"url\":\"https://example.com\"}", &ask_allow, nullptr);
     if (r.error.rfind("fetch failed", 0) == 0)
@@ -1492,6 +1518,15 @@ int main(int argc, char** argv)
         cfg.agent.active = a->id;
         krastor::apply_agent_llm(cfg.llm, base_llm, a, models);
         llm = krastor::LlmClient(cfg.llm);
+        // The agent's tool-permission overrides ride with it (read-only
+        // agents); merged over the manifest policy by the runner.
+        {
+            nlohmann::json apermb;
+            if (!a->permissions_json.empty())
+                apermb = nlohmann::json::parse(a->permissions_json, nullptr,
+                                               false);
+            tool_runner.set_agent_permissions(apermb);
+        }
         sys_prompt = krastor::compose_system_prompt(cfg, a, tools_active);
         conversation.set_system_prompt(sys_prompt);
         if (!session_id.empty())
@@ -1501,6 +1536,9 @@ int main(int argc, char** argv)
     if (!pending_session_agent.empty() &&
         apply_cli_agent(pending_session_agent))
         std::cout << "agent: " << cfg.agent.active << " (from session)\n";
+    // The startup agent's permission overrides must be live as well
+    // (idempotent re-apply when a session switch already ran above).
+    apply_cli_agent(cfg.agent.active);
 
     // Persist everything appended since the last save; auto-title the session
     // from its first user message while it is still untitled.

@@ -52,6 +52,10 @@ struct AgentDef {
     std::string system_prompt;
     std::string model_ref;
     std::string thinking;
+    // Optional "permissions" object (same shape as the tools permission
+    // overrides): merged over the tool policy while this agent is active,
+    // so an agent can run read-only. Raw JSON; empty = no override.
+    std::string permissions_json;
 };
 
 struct TtsConfig {

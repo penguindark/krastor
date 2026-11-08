@@ -39,6 +39,10 @@ bool glob_match(const std::string& pattern, const std::string& path);
 // Created on demand; every "write"-class default policy allows it freely.
 std::string workspace_dir();
 
+// Platform temp folder (fs::temp_directory_path). The "%TEMP%" placeholder
+// in permission globs expands to this (see norm() in permissions.cpp).
+std::string temp_dir();
+
 // Appended to the system prompt when tools are enabled: the sandbox location
 // plus the tool-selection rule - dedicated tools first, python last resort.
 // Callers must guard against double-appending a saved config (same pattern

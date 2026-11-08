@@ -39,12 +39,24 @@ public:
     ToolResult run(const ToolManifest& tool, const std::string& args_json,
                    AskHandler* ask, CancelToken* cancel);
 
+    // Per-agent permission overrides (config.jsonc agents.<id>.permissions):
+    // merged last, over the manifest and the global config override, so the
+    // active agent can tighten (e.g. read-only) but never widen the floor.
+    void set_agent_permissions(const nlohmann::json& j)
+    {
+        if (agent_permissions_ == j)
+            return;
+        agent_permissions_ = j;
+        cache_.clear();
+    }
+
 private:
     // Policy for a manifest (manifest block + global config override), cached.
     const ToolPolicy& policy_for(const ToolManifest& tool);
 
     GrantStore& grants_;
     nlohmann::json global_permissions_;
+    nlohmann::json agent_permissions_;
     std::map<std::string, std::pair<ToolPolicy, nlohmann::json>> cache_;
 };
 

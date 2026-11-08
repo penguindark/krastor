@@ -2003,3 +2003,43 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
 - Screenshot harness no longer maximizes the window (SW_RESTORE): the earlier
   SW_MAXIMIZE polluted `gui.window_*` in state.json (fullscreen on restart).
 - Both toolchains clean; all `--*-test` PASS.
+
+
+## 2026-11-08 - per-agent tool permissions: read-only "Krastor read" agent
+
+- `AgentDef` gains an optional `permissions` object (config.jsonc agents):
+  same shape as the tools permission overrides, parsed into
+  `permissions_json` and merged LAST by `ToolRunner::set_agent_permissions`
+  (manifest < global config < agent), so an agent can tighten but never
+  widen the deny floor. Applied by `apply_agent` (GUI) and
+  `apply_cli_agent` (CLI, incl. startup re-apply).
+- New `%TEMP%` placeholder in permission globs (norm() expands it to
+  `fs::temp_directory_path()`, trailing separator trimmed - Windows
+  returns one and the double slash broke matching).
+- New agent "Krastor read" (#FFA500): derived from Krastor (inherits prompt/
+  model), write allowed only under %TEMP% (ask false -> everything else
+  denied without asking), run denied (python could write anywhere).
+  `compose_system_prompt` appends a READ-ONLY MODE note so the model does
+  not aim for the workspace sandbox.
+- tool-test: 3 new checks (temp write allowed / sandbox write denied no-ask /
+  python denied) - all PASS.
+- IMPORTANT test-harness fix: the self-tests are `--tool-test` etc. WITH
+  the dashes; the previous loop ran bare `tool-test` args that main.cpp
+  silently ignored (exit 0 = false PASS). Loop now uses the `--` flags;
+  all 7 PASS for real.
+- Screenshot harness: pins the window TOPMOST before capture (it was being
+  shot behind other windows) and re-reads the title after the first frame.
+
+
+## 2026-11-08 - fix: chat auto-scroll stopped following the conversation
+
+- `send()` now re-pins `follow_bottom`: your own message always scrolls
+  into view (standard chat UX). Before, once the pin was released (wheel up,
+  selection drag, scrollbar drag) a new turn never brought the view back.
+- The post-end bookkeeping released the pin whenever the pinned scroll offset
+  ended up more than 4 px below our `bottom` estimate - which also happens
+  when Nuklear's `group_end` clamps our set back (estimate overshoot),
+  silently killing auto-follow. The pin is now released only for a REAL
+  scrollbar drag (left button down over the scrollbar strip); wheel-up and
+  PageUp/Home still release it as before.
+- Both toolchains clean; all `--*-test` PASS.

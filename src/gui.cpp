@@ -812,6 +812,7 @@ struct AppState : AskHandler {
         conv.add_user(model_text, std::move(b64));
         attachments.clear();
         overflow_retried = false;  // fresh turn: the retry budget resets
+        follow_bottom = true;  // own message always scrolls into view
         launch_llm();
     }
 
@@ -907,6 +908,13 @@ struct AppState : AskHandler {
         parse_hex_color(a->color, agent_r, agent_g, agent_b);
         apply_agent_llm(eff, cfg.llm, a, models);
         llm = LlmClient(eff);
+        // The agent's tool-permission overrides ride with it (read-only
+        // agents); merged over the manifest policy by the runner.
+        nlohmann::json apermb;
+        if (!a->permissions_json.empty())
+            apermb = nlohmann::json::parse(a->permissions_json, nullptr,
+                                           false);
+        tool_runner.set_agent_permissions(apermb);
         conv.set_system_prompt(compose_system_prompt(cfg, a, tools_active));
         if (!session_id.empty())
             store.set_agent(session_id, a->id);  // sessions remember their agent
@@ -3687,8 +3695,18 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                 nk_group_set_scroll(ctx, "##chat", 0, (nk_uint)bottom);
             else if ((float)sy >= bottom - 4.0f)
                 app.follow_bottom = true;
-            else if (app.follow_bottom)
-                app.follow_bottom = false;  // drag pulled the view up
+            else if (app.follow_bottom) {
+                // Release the pin only for a REAL scrollbar drag: a pinned
+                // scroll set that Nuklear clamped back (our bottom estimate
+                // overshooting the panel max) must not silently kill the
+                // auto-follow, or new content stops scrolling into view.
+                const struct nk_rect bar = nk_rect(
+                    gb.x + gb.w, gb.y,
+                    ctx->style.window.scrollbar_size.x + 4.0f, gb.h);
+                if (nk_input_is_mouse_hovering_rect(&ctx->input, bar) &&
+                    ctx->input.mouse.buttons[NK_BUTTON_LEFT].down)
+                    app.follow_bottom = false;  // drag pulled the view up
+            }
         }
         app.chat_bottom = bottom;
         nk_layout_row_end(ctx);
@@ -4056,14 +4074,20 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 app.stop();
             prev_esc = esc;
             // Shift+Tab cycles the active agent (circular). Edge-detected;
-            // the Tab char still buffered for Nuklear is dropped so a
-            // focused input box never eats it as a tabulator.
+            // while the combo is held the Tab char is dropped from the text
+            // buffer AND the Tab key event swallowed every frame (also on
+            // GLFW repeats): the input box is NK_EDIT_BOX, which includes
+            // NK_EDIT_ALLOW_TAB, so the key alone would insert 4 spaces
+            // into the field that Enter then sends.
             static bool prev_tab = false;
             const bool tab = glfwGetKey(win, GLFW_KEY_TAB) != 0;
-            if (tab && !prev_tab &&
-                (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) ||
-                 glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT))) {
-                app.cycle_agent();
+            const bool shift_tab =
+                tab && (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) ||
+                        glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT));
+            if (shift_tab) {
+                if (!prev_tab)
+                    app.cycle_agent();
+                device.key_events[NK_KEY_TAB] = -1;  // -1 = no event
                 for (int i = 0; i < device.text_len; ) {
                     if (device.text[i] == '\t')
                         device.text[i] = device.text[--device.text_len];

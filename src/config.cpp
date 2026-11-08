@@ -94,6 +94,8 @@ void apply_json(Config& cfg, const nlohmann::json& root, bool user_only)
                 d.system_prompt = a.value("system_prompt", d.system_prompt);
                 d.model_ref = a.value("model_ref", d.model_ref);
                 d.thinking = a.value("thinking", d.thinking);
+                if (a.contains("permissions"))
+                    d.permissions_json = a["permissions"].dump();
             }
             cfg.agents.push_back(std::move(d));
         }
@@ -301,6 +303,16 @@ std::string compose_system_prompt(const Config& cfg, const AgentDef* agent,
     if (tools_active &&
         p.find("provided tools to inspect") == std::string::npos)
         p += tool_usage_prompt();
+    // A read-only agent (permissions override with a write rule) must not
+    // believe the sandbox sentence above: tell it the real writable area.
+    if (agent && !agent->permissions_json.empty() &&
+        agent->permissions_json.find("\"write\"") != std::string::npos)
+        p += "\nREAD-ONLY MODE: the writable sandbox above does NOT apply "
+             "to you. File writes are allowed ONLY inside " +
+             temp_dir() +
+             "; every other write and any command execution is refused by "
+             "policy. Do not attempt to modify files or run code outside "
+             "the temp folder - read and explain instead.";
     if (p.find("[image: ") == std::string::npos)
         p += kMediaUsagePrompt;
     if (p.find("renders ANSI SGR colors") == std::string::npos)
