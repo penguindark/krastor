@@ -2949,6 +2949,12 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
     const struct nk_color c_num = nk_rgb(95, 95, 105);
     const struct nk_color bg_del = nk_rgba(110, 36, 40, 120);
     const struct nk_color bg_add = nk_rgba(24, 84, 44, 120);
+    // opencode style: a changed pair is violet on BOTH panes (the line was
+    // modified, not removed + inserted).
+    const struct nk_color c_mod = nk_rgb(205, 170, 245);
+    const struct nk_color bg_mod = nk_rgba(72, 46, 104, 140);
+    // glyph column: "-" on the old pane, "+" on the new one (aligned text)
+    const float mark_w = text_w_px(f, "\xE2\x88\x92 ", 4) + 2.0f;
     constexpr int kMaxViewRows = 240;
 
     if (dry) {  // measure: one row_h per display row, same counting rules
@@ -3024,10 +3030,16 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
         const struct nk_rect a = nk_widget_bounds(ctx);
         const float ax = a.x + indent;
         const float rx = ax + pane_w + gap_w;
-        if (r.kind == '-' || r.kind == '~')
-            fill_px(cv, ax, a.y, pane_w, row_h, bg_del);
-        if (r.kind == '+' || r.kind == '~')
-            fill_px(cv, rx, a.y, pane_w, row_h, bg_add);
+        const bool mod = r.kind == '~';
+        if (mod) {  // changed pair: violet on both panes (opencode style)
+            fill_px(cv, ax, a.y, pane_w, row_h, bg_mod);
+            fill_px(cv, rx, a.y, pane_w, row_h, bg_mod);
+        } else {
+            if (r.kind == '-')
+                fill_px(cv, ax, a.y, pane_w, row_h, bg_del);
+            if (r.kind == '+')
+                fill_px(cv, rx, a.y, pane_w, row_h, bg_add);
+        }
         const std::string ons = r.old_no ? std::to_string(r.old_no) : "";
         const std::string nns = r.new_no ? std::to_string(r.new_no) : "";
         draw_token_mixed(cv, ax + gutter - 6 -
@@ -3036,12 +3048,20 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
         draw_token_mixed(cv, rx + gutter - 6 -
                                  text_w_px(f, nns.data(), (int)nns.size()),
                          a.y, row_h, nns, f, c_num, em);
-        draw_token_mixed(cv, ax + gutter, a.y, row_h,
-                         clip_line_w(f, r.old_text, pane_w - gutter - 6), f,
-                         (r.kind == '-' || r.kind == '~') ? c_del : c_ctx, em);
-        draw_token_mixed(cv, rx + gutter, a.y, row_h,
-                         clip_line_w(f, r.new_text, pane_w - gutter - 6), f,
-                         (r.kind == '+' || r.kind == '~') ? c_add : c_ctx, em);
+        // glyph column: "-" on the old pane, "+" on the new one
+        if (r.kind == '-' || mod)
+            draw_token_mixed(cv, ax + gutter, a.y, row_h, "\xE2\x88\x92", f,
+                             mod ? c_mod : c_del, em);
+        if (r.kind == '+' || mod)
+            draw_token_mixed(cv, rx + gutter, a.y, row_h, "+", f,
+                             mod ? c_mod : c_add, em);
+        const float tx0 = gutter + mark_w;
+        draw_token_mixed(cv, ax + tx0, a.y, row_h,
+                         clip_line_w(f, r.old_text, pane_w - tx0 - 6), f,
+                         mod ? c_mod : (r.kind == '-' ? c_del : c_ctx), em);
+        draw_token_mixed(cv, rx + tx0, a.y, row_h,
+                         clip_line_w(f, r.new_text, pane_w - tx0 - 6), f,
+                         mod ? c_mod : (r.kind == '+' ? c_add : c_ctx), em);
         total += row_h;
     }
     if (l.diff.value("truncated", false))

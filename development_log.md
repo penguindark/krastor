@@ -1939,3 +1939,17 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   now happen between frames (modal row, Ctrl+O, /session), not mid-frame
   through a popup overlapping the chat group.
 - Both toolchains clean; all `--*-test` PASS.
+
+
+## 2026-11-08 - diff block side-by-side aligned to the opencode style
+
+- Changed pairs (a del/add on the same logical line) are now violet on BOTH
+  panes (`c_mod` text `nk_rgb(205,170,245)`, `bg_mod` translucent violet)
+  instead of red-left + green-right: the line was modified, not removed and
+  inserted. Pure deletions keep the red pane, pure additions the green one.
+- New glyph column in side-by-side mode: `-` on the old pane, `+` on the
+  new one (context lines keep the column empty so all texts stay aligned);
+  the line text starts after `gutter + mark_w`.
+- Verified by screenshot on the gui-test sample diff (UITEST hook, temporarily
+  expanded): violet pair row, green add row, aligned numbers and glyphs.
+- Both toolchains clean; all `--*-test` PASS.
