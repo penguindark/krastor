@@ -29,6 +29,9 @@
   // llm.system_prompt, model_ref -> llm.model_ref, thinking -> the model's.
   // The base agent "krastor" is synthesized when absent; keep it here to
   // customize it.
+  // Optional "permissions": same shape as the global "tools.permissions"
+  // block, but it only tightens this agent (merged LAST: tool manifest <
+  // global config < agent - it can never widen a global deny).
   "agents": {
     "krastor": { "name": "Krastor", "color": "#78B4FF" }   // azzurro (default)
     // Example: a poet on a different model, amber accent, minimal thinking:
@@ -38,6 +41,16 @@
     //   "system_prompt": "Sei un poeta italiano. Rispondi sempre in versi.",
     //   "model_ref": "",        // "" = the global llm.model_ref
     //   "thinking": "low"      // low|medium|max
+    // }
+    // Example: a read-only helper - writes only under %TEMP% (no prompts),
+    // no command execution:
+    // "krastor-read": {
+    //   "name": "Krastor read",
+    //   "color": "#FFA500",
+    //   "permissions": {
+    //     "write": { "allow": ["%TEMP%/**"], "ask": false },
+    //     "run":   { "deny": ["**"] }
+    //   }
     // }
   },
 
@@ -108,7 +121,14 @@
   },
 
   "tools": {
-    "enabled": true                 // per-tool overrides: tools.<name>.{enabled,permissions}
+    "enabled": true,                // per-tool overrides: tools.<name>.{enabled,permissions}
+    // Global permission floor for every agent (read|write|net|run classes,
+    // each { allow: [globs], deny: [globs], ask: bool }; %TEMP% expands to
+    // the temp dir). A per-agent "permissions" can only tighten this.
+    // "permissions": {
+    //   "write": { "deny": ["**/.git/**"] },
+    //   "run":   { "deny": ["powershell.exe"] }
+    // }
   },
 
   "sessions": {
