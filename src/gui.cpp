@@ -124,6 +124,19 @@ std::string fmt_elapsed(double ms)
     return buf;
 }
 
+// API-reported cost formatting (usage.cost, USD): 4 decimals below $1,
+// 2 at/above. Callers only show it when the value is > 0 (the API
+// supports cost reporting); local servers never send it.
+std::string fmt_cost(double usd)
+{
+    char buf[32];
+    if (usd >= 1.0)
+        std::snprintf(buf, sizeof(buf), "$%.2f", usd);
+    else
+        std::snprintf(buf, sizeof(buf), "$%.4f", usd);
+    return buf;
+}
+
 // 131072 -> "131,072" (context usage footer).
 std::string fmt_thousands(long long v)
 {
@@ -537,6 +550,9 @@ struct AppState : AskHandler {
     }
     bool auto_speak = false;  // seeded from cfg.tts.auto_speak (off by default)
     int last_prompt_tokens = 0;  // context occupancy = last request's prompt size
+    // Session cost in USD, summed from the API-reported usage.cost of every
+    // call (turns + compactions). 0 = the API does not report costs.
+    double session_cost = 0.0;
     bool follow_bottom = true;   // chat auto-scrolls to newest unless the user
     float chat_bottom = 0.0f;    // last frame's max scroll offset (wheel clamp)
                                  // scrolled back up (wheel/keys clear the flag)
@@ -733,6 +749,7 @@ struct AppState : AskHandler {
                 SessionMeta sm;
                 store.meta_of(want, sm);
                 session_title = sm.title;
+                apply_restored_usage(sm);
                 if (!sm.agent.empty())
                     apply_agent(sm.agent, /*persist=*/false);
             }
@@ -1227,6 +1244,18 @@ struct AppState : AskHandler {
 
     // The single switch path: modal, quick switcher, hotkey and commands all
     // funnel here. Refused while the worker owns the conversation.
+    // Context usage + cost after a session restore: the persisted real
+    // values when meta.json has them; for pre-usage metas the context falls
+    // back to a token estimate of the loaded history (the cost of
+    // pre-cost sessions stays 0: the past spend is unknowable).
+    void apply_restored_usage(const SessionMeta& sm)
+    {
+        last_prompt_tokens = sm.prompt_tokens > 0
+                                 ? sm.prompt_tokens
+                                 : estimate_conv_tokens(conv.messages());
+        session_cost = sm.cost_usd;
+    }
+
     bool switch_to_session(const std::string& id)
     {
         if (worker != Worker::None || !store.exists(id))
@@ -1241,6 +1270,7 @@ struct AppState : AskHandler {
         store.meta_of(id, sm);
         session_id = id;
         session_title = sm.title;
+        apply_restored_usage(sm);
         cfg.sessions.last_id = id;  // restart resumes the session in use
         cfg.save();
         saved_count = conv.messages().size();
@@ -1260,6 +1290,8 @@ struct AppState : AskHandler {
         conv.reset();
         session_title = title.empty() ? "New session" : title;
         session_id = store.create(session_title, eff.model_ref, agent_id);
+        last_prompt_tokens = 0;
+        session_cost = 0.0;
         cfg.sessions.last_id = session_id;
         cfg.save();
         saved_count = conv.messages().size();
@@ -1755,7 +1787,13 @@ struct AppState : AskHandler {
                               reply.completion_tokens / secs);
                 out.back().meta = reply.model + " - " +
                                   fmt_elapsed(reply.elapsed_ms) + " - " + rate;
+                // Per-round cost next to the response time (turn total: the
+                // tool loop already summed every round). Hidden when the
+                // API does not report costs (local servers, plain OpenAI).
+                if (reply.cost_usd > 0.0)
+                    out.back().meta += " - " + fmt_cost(reply.cost_usd);
                 last_prompt_tokens = reply.prompt_tokens;
+                session_cost += reply.cost_usd;
                 for (auto& l : out)
                     lines.push_back(std::move(l));
                 if (auto_speak)
@@ -1767,6 +1805,11 @@ struct AppState : AskHandler {
             // turn on error): persist it to the session folder.
             autosave_turn();
             if (reply.ok) {
+                // Persist context usage + session cost next to the log so a
+                // restart (or session switch) restores the meter instantly.
+                if (cfg.sessions.autosave && !session_id.empty())
+                    store.set_usage(session_id, last_prompt_tokens,
+                                    session_cost);
                 maybe_auto_compact();
             } else if (!overflow_retried && is_context_overflow(reply.error) &&
                        conv.turn_count() > 1) {
@@ -1794,6 +1837,16 @@ struct AppState : AskHandler {
                                                 conv.messages_since(1));
                 saved_count = conv.messages().size();
                 rebuild_lines_from_conv();
+                // The compacted context is smaller: the meter drops to the
+                // compactor's estimate right away (the next real reply
+                // overwrites it with the API's exact value), the summary
+                // calls' own cost joins the session total, and both go to
+                // disk so a restart sees the reduced usage, not the old one.
+                session_cost += cr.cost_usd;
+                last_prompt_tokens = cr.est_tokens_after;
+                if (cfg.sessions.autosave && !session_id.empty())
+                    store.set_usage(session_id, last_prompt_tokens,
+                                    session_cost);
                 lines.push_back({"sys", "compacted " +
                                 std::to_string(cr.messages_before) + " -> " +
                                 std::to_string(cr.messages_after) +
@@ -4821,6 +4874,10 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 status_buf += "ctx: " + fmt_thousands(app.last_prompt_tokens) +
                               " / " + fmt_thousands(total) +
                               " (" + std::to_string(pct) + "%)";
+                // Session cost next to the context usage; only when the API
+                // reports costs (usage.cost), so local setups stay clean.
+                if (app.session_cost > 0.0)
+                    status_buf += "  |  " + fmt_cost(app.session_cost);
             }
             const bool amber =
                 100.0 * app.last_prompt_tokens > 85.0 * app.eff.context_size;
@@ -5069,6 +5126,10 @@ int run_gui_stack_test()
         off.push("anything");
         check(off.size() == 0 && !off.can_prev(), "max 0 disables the history");
     }
+
+    // ---- cost formatting (usage.cost display) ----
+    check(fmt_cost(0.0042) == "$0.0042" && fmt_cost(1.5) == "$1.50",
+          "fmt_cost: 4 decimals below $1, 2 at/above");
 
     struct nk_context ctx;
     struct nk_user_font font;

@@ -223,6 +223,14 @@ int compact_buffer_tokens(const std::string& buf, int context_size)
     return (std::max)(v, floor_v);
 }
 
+int estimate_conv_tokens(const std::vector<Message>& msgs)
+{
+    int t = 0;
+    for (const auto& m : msgs)
+        t += est_tokens(m);
+    return t;
+}
+
 CompactResult compact_conversation(
     const LlmClient& client, Conversation& conv, int context_size,
     int reserve_out, const std::string& focus, CancelToken* cancel,
@@ -330,6 +338,7 @@ CompactResult compact_conversation(
         ask.add_user(user_prompt);
         const LlmReply r = client.complete(ask, cancel, "");
         ++res.llm_calls;
+        res.cost_usd += r.cost_usd;  // summarization bills like any call
         if (!r.ok) {
             res.error = r.error;
             return res;

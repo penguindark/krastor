@@ -7,11 +7,36 @@
 
 #include <string>
 
+#include <nlohmann/json.hpp>
+
 #include "config.h"
 #include "conversation.h"
 #include "http_client.h"
 
 namespace krastor {
+
+// Vendor extension of the OpenAI usage block: OpenRouter (and a few
+// gateways) add "cost" (USD credits) to the response's usage object;
+// plain OpenAI and local servers (llama.cpp, Ollama, LM Studio) never
+// send it. Tolerant read: number or numeric string; absent, invalid or
+// negative -> 0 (= the API does not report costs, UI stays hidden).
+inline double parse_usage_cost(const nlohmann::json& usage)
+{
+    if (!usage.is_object() || !usage.contains("cost"))
+        return 0.0;
+    const auto& c = usage.at("cost");
+    double v = 0.0;
+    if (c.is_number())
+        v = c.get<double>();
+    else if (c.is_string()) {
+        try {
+            v = std::stod(c.get<std::string>());
+        } catch (const std::exception&) {
+            v = 0.0;
+        }
+    }
+    return v > 0.0 ? v : 0.0;
+}
 
 struct LlmReply {
     bool ok = false;
@@ -29,6 +54,9 @@ struct LlmReply {
     int prompt_tokens = 0;
     int completion_tokens = 0;
     bool tokens_estimated = false;
+    // Cost of this call in USD as reported by the server (usage.cost,
+    // see parse_usage_cost). 0 = the API does not report costs.
+    double cost_usd = 0.0;
 };
 
 class LlmClient {

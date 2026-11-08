@@ -89,6 +89,16 @@ LlmReply agent_complete(const LlmClient& client, Conversation& conv,
 {
     const std::string tools = registry.empty() ? std::string() : registry.tools_json();
     LlmReply reply = client.complete(conv, cancel, tools);
+    // The turn's cost is the sum of all rounds (each complete() reports its
+    // own usage.cost); prompt_tokens stay the final round's = the current
+    // context occupancy.
+    double cost_prev = reply.cost_usd;
+    auto next_round = [&](const std::string& t) {
+        LlmReply r = client.complete(conv, cancel, t);
+        r.cost_usd += cost_prev;
+        cost_prev = r.cost_usd;
+        return r;
+    };
 
     int rounds = 0;
     while (reply.ok && !reply.tool_calls.empty() && !tools.empty()) {
@@ -102,7 +112,7 @@ LlmReply agent_complete(const LlmClient& client, Conversation& conv,
             conv.add_assistant(reply.content, reply.tool_calls);
             for (const auto& tc : reply.tool_calls)
                 conv.add_tool(tc.id, "ERROR: tool loop limit reached");
-            reply = client.complete(conv, cancel, std::string());
+            reply = next_round(std::string());
             break;
         }
 
@@ -128,7 +138,7 @@ LlmReply agent_complete(const LlmClient& client, Conversation& conv,
                            tr.ok ? cap_text(strip_diff_for_model(tr.result))
                                  : "ERROR: " + cap_text(tr.error));
         }
-        reply = client.complete(conv, cancel, tools);
+        reply = next_round(tools);
     }
     return reply;
 }

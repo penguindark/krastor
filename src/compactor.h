@@ -25,6 +25,7 @@ struct CompactResult {
     int est_tokens_before = 0;    // rough estimate (~4 chars/token)
     int est_tokens_after = 0;
     int llm_calls = 0;
+    double cost_usd = 0.0;        // summarization calls' cost (0 = no API cost)
 };
 
 // Compacts `conv` in place: history becomes
@@ -44,6 +45,11 @@ CompactResult compact_conversation(const LlmClient& client, Conversation& conv,
 // `buf` is "NN%" of the window or a raw token count (default "15%"),
 // floored at min(16k, window/2) - opencode v2's reserve rule.
 int compact_buffer_tokens(const std::string& buf, int context_size);
+
+// Rough token estimate for a whole conversation (same ~4 chars/token
+// heuristic as est_tokens): the session-restore fallback when meta.json
+// predates the prompt_tokens field.
+int estimate_conv_tokens(const std::vector<Message>& msgs);
 
 // Exposed for --session-test (not for production use):
 std::string compactor_test_prompt(bool update);

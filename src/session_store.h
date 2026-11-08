@@ -26,6 +26,8 @@ struct SessionMeta {
     std::string agent;      // active agent id (restored when the session opens)
     int messages = 0;       // message count in log.jsonl
     int compactions = 0;    // how many times /compact ran on this session
+    int prompt_tokens = 0;  // last request's prompt size (context occupancy)
+    double cost_usd = 0.0;  // session cost reported by the API (0 = unsupported)
 };
 
 // Prefix of the summary message a compaction writes into the history; used
@@ -75,6 +77,11 @@ public:
     bool rename(const std::string& id, const std::string& title);
     // Records the agent active in this session (restored on open).
     bool set_agent(const std::string& id, const std::string& agent);
+    // Persist context usage (last request's prompt tokens) and the session
+    // cost reported by the API (0 when the server does not report costs).
+    // Written after each completed turn and after /compact; absent in
+    // pre-usage metas: read back as 0.
+    bool set_usage(const std::string& id, int prompt_tokens, double cost_usd);
     bool remove(const std::string& id);
     std::vector<SessionMeta> list() const;  // newest `updated` first
 

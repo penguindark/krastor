@@ -2132,3 +2132,37 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   exit, leave, max 0); config-test +1 (history_size parse) and the
   save round-trip now covers it too.
 - Both toolchains clean; all --*-test PASS.
+
+
+## 2026-11-08 - feat: context usage + API cost survive restarts, cost per round
+
+- Problem: after a restart the footer showed "ctx: 0 / N (0%)" because
+  last_prompt_tokens only comes from the live API reply; the auto-compact
+  trigger (needs > 0) was likewise disarmed until the first new answer.
+  No cost tracking existed at all.
+- SessionStore: SessionMeta gains prompt_tokens + cost_usd (absent in old
+  metas = 0, tolerated like "agent"); set_usage(id, tokens, cost) follows
+  the set_agent pattern (no rewrite when unchanged). Written after every
+  completed turn and after /compact.
+- llm_client: parse_usage_cost() reads the vendor-extension usage.cost
+  (OpenRouter-style: number or numeric string; absent/invalid/negative
+  = 0) into LlmReply::cost_usd. Plain OpenAI and local servers never send
+  it -> all cost UI stays hidden.
+- tool_loop: the turn's cost_usd accumulates across tool-loop rounds
+  (next_round carries the running total); prompt_tokens stay the final
+  round's = context occupancy.
+- compactor: CompactResult::cost_usd sums the summarization calls' cost;
+  estimate_conv_tokens(msgs) exposes the ~4 chars/token estimate as the
+  restore fallback for pre-usage metas.
+- gui: per-round stats line gains " - $0.0042" when the API reports cost
+  (next to the response time); the footer shows the session total next to
+  the ctx meter ("ctx: 41,208 / 262,144 (15%)  |  $0.0132", amber logic
+  untouched). /compact completion now also drops the meter to
+  est_tokens_after immediately (was stale until the next reply) and
+  persists it. apply_restored_usage() restores tokens+cost on startup and
+  session switch (estimate fallback when meta predates the fields);
+  new_session resets both. fmt_cost: 4 decimals below $1, 2 above.
+- Tests: session-test +5 (set_usage round-trip, old-meta defaults,
+  usage.cost parse x2, estimate_conv_tokens), gui-test +1 (fmt_cost).
+- Both toolchains clean; all --*-test PASS. Docs synced (sessions_plan.md
+  meta schema, development.md module table).

@@ -49,9 +49,17 @@ sessions/                     # exe_dir()/../sessions (sibling of bin/, same
   "updated": "2026-11-07T18:02:11Z", // last appended message
   "model_ref": "halogen/Qwen3.8-...",// model in use at creation (informational)
   "messages": 24,                    // message count in log.jsonl
-  "compactions": 1                   // how many times /compact ran
+  "compactions": 1,                  // how many times /compact ran
+  "prompt_tokens": 41208,            // last request's prompt size (context meter)
+  "cost_usd": 0.0132                 // session cost reported by the API (0 = unsupported)
 }
 ```
+
+`prompt_tokens`/`cost_usd` are written by `set_usage()` after every completed
+turn and after `/compact` (there `prompt_tokens` holds the compactor's
+estimate until the next real reply overwrites it). Absent in older metas:
+read back as 0 — the GUI then estimates the context from the restored
+history (`estimate_conv_tokens`) so the meter is never empty after a restart.
 
 ### 1.2 `log.jsonl` — one message per line
 

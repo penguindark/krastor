@@ -174,6 +174,7 @@ LlmReply LlmClient::complete(const Conversation& conversation,
         if (json.contains("usage") && json["usage"].is_object()) {
             reply.prompt_tokens = json["usage"].value("prompt_tokens", 0);
             reply.completion_tokens = json["usage"].value("completion_tokens", 0);
+            reply.cost_usd = parse_usage_cost(json["usage"]);
         }
         if (reply.prompt_tokens <= 0 || reply.completion_tokens <= 0) {
             // Rough fallback (~4 chars per token) so the stats line still works

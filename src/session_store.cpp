@@ -171,6 +171,7 @@ json meta_to_json(const SessionMeta& m)
         {"created", m.created}, {"updated", m.updated},
         {"model_ref", m.model_ref}, {"messages", m.messages},
         {"compactions", m.compactions},
+        {"prompt_tokens", m.prompt_tokens}, {"cost_usd", m.cost_usd},
     };
     if (!m.agent.empty())
         j["agent"] = m.agent;  // absent in pre-agent metas: tolerated on read
@@ -189,6 +190,9 @@ bool meta_from_json(const json& j, SessionMeta& out)
     out.agent = j.value("agent", "");
     out.messages = j.value("messages", 0);
     out.compactions = j.value("compactions", 0);
+    // Absent in pre-usage metas: tolerated on read (same rule as "agent").
+    out.prompt_tokens = j.value("prompt_tokens", 0);
+    out.cost_usd = j.value("cost_usd", 0.0);
     return !out.id.empty();
 }
 
@@ -408,6 +412,19 @@ bool SessionStore::set_agent(const std::string& id, const std::string& agent)
     if (m.agent == agent)
         return true;  // no rewrite: keeps `updated` and the disk quiet
     m.agent = agent;
+    return write_meta(m);
+}
+
+bool SessionStore::set_usage(const std::string& id, int prompt_tokens,
+                             double cost_usd)
+{
+    SessionMeta m;
+    if (!read_meta(id, m))
+        return false;
+    if (m.prompt_tokens == prompt_tokens && m.cost_usd == cost_usd)
+        return true;  // no rewrite: keeps `updated` and the disk quiet
+    m.prompt_tokens = prompt_tokens;
+    m.cost_usd = cost_usd;
     return write_meta(m);
 }
 

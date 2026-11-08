@@ -854,6 +854,21 @@ int run_session_test()
                                    krastor::is_summary_message(back4.messages()[1]));
     check("meta compactions", m2.compactions == 1 && m2.messages == 2);
 
+    // --- usage/cost persistence (context meter after a restart) ----------------
+    check("set_usage stores tokens + cost", store.set_usage(id, 12345, 0.0042));
+    krastor::SessionMeta mu;
+    check("usage round-trips through meta",
+          store.meta_of(id, mu) && mu.prompt_tokens == 12345 &&
+              mu.cost_usd > 0.0041 && mu.cost_usd < 0.0043);
+    {   // pre-usage meta (no prompt_tokens/cost_usd keys): read back as 0
+        std::ofstream f(dir / id / "meta.json", std::ios::trunc);
+        f << R"({"id":"x","title":"t","created":"c","updated":"u"})";
+    }
+    krastor::SessionMeta mold;
+    check("old meta: usage fields default to 0",
+          store.meta_of(id, mold) && mold.prompt_tokens == 0 &&
+              mold.cost_usd == 0.0);
+
     // --- delete ----------------------------------------------------------------------
     check("delete", store.remove(id));
     check("deleted gone", !store.exists(id));
@@ -915,6 +930,28 @@ int run_session_test()
               krastor::compact_buffer_tokens("15%", 20000) == 10000);
         check("compact buffer: garbage falls back to 15%",
               krastor::compact_buffer_tokens("abc", 200000) == 30000);
+        // --- API cost parsing + restore estimate (context/cost meter) ---
+        const auto uc = nlohmann::json::parse(
+            R"({"prompt_tokens":10,"cost":0.0013})");
+        check("usage.cost parses (OpenRouter-style number)",
+              krastor::parse_usage_cost(uc) > 0.0012 &&
+                  krastor::parse_usage_cost(uc) < 0.0014);
+        check("usage.cost tolerates string / absent / negative / junk",
+              krastor::parse_usage_cost(
+                  nlohmann::json::parse(R"({"cost":"0.5"})")) == 0.5 &&
+                  krastor::parse_usage_cost(nlohmann::json::parse("{}")) ==
+                      0.0 &&
+                  krastor::parse_usage_cost(
+                      nlohmann::json::parse(R"({"cost":-1})")) == 0.0 &&
+                  krastor::parse_usage_cost(
+                      nlohmann::json::parse(R"({"cost":"junk"})")) == 0.0);
+        krastor::Message em;
+        em.role = "user";
+        em.content = std::string(4000, 'x');
+        check("estimate_conv_tokens: ~4 chars/token + per-msg overhead",
+              krastor::estimate_conv_tokens({}) == 0 &&
+                  krastor::estimate_conv_tokens({em}) >= 1000 &&
+                  krastor::estimate_conv_tokens({em}) < 1200);
     }
 
     std::cout << "session-test: " << (failed ? std::to_string(failed) : "0")
