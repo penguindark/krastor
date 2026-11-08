@@ -2317,15 +2317,19 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     if (!s.open)
         return false;
 
-    const int mw = 520, mh = 680;
+    // 30% wider than the original 520 (long prompts + property rows needed
+    // the room); height carries the +108 px the 8-line system-prompt box
+    // adds, so the Save row stays reachable without scrolling.
+    const int mw = 676, mh = 780;
     // The modal needs its own opaque background: the main window's
     // fixed_background is fully transparent so the shader shows through.
     nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
                              nk_style_item_color(nk_rgba(16, 18, 24, 235)));
-    // Horizontal breathing room from the window edges. The padding is cached
-    // by nk_begin into the layout clip, so it MUST be pushed before opening
-    // the window (spacing instead is read live per row, see below).
-    nk_style_push_vec2(ctx, &ctx->style.window.padding, nk_vec2(14.0f, 6.0f));
+    // Horizontal breathing room from the window edges (generous: fields sat
+    // too close to the border at 14). The padding is cached by nk_begin into
+    // the layout clip, so it MUST be pushed before opening the window
+    // (spacing instead is read live per row, see below).
+    nk_style_push_vec2(ctx, &ctx->style.window.padding, nk_vec2(24.0f, 6.0f));
     // NOTE: the title-bar X button in Nuklear 4.13.3 only sets NK_WINDOW_HIDDEN
     // (never NK_WINDOW_CLOSED), so nk_window_is_closed() can't detect it. When
     // the window is hidden, nk_begin() returns 0 with win->layout == 0 and any
@@ -2365,7 +2369,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         if (nk_combo_begin_label(ctx,
                 cur ? cur->display.c_str()
                     : (s.model_ref.empty() ? "(none selected)" : s.model_ref.c_str()),
-                nk_vec2(480, 240))) {
+                nk_vec2(620, 240))) {
             nk_layout_row_dynamic(ctx, 24, 1);
             for (const auto& m : models.entries())
                 if (nk_combo_item_label(ctx,
@@ -2388,7 +2392,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     nk_label(ctx, "TTS Voice", NK_LEFT);
     nk_layout_row_dynamic(ctx, 26, 1);
     if (nk_combo_begin_label(ctx, s.voice.empty() ? "(none)" : s.voice.c_str(),
-                             nk_vec2(480, 200))) {
+                             nk_vec2(620, 200))) {
         nk_layout_row_dynamic(ctx, 24, 1);
         for (const auto& v : voices.voices())
             if (nk_combo_item_label(ctx, v.id.c_str(), NK_TEXT_LEFT))
@@ -2400,7 +2404,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     nk_layout_row_dynamic(ctx, 18, 1);
     nk_label(ctx, "Background effect", NK_LEFT);
     nk_layout_row_dynamic(ctx, 26, 1);
-    if (nk_combo_begin_label(ctx, s.effect.c_str(), nk_vec2(480, 240))) {
+    if (nk_combo_begin_label(ctx, s.effect.c_str(), nk_vec2(620, 240))) {
         nk_layout_row_dynamic(ctx, 24, 1);
         for (const auto& name : s.effect_names)
             if (nk_combo_item_label(ctx, name.c_str(), NK_TEXT_LEFT) && name != s.effect) {
@@ -2508,8 +2512,14 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
 
     nk_layout_row_dynamic(ctx, 18, 1);
     nk_label(ctx, "System prompt", NK_LEFT);
-    nk_layout_row_dynamic(ctx, 52, 1);
-    nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, s.system_prompt,
+    // Multi-line box showing 8 text lines: the prompt is long prose and a
+    // single-line field made editing painful. NK_EDIT_BOX wraps and scrolls;
+    // newlines survive the config round-trip (JSON escapes them).
+    const float sfont_h = ctx->style.font && ctx->style.font->height > 0.0f
+                              ? ctx->style.font->height
+                              : 18.0f;
+    nk_layout_row_dynamic(ctx, 8.0f * sfont_h + 16.0f, 1);
+    nk_edit_string_zero_terminated(ctx, NK_EDIT_BOX, s.system_prompt,
                                    sizeof(s.system_prompt) - 1, nk_filter_default);
 
     if (!s.status.empty()) {

@@ -2166,3 +2166,59 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   usage.cost parse x2, estimate_conv_tokens), gui-test +1 (fmt_cost).
 - Both toolchains clean; all --*-test PASS. Docs synced (sessions_plan.md
   meta schema, development.md module table).
+
+
+## 2026-11-09 - ui: Settings modal - 8-line system prompt box, +30% width, side padding
+
+- The System prompt was a single-line NK_EDIT_FIELD: long prompts were
+  painful to read/edit. Now an NK_EDIT_BOX sized to 8 visible text lines
+  (8 x font height + padding, follows the Ctrl+/- font zoom); newlines
+  survive the config round-trip (JSON escapes them).
+- Modal widened 520 -> 676 (+30%) and 680 -> 780 tall (the +108 px the
+  prompt box adds, so the Save row stays reachable without scrolling);
+  the three combo popups (model/voice/effect) widened 480 -> 620 to match.
+- window.padding.x 14 -> 24: visible breathing room between the fields
+  and the modal borders.
+- Both toolchains clean; all --*-test PASS.
+
+
+## 2026-11-09 - feat: soft-wrap in multiline edit boxes (Nuklear patch) + Settings modal polish
+
+- Settings modal: System prompt is now an 8-line NK_EDIT_BOX (was a
+  single-line field); modal 520x680 -> 676x780 (+30% width, height
+  carries the taller box); window.padding.x 14 -> 24 for visible side
+  breathing room; combo popups 480 -> 620 wide.
+- Root problem: Nuklear edit boxes never soft-wrap - long lines were
+  clipped at the box edge (looked like "width sized to the window").
+- Fix: local patch to vendored libs/nuklear/nuklear.h (first change
+  since Phase 5): nk_text_edit gains wrap_width (set by nk_do_edit to
+  the visible text area for NK_EDIT_MULTILINE, 0 elsewhere); new
+  nk_textedit_wrap_scan() does greedy word-wrap (last space before the
+  limit, mid-word break for overlong words, trailing '\n' belongs to
+  the row that ends the logical line - same convention as
+  nk_text_calculate_text_bounds). nk_textedit_layout_row overrides
+  num_chars/x1 with the scan, so find_charpos/locate_coord/arrow keys
+  treat visual rows as rows (stb_textedit's mechanism);
+  nk_edit_draw_text draws one visual row per scan step (signature +
+  wrap_width param, 5 call sites updated). Chat input (also
+  NK_EDIT_BOX) now wraps drafts too.
+- Cut/copy/paste unaffected: they work on the raw buffer (glyph
+  indices), independent of wrapping.
+- Selection drawing rewrite: the stock code drew up to 3 independent
+  text chunks around the selection, but with soft-wrap each chunk
+  re-wrapped from its own start and the rows visibly drifted (text
+  jumped, phantom gaps). nk_edit_draw_text now draws the whole text in
+  ONE pass and cuts the selection into each visual row as up to 3
+  segments (glyph-index bounds + nk_textedit_row_glyph_pos), so rows
+  never move when a selection appears. The cursor/selection calc loop
+  lost its now-dead selection-offset code.
+- Follow-up fix: nk_do_edit's active branch has a second, independent
+  newline-only loop computing cursor_pos, selection offsets and
+  text_size (the scrollbar range) - with soft-wrap it produced chaotic
+  scrolling and broken mouse selection. Rewritten to iterate visual
+  rows via nk_textedit_wrap_scan + a new nk_textedit_row_glyph_pos
+  helper (pixel x / byte offset of a glyph inside a row); a trailing
+  '\n' now opens one extra empty row like the stock total_lines count,
+  and horizontal scroll-follow is disabled when wrap_width > 0 (a
+  caret at a row end used to jitter the view).
+- Both toolchains clean; all --*-test PASS.

@@ -13,7 +13,7 @@ must compile with MinGW GCC and MSVC on Windows and GCC on Linux).
 | nlohmann/json 3.12 | MIT | 1 header | `nlohmann/json.hpp` — config + LLM JSON |
 | GLFW 3.4 | zlib | full source (built via `add_subdirectory`) | `glfw/` — window + GL context |
 | glad (OpenGL 3.3 core) | MIT | generated 2 files | `glad/` (`include/glad/glad.h`, `src/glad.c`) |
-| Nuklear 4.13 | zlib | 1 header + glfw_gl3 backend | `nuklear/nuklear.h`, `nuklear/nuklear_glfw_gl3.h` |
+| Nuklear 4.13 | zlib | 1 header + glfw_gl3 backend | `nuklear/nuklear.h`, `nuklear/nuklear_glfw_gl3.h` — **locally patched**: multiline edit boxes soft-wrap text (`nk_text_edit::wrap_width` + `nk_textedit_wrap_scan`, greedy word-wrap shared by `nk_textedit_layout_row`, `nk_edit_draw_text` and the cursor/selection/scrollbar calc loop in `nk_do_edit`, so caret, mouse selection and scrolling follow wrapped rows); stock behavior kept when `wrap_width == 0` |
 | miniaudio 0.11.22 | public domain (unlicense) | 1 header + `miniaudio_impl.c` | `miniaudio.h` — speaker playback + mic capture |
 | stb_image_write 1.16 | public domain / MIT | 1 header | `stb_image_write.h` — PNG encode (clipboard/dropped images → base64 data URLs) |
 | stb_image 2.30 | public domain / MIT | 1 header | `stb_image.h` - image decode (drag & drop file attachments) |

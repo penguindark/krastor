@@ -4615,6 +4615,8 @@ struct nk_text_edit {
     unsigned char active;
     unsigned char padding1;
     float preferred_x;
+    float wrap_width; /* >0: multiline boxes soft-wrap text at this pixel
+                       * width (Krastor patch; 0 = stock horizontal scroll) */
     struct nk_text_undo_state undo;
 };
 
@@ -6421,7 +6423,7 @@ NK_LIB nk_bool nk_do_selectable(nk_flags *state, struct nk_command_buffer *out, 
 NK_LIB nk_bool nk_do_selectable_image(nk_flags *state, struct nk_command_buffer *out, struct nk_rect bounds, const char *str, int len, nk_flags align, nk_bool *value, const struct nk_image *img, const struct nk_style_selectable *style, const struct nk_input *in, const struct nk_user_font *font);
 
 /* edit */
-NK_LIB void nk_edit_draw_text(struct nk_command_buffer *out, const struct nk_style_edit *style, float pos_x, float pos_y, float x_offset, const char *text, int byte_len, float row_height, const struct nk_user_font *font, struct nk_color background, struct nk_color foreground, nk_bool is_selected);
+NK_LIB void nk_edit_draw_text(struct nk_command_buffer *out, const struct nk_style_edit *style, float pos_x, float pos_y, float x_offset, const char *text, int byte_len, float row_height, const struct nk_user_font *font, struct nk_color background, struct nk_color foreground, float wrap_width, int sel_begin, int sel_end, struct nk_color sel_background, struct nk_color sel_text);
 NK_LIB nk_flags nk_do_edit(nk_flags *state, struct nk_command_buffer *out, struct nk_rect bounds, nk_flags flags, nk_plugin_filter filter, struct nk_text_edit *edit, const struct nk_style_edit *style, struct nk_input *in, const struct nk_user_font *font);
 
 /* color-picker */
@@ -27407,6 +27409,80 @@ nk_textedit_get_width(const struct nk_text_edit *edit, int line_start, int char_
     const char *str = nk_str_at_const(&edit->string, line_start + char_id, &unicode, &len);
     return font->width(font->userdata, font->height, str, len);
 }
+/* Krastor patch: soft-wrap scan. Returns the first visual row of the logical
+ * line starting at `text` (up to `end`): greedy word-wrap at the last space
+ * before `wrap_width`, mid-word break for over-long words. A trailing '\n'
+ * belongs to the row that ends the logical line (same convention as
+ * nk_text_calculate_text_bounds with NK_STOP_ON_NEW_LINE), so caret,
+ * selection and drawing all agree on the row boundaries. Pass a huge
+ * wrap_width for the stock newline-only behavior. */
+NK_INTERN void
+nk_textedit_wrap_scan(const char *text, const char *end, float wrap_width,
+    const struct nk_user_font *font, int *glyphs, int *glyph_bytes, float *width)
+{
+    int n = 0, bytes = 0;
+    int sp_n = 0, sp_bytes = 0;          /* last space break candidate */
+    float w = 0.0f, sp_w = 0.0f;
+    while (text + bytes < end) {
+        nk_rune uc;
+        float gw;
+        const int len = nk_utf_decode(text + bytes, &uc,
+                                      (int)(end - (text + bytes)));
+        if (len <= 0)
+            break;                       /* invalid UTF-8: stop the row */
+        if (uc == '\n') {                /* newline ends the logical line */
+            *glyphs = n + 1;
+            *glyph_bytes = bytes + len;
+            *width = w;
+            return;
+        }
+        gw = font->width(font->userdata, font->height, text + bytes, len);
+        if (n > 0 && w + gw > wrap_width) {
+            if (sp_n > 0) {              /* break after the last space */
+                *glyphs = sp_n;
+                *glyph_bytes = sp_bytes;
+                *width = sp_w;
+            } else {                     /* single word longer than the row */
+                *glyphs = n;
+                *glyph_bytes = bytes;
+                *width = w;
+            }
+            return;
+        }
+        if (uc == ' ') {
+            sp_n = n + 1;
+            sp_bytes = bytes + len;
+            sp_w = w + gw;
+        }
+        w += gw;
+        bytes += len;
+        n++;
+    }
+    *glyphs = n;
+    *glyph_bytes = bytes;
+    *width = w;
+}
+/* Krastor patch: pixel x and byte offset of the glyph at index
+ * target_glyphs inside a visual row (row_bytes excludes the trailing
+ * newline). A target past the drawn glyphs returns the row end, so the
+ * caret lands on the newline (end-of-line cursor branch). */
+NK_INTERN void
+nk_textedit_row_glyph_pos(const char *row, int row_bytes, int target_glyphs,
+    const struct nk_user_font *font, float *x, int *byte_off)
+{
+    int consumed = 0, g = 0;
+    float xx = 0.0f;
+    while (consumed < row_bytes && g < target_glyphs) {
+        nk_rune uc;
+        const int len = nk_utf_decode(row + consumed, &uc, row_bytes - consumed);
+        if (len <= 0) break;
+        xx += font->width(font->userdata, font->height, row + consumed, len);
+        consumed += len;
+        g++;
+    }
+    *x = xx;
+    *byte_off = consumed;
+}
 NK_INTERN void
 nk_textedit_layout_row(struct nk_text_edit_row *r, struct nk_text_edit *edit,
     int line_start_id, float row_height, const struct nk_user_font *font)
@@ -27427,6 +27503,19 @@ nk_textedit_layout_row(struct nk_text_edit_row *r, struct nk_text_edit *edit,
     r->ymin = 0.0f;
     r->ymax = size.y;
     r->num_chars = glyphs;
+    /* Krastor patch: soft-wrap. Overriding num_chars/x1 makes find_charpos,
+     * locate_coord and the arrow keys treat visual rows as rows (the same
+     * mechanism stb_textedit uses), so the caret follows the wrapped text. */
+    if (edit->wrap_width > 0.0f) {
+        int w_glyphs = 0, w_bytes = 0;
+        float w_width = 0.0f;
+        nk_textedit_wrap_scan(text, end, edit->wrap_width, font,
+                              &w_glyphs, &w_bytes, &w_width);
+        if (w_glyphs > 0) {
+            r->x1 = w_width;
+            r->num_chars = w_glyphs;
+        }
+    }
 }
 NK_INTERN int
 nk_textedit_locate_coord(struct nk_text_edit *edit, float x, float y,
@@ -28348,6 +28437,7 @@ nk_textedit_clear_state(struct nk_text_edit *state, enum nk_text_edit_type type,
    state->cursor = 0;
    state->has_preferred_x = 0;
    state->preferred_x = 0;
+   state->wrap_width = 0;  /* Krastor patch: soft-wrap off by default */
    state->cursor_at_end_of_line = 0;
    state->initialized = 1;
    state->single_line = (unsigned char)(type == NK_TEXT_EDIT_SINGLE_LINE);
@@ -28477,19 +28567,17 @@ nk_edit_draw_text(struct nk_command_buffer *out,
     const struct nk_style_edit *style, float pos_x, float pos_y,
     float x_offset, const char *text, int byte_len, float row_height,
     const struct nk_user_font *font, struct nk_color background,
-    struct nk_color foreground, nk_bool is_selected)
+    struct nk_color foreground, float wrap_width,
+    int sel_begin, int sel_end,
+    struct nk_color sel_background, struct nk_color sel_text)
 {
     NK_ASSERT(out);
     NK_ASSERT(font);
     NK_ASSERT(style);
     if (!text || !byte_len || !out || !style) return;
 
-    {int glyph_len = 0;
-    nk_rune unicode = 0;
-    int text_len = 0;
-    float line_width = 0;
-    float glyph_width;
-    const char *line = text;
+    {int text_len = 0;     /* byte offset of the current visual row */
+    int glyphs = 0;        /* glyph index where the current row starts */
     float line_offset = 0;
     int line_count = 0;
 
@@ -28500,59 +28588,94 @@ nk_edit_draw_text(struct nk_command_buffer *out,
 
     foreground = nk_rgb_factor(foreground, style->color_factor);
     background = nk_rgb_factor(background, style->color_factor);
+    sel_background = nk_rgb_factor(sel_background, style->color_factor);
+    sel_text = nk_rgb_factor(sel_text, style->color_factor);
 
-    glyph_len = nk_utf_decode(text+text_len, &unicode, byte_len-text_len);
-    if (!glyph_len) return;
-    while ((text_len < byte_len) && glyph_len)
+    /* Krastor patch: draw the whole text in ONE pass, one visual row at a
+     * time through the same nk_textedit_wrap_scan the layout uses, so
+     * wrapped text, caret and selection share identical row boundaries.
+     * The selection (glyph indices sel_begin..sel_end) is cut into each
+     * row as up to 3 segments; the stock code drew up to 3 independent
+     * chunks, but with soft-wrap every chunk re-wrapped from its own
+     * start and the rows drifted apart. wrap_width <= 0 keeps the stock
+     * newline-only behavior (huge limit: scan stops at '\n'). */
+    while (text_len < byte_len)
     {
-        if (unicode == '\n') {
-            /* new line separator so draw previous line */
-            struct nk_rect label;
-            label.y = pos_y + line_offset;
-            label.h = row_height;
-            label.w = line_width;
-            label.x = pos_x;
-            if (!line_count)
-                label.x += x_offset;
-
-            if (is_selected) /* selection needs to draw different background color */
-                nk_fill_rect(out, label, 0, background);
-            nk_widget_text(out, label, line, (int)((text + text_len) - line),
-                &txt, NK_TEXT_CENTERED, font);
-
-            text_len++;
-            line_count++;
-            line_width = 0;
-            line = text + text_len;
-            line_offset += row_height;
-            glyph_len = nk_utf_decode(text + text_len, &unicode, (int)(byte_len-text_len));
-            continue;
+        int row_glyphs = 0, row_bytes = 0;
+        float row_w = 0.0f;
+        nk_bool ends_nl;
+        nk_textedit_wrap_scan(text + text_len, text + byte_len,
+            wrap_width > 0.0f ? wrap_width : 1e30f, font,
+            &row_glyphs, &row_bytes, &row_w);
+        if (row_bytes == 0) {
+            if (text[text_len] == '\n') {  /* empty line: advance one row */
+                text_len++;
+                line_offset += row_height;
+                line_count++;
+                continue;
+            }
+            break;  /* invalid UTF-8: stop like the stock scanner */
         }
-        if (unicode == '\r') {
-            text_len++;
-            glyph_len = nk_utf_decode(text + text_len, &unicode, byte_len-text_len);
-            continue;
+        /* the scan includes a trailing '\n' in the row; never draw or
+         * highlight it, and keep the stock vertical alignment per row kind */
+        ends_nl = (text[text_len + row_bytes - 1] == '\n') ? nk_true : nk_false;
+        {
+            const int draw_glyphs = ends_nl ? row_glyphs - 1 : row_glyphs;
+            const nk_flags align = ends_nl ? NK_TEXT_CENTERED : NK_TEXT_LEFT;
+            const float row_x = pos_x + (line_count ? 0.0f : x_offset);
+            int s0 = 0, s1 = 0;
+            nk_bool has_sel = (sel_begin != sel_end) ? nk_true : nk_false;
+            if (has_sel) {
+                s0 = NK_MAX(sel_begin, glyphs) - glyphs;
+                s1 = NK_MIN(sel_end, glyphs + row_glyphs) - glyphs;
+                if (s1 > draw_glyphs) s1 = draw_glyphs;
+                if (s0 < 0) s0 = 0;
+                if (s0 >= s1) has_sel = nk_false;
+            }
+            if (draw_glyphs > 0 && row_w > 0.0f)
+            {
+                /* up to 3 segments: plain, selected, plain */
+                const int seg_a[3] = { has_sel && s0 > 0 ? 0 : -1,
+                                       has_sel ? s0 : -1,
+                                       has_sel ? s1 : 0 };
+                const int seg_b[3] = { has_sel && s0 > 0 ? s0 : -1,
+                                       has_sel ? s1 : -1,
+                                       draw_glyphs };
+                const nk_bool seg_sel[3] = { nk_false, nk_true, nk_false };
+                int i;
+                for (i = 0; i < 3; i++) {
+                    float x0 = 0.0f, x1 = 0.0f;
+                    int b0 = 0, b1 = 0;
+                    struct nk_rect label;
+                    if (seg_a[i] >= seg_b[i]) continue;
+                    nk_textedit_row_glyph_pos(text + text_len, row_bytes,
+                        seg_a[i], font, &x0, &b0);
+                    nk_textedit_row_glyph_pos(text + text_len, row_bytes,
+                        seg_b[i], font, &x1, &b1);
+                    if (b1 <= b0) continue;
+                    label.x = row_x + x0;
+                    label.w = x1 - x0;
+                    label.y = pos_y + line_offset;
+                    label.h = row_height;
+                    if (seg_sel[i]) {
+                        struct nk_text stxt;
+                        stxt = txt;
+                        stxt.background = sel_background;
+                        stxt.text = sel_text;
+                        nk_fill_rect(out, label, 0, sel_background);
+                        nk_widget_text(out, label, text + text_len + b0,
+                            b1 - b0, &stxt, align, font);
+                    } else {
+                        nk_widget_text(out, label, text + text_len + b0,
+                            b1 - b0, &txt, align, font);
+                    }
+                }
+            }
         }
-        glyph_width = font->width(font->userdata, font->height, text+text_len, glyph_len);
-        line_width += (float)glyph_width;
-        text_len += glyph_len;
-        glyph_len = nk_utf_decode(text + text_len, &unicode, byte_len-text_len);
-        continue;
-    }
-    if (line_width > 0) {
-        /* draw last line */
-        struct nk_rect label;
-        label.y = pos_y + line_offset;
-        label.h = row_height;
-        label.w = line_width;
-        label.x = pos_x;
-        if (!line_count)
-            label.x += x_offset;
-
-        if (is_selected)
-            nk_fill_rect(out, label, 0, background);
-        nk_widget_text(out, label, line, (int)((text + text_len) - line),
-            &txt, NK_TEXT_LEFT, font);
+        text_len += row_bytes;
+        glyphs += row_glyphs;
+        line_offset += row_height;
+        line_count++;
     }}
 }
 NK_LIB nk_flags
@@ -28585,6 +28708,10 @@ nk_do_edit(nk_flags *state, struct nk_command_buffer *out,
     if (flags & NK_EDIT_MULTILINE)
         area.w = NK_MAX(0, area.w - style->scrollbar_size.x);
     row_height = (flags & NK_EDIT_MULTILINE)? font->height + style->row_padding: area.h;
+    /* Krastor patch: multiline boxes soft-wrap at the visible text width
+     * (0 keeps single-line fields scrolling horizontally). Set before any
+     * layout_row / draw call so caret, selection and drawing agree. */
+    edit->wrap_width = (flags & NK_EDIT_MULTILINE) ? area.w : 0.0f;
 
     /* calculate clipping rectangle */
     old_clip = out->clip;
@@ -28752,120 +28879,74 @@ nk_do_edit(nk_flags *state, struct nk_command_buffer *out,
     area.w = NK_MAX(0, area.w - style->cursor_size);
     if (edit->active)
     {
-        int total_lines = 1;
         struct nk_vec2 text_size = nk_vec2(0,0);
 
         /* text pointer positions */
         const char *cursor_ptr = 0;
-        const char *select_begin_ptr = 0;
-        const char *select_end_ptr = 0;
 
         /* 2D pixel positions */
         struct nk_vec2 cursor_pos = nk_vec2(0,0);
-        struct nk_vec2 selection_offset_start = nk_vec2(0,0);
-        struct nk_vec2 selection_offset_end = nk_vec2(0,0);
 
         int selection_begin = NK_MIN(edit->select_start, edit->select_end);
         int selection_end = NK_MAX(edit->select_start, edit->select_end);
 
-        /* calculate total line count + total space + cursor/selection position */
-        float line_width = 0.0f;
+        /* calculate total line count + total space + cursor/selection position.
+         * Krastor patch: iterate over *visual* rows with nk_textedit_wrap_scan
+         * (stock Nuklear splits only on '\n'), so caret, selection and the
+         * scrollbar range all agree with the soft-wrapped drawing. */
         if (text && len)
         {
-            /* utf8 encoding */
-            float glyph_width;
-            int glyph_len = 0;
-            nk_rune unicode = 0;
             int text_len = 0;
-            int glyphs = 0;
-            int row_begin = 0;
+            int glyphs = 0;                 /* glyph index where this row starts */
+            int row_index = 0;              /* visual row counter */
+            float max_w = 0.0f;
+            float last_row_w = 0.0f;
+            const nk_bool ends_nl = (text[len-1] == '\n') ? nk_true : nk_false;
 
-            glyph_len = nk_utf_decode(text, &unicode, len);
-            glyph_width = font->width(font->userdata, font->height, text, glyph_len);
-            line_width = 0;
-
-            /* iterate all lines */
-            while ((text_len < len) && glyph_len)
+            while (text_len < len)
             {
-                /* set cursor 2D position and line */
-                if (!cursor_ptr && glyphs == edit->cursor)
+                int row_glyphs = 0, row_bytes = 0;
+                float row_w = 0.0f;
+                nk_bool row_nl;
+                nk_textedit_wrap_scan(text + text_len, text + len,
+                    edit->wrap_width > 0.0f ? edit->wrap_width : 1e30f,
+                    font, &row_glyphs, &row_bytes, &row_w);
+                if (row_bytes == 0) {
+                    if (text[text_len] == '\n') {   /* empty logical row */
+                        row_glyphs = 1; row_bytes = 1; row_w = 0.0f;
+                    } else break;  /* invalid UTF-8: stop like the stock scanner */
+                }
+                row_nl = (text[text_len + row_bytes - 1] == '\n') ? nk_true : nk_false;
+                max_w = NK_MAX(max_w, row_w);
+
+                /* set cursor 2D position (glyph index inside this visual row;
+                 * a cursor on the trailing '\n' lands at end-of-row so the
+                 * end-of-line cursor branch draws it) */
+                if (!cursor_ptr && edit->cursor >= glyphs &&
+                    edit->cursor < glyphs + row_glyphs)
                 {
-                    int glyph_offset;
-                    struct nk_vec2 out_offset;
-                    struct nk_vec2 row_size;
-                    const char *remaining;
-
-                    /* calculate 2d position */
-                    cursor_pos.y = (float)(total_lines-1) * row_height;
-                    row_size = nk_text_calculate_text_bounds(font, text+row_begin,
-                                text_len-row_begin, row_height, &remaining,
-                                &out_offset, &glyph_offset, NK_STOP_ON_NEW_LINE);
-                    cursor_pos.x = row_size.x;
-                    cursor_ptr = text + text_len;
+                    int byte_off = 0;
+                    nk_textedit_row_glyph_pos(text + text_len, row_bytes,
+                        edit->cursor - glyphs, font, &cursor_pos.x, &byte_off);
+                    cursor_pos.y = (float)row_index * row_height;
+                    cursor_ptr = text + text_len + byte_off;
                 }
 
-                /* set start selection 2D position and line */
-                if (!select_begin_ptr && edit->select_start != edit->select_end &&
-                    glyphs == selection_begin)
-                {
-                    int glyph_offset;
-                    struct nk_vec2 out_offset;
-                    struct nk_vec2 row_size;
-                    const char *remaining;
-
-                    /* calculate 2d position */
-                    selection_offset_start.y = (float)(NK_MAX(total_lines-1,0)) * row_height;
-                    row_size = nk_text_calculate_text_bounds(font, text+row_begin,
-                                text_len-row_begin, row_height, &remaining,
-                                &out_offset, &glyph_offset, NK_STOP_ON_NEW_LINE);
-                    selection_offset_start.x = row_size.x;
-                    select_begin_ptr = text + text_len;
-                }
-
-                /* set end selection 2D position and line */
-                if (!select_end_ptr && edit->select_start != edit->select_end &&
-                    glyphs == selection_end)
-                {
-                    int glyph_offset;
-                    struct nk_vec2 out_offset;
-                    struct nk_vec2 row_size;
-                    const char *remaining;
-
-                    /* calculate 2d position */
-                    selection_offset_end.y = (float)(total_lines-1) * row_height;
-                    row_size = nk_text_calculate_text_bounds(font, text+row_begin,
-                                text_len-row_begin, row_height, &remaining,
-                                &out_offset, &glyph_offset, NK_STOP_ON_NEW_LINE);
-                    selection_offset_end.x = row_size.x;
-                    select_end_ptr = text + text_len;
-                }
-                if (unicode == '\n') {
-                    text_size.x = NK_MAX(text_size.x, line_width);
-                    total_lines++;
-                    line_width = 0;
-                    text_len++;
-                    glyphs++;
-                    row_begin = text_len;
-                    glyph_len = nk_utf_decode(text + text_len, &unicode, len-text_len);
-                    glyph_width = font->width(font->userdata, font->height, text+text_len, glyph_len);
-                    continue;
-                }
-
-                glyphs++;
-                text_len += glyph_len;
-                line_width += (float)glyph_width;
-
-                glyph_len = nk_utf_decode(text + text_len, &unicode, len-text_len);
-                glyph_width = font->width(font->userdata, font->height,
-                    text+text_len, glyph_len);
-                continue;
+                text_len += row_bytes;
+                glyphs += row_glyphs;
+                last_row_w = row_nl ? 0.0f : row_w;
+                row_index++;
             }
-            text_size.y = (float)total_lines * row_height;
+            /* a trailing '\n' opens one more empty visual row, like the stock
+             * total_lines counting (N newlines => N+1 rows) */
+            if (ends_nl) row_index++;
+            text_size.x = max_w;
+            text_size.y = (float)row_index * row_height;
 
             /* handle case when cursor is at end of text buffer */
             if (!cursor_ptr && edit->cursor == edit->string.len) {
-                cursor_pos.x = line_width;
-                cursor_pos.y = text_size.y - row_height;
+                cursor_pos.x = last_row_w;
+                cursor_pos.y = (float)NK_MAX(row_index-1, 0) * row_height;
             }
         }
         {
@@ -28873,7 +28954,12 @@ nk_do_edit(nk_flags *state, struct nk_command_buffer *out,
             if (cursor_follow)
             {
                 /* update scrollbar to follow cursor */
-                if (!(flags & NK_EDIT_NO_HORIZONTAL_SCROLL)) {
+                if (edit->wrap_width > 0.0f) {
+                    /* Krastor patch: soft-wrapped text never scrolls sideways,
+                     * otherwise a caret at a row end (x == wrap_width > the
+                     * slightly smaller draw area) would jitter the view */
+                    edit->scrollbar.x = 0;
+                } else if (!(flags & NK_EDIT_NO_HORIZONTAL_SCROLL)) {
                     /* horizontal scroll */
                     const float scroll_increment = area.w * 0.25f;
                     if (cursor_pos.x < edit->scrollbar.x)
@@ -28962,53 +29048,17 @@ nk_do_edit(nk_flags *state, struct nk_command_buffer *out,
         cursor_color = nk_rgb_factor(cursor_color, style->color_factor);
         cursor_text_color = nk_rgb_factor(cursor_text_color, style->color_factor);
 
-        if (edit->select_start == edit->select_end) {
-            /* no selection so just draw the complete text */
-            const char *begin = nk_str_get_const(&edit->string);
-            int l = nk_str_len_char(&edit->string);
-            nk_edit_draw_text(out, style, area.x - edit->scrollbar.x,
-                area.y - edit->scrollbar.y, 0, begin, l, row_height, font,
-                background_color, text_color, nk_false);
-        } else {
-            /* edit has selection so draw 1-3 text chunks */
-            if (edit->select_start != edit->select_end && selection_begin > 0){
-                /* draw unselected text before selection */
-                const char *begin = nk_str_get_const(&edit->string);
-                NK_ASSERT(select_begin_ptr);
-                nk_edit_draw_text(out, style, area.x - edit->scrollbar.x,
-                    area.y - edit->scrollbar.y, 0, begin, (int)(select_begin_ptr - begin),
-                    row_height, font, background_color, text_color, nk_false);
-            }
-            if (edit->select_start != edit->select_end) {
-                /* draw selected text */
-                NK_ASSERT(select_begin_ptr);
-                if (!select_end_ptr) {
-                    const char *begin = nk_str_get_const(&edit->string);
-                    select_end_ptr = begin + nk_str_len_char(&edit->string);
-                }
-                nk_edit_draw_text(out, style,
-                    area.x - edit->scrollbar.x,
-                    area.y + selection_offset_start.y - edit->scrollbar.y,
-                    selection_offset_start.x,
-                    select_begin_ptr, (int)(select_end_ptr - select_begin_ptr),
-                    row_height, font, sel_background_color, sel_text_color, nk_true);
-            }
-            if ((edit->select_start != edit->select_end &&
-                selection_end < edit->string.len))
-            {
-                /* draw unselected text after selected text */
-                const char *begin = select_end_ptr;
-                const char *end = nk_str_get_const(&edit->string) +
-                                    nk_str_len_char(&edit->string);
-                NK_ASSERT(select_end_ptr);
-                nk_edit_draw_text(out, style,
-                    area.x - edit->scrollbar.x,
-                    area.y + selection_offset_end.y - edit->scrollbar.y,
-                    selection_offset_end.x,
-                    begin, (int)(end - begin), row_height, font,
-                    background_color, text_color, nk_true);
-            }
-        }
+        /* Krastor patch: draw the whole text in one pass; the selection is
+         * cut into each visual row inside nk_edit_draw_text, so wrapped
+         * rows never drift (the stock 3-chunk drawing re-wrapped each
+         * chunk from its own start). */
+        {const char *begin = nk_str_get_const(&edit->string);
+        int l = nk_str_len_char(&edit->string);
+        nk_edit_draw_text(out, style, area.x - edit->scrollbar.x,
+            area.y - edit->scrollbar.y, 0, begin, l, row_height, font,
+            background_color, text_color, edit->wrap_width,
+            selection_begin, selection_end,
+            sel_background_color, sel_text_color);}
 
         /* cursor */
         if (edit->select_start == edit->select_end)
@@ -29074,7 +29124,8 @@ nk_do_edit(nk_flags *state, struct nk_command_buffer *out,
 
         nk_edit_draw_text(out, style, area.x - edit->scrollbar.x,
             area.y - edit->scrollbar.y, 0, begin, l, row_height, font,
-            background_color, text_color, nk_false);
+            background_color, text_color, edit->wrap_width,
+            0, 0, background_color, text_color);
     }
     nk_push_scissor(out, old_clip);}
     return ret;

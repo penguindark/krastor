@@ -82,6 +82,15 @@ session switching and LLM-driven compaction.
   `nk_input_text`); alignment uses combined enums (`NK_MIDDLE_LEFT`, `NK_MIDDLE_CENTER`,
   not `NK_CENTER`); window-close check is `nk_window_is_closed`;
   `nk_label_colored_wrap(ctx, text, color)` takes **no** alignment argument.
+- **Nuklear is locally patched for soft-wrap** (see `libs/development.md`):
+  multiline edit boxes wrap at `nk_text_edit::wrap_width` via
+  `nk_textedit_wrap_scan`, shared by `nk_textedit_layout_row`,
+  `nk_edit_draw_text` and the cursor/selection/scrollbar calc loop in
+  `nk_do_edit`. Anything that touches edit drawing/selection must keep all
+  three in sync (one text pass, selection cut per visual row) or rows
+  drift when a selection appears. Re-applying the patch after a Nuklear
+  upgrade means redoing those four spots + the `nk_edit_draw_text`
+  signature (5 call sites).
 - Nuklear layout/render gotchas (cost hours):
   - `nk_layout_row_dynamic(ctx, 0, 1)` does **not** fill remaining space — it makes a
     min-height row. Give scrollable groups an explicit pixel height (window height
