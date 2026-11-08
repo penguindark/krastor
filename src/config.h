@@ -86,6 +86,7 @@ struct GuiConfig {
     int window_x = -1;              // main window position (-1 = OS default)
     int window_y = -1;
     bool format_output = true;      // Markdown/syntax formatting of LLM replies
+    int history_size = 100;         // input history lines kept (0 = off)
 };
 
 // Basic chat color scheme (config.jsonc "colors", "#rrggbb"). User-owned

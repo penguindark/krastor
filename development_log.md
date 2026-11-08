@@ -2106,3 +2106,29 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   positions became {pos,len} fixes). Same conservative gate as before.
 - tool-test: +1 check (literal \033 fully consumed, ESC-based colors in).
 - Both toolchains clean; all --*-test PASS.
+
+
+## 2026-11-08 - feat: console input history (bash-style Up/Down recall)
+
+- New header-only `src/input_history.h`: InputHistory stores submitted
+  lines (trimmed; empty and consecutive duplicates skipped, oldest
+  evicted past the cap, 0 = off) and walks them with prev()/next();
+  Down past the newest returns the draft and ends browsing, leave()
+  resets browsing when the user edits a recalled line.
+- Config: `gui.history_size` (default 100, 0 disables) parsed/saved in
+  config.cpp, documented in config.example.jsonc.
+- gui.cpp: lines are recorded on Enter-send (slash commands included,
+  like bash; mic transcripts are not). Up recalls only when the input
+  field is focused and EMPTY (or already browsing), Down only while
+  browsing; a consumed key is swallowed from Nuklear
+  (device.key_events[NK_KEY_UP/DOWN] = -1, the Shift+Tab trick) so the
+  multiline caret never jumps. A non-empty field that is not browsing
+  keeps native Up/Down. The caret jumps to the end after a recall by
+  writing ctx->current->edit.cursor before nk_edit_string (it is
+  re-read while the field is active). The typing detector (input !=
+  input_prev) calls history.leave() on real user edits, guarded by a
+  recall_frame flag so the recall injection itself does not count.
+- Tests: gui-test +7 checks (trim/dedup/cap, prev/next walks, draft
+  exit, leave, max 0); config-test +1 (history_size parse) and the
+  save round-trip now covers it too.
+- Both toolchains clean; all --*-test PASS.

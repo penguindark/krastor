@@ -110,7 +110,8 @@
     "window_h": 640,
     "window_x": -1,                 // -1 = OS default placement
     "window_y": -1,
-    "format_output": true           // Markdown/syntax formatting of replies
+    "format_output": true,          // Markdown/syntax formatting of replies
+    "history_size": 100             // input lines kept for Up/Down recall (0 = off)
   },
 
   "agent": {

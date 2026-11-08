@@ -47,6 +47,7 @@
 #include "formatters.h"
 #include "highlight.h"
 #include "emoji.h"
+#include "input_history.h"
 #include "icons.h"
 #include "stt.h"
 #include "tts.h"
@@ -519,6 +520,11 @@ struct AppState : AskHandler {
     // 1 whenever the input buffer changes, drained every frame.
     float typing_pulse = 0.0f;
     std::string input_prev;  // last frame's input text (typing detector)
+    // ---- input history (bash-style Up/Down recall, see input_history.h) ----
+    InputHistory history;    // submitted lines, capped by gui.history_size
+    bool input_active = false;   // input field had focus last frame
+    bool recall_pending = false; // caret jumps to the end after a recall
+    bool recall_frame = false;   // edit detector: skip the recall injection
     // Clipboard-copy toast (opencode-style): visible 2 s after any copy
     // (chat selection, input box, image block); a new copy resets the
     // timer. copy_pulse feeds the shader event feed (u_copy) like typing.
@@ -655,6 +661,9 @@ struct AppState : AskHandler {
     {
         name = c.agent.name;
         auto_speak = c.tts.auto_speak;
+        history.set_max(c.gui.history_size > 0
+                            ? static_cast<size_t>(c.gui.history_size)
+                            : 0);
         // Model list for the Settings combo (URL/key/context come from this file).
         models.load(LlmModelRegistry::default_path());
         // External tools: manifests load only when the system is enabled and
@@ -2087,6 +2096,7 @@ void help_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
         section("Chat");
         rows({{"Enter", "send the message"},
               {"Shift+Enter", "newline in the input box"},
+              {"Up / Down", "recall submitted lines (empty input)"},
               {"Ctrl+V", "paste text / attach clipboard image"},
               {"drag & drop", "attach an image file"},
               {"click + drag in chat", "select text (Ctrl+C copies it)"},
@@ -4217,6 +4227,36 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 }
             }
             prev_tab = tab;
+            // ---- input history: Up/Down recall submitted lines while the
+            // input field is focused and EMPTY (or already browsing). Edge
+            // detected; a consumed key is swallowed from Nuklear (same
+            // trick as Shift+Tab above) so the multiline caret never jumps.
+            // A non-empty field that is not browsing keeps native Up/Down.
+            static bool prev_up = false, prev_down = false;
+            const bool up = glfwGetKey(win, GLFW_KEY_UP) != 0;
+            const bool down = glfwGetKey(win, GLFW_KEY_DOWN) != 0;
+            if (app.input_active && !app.settings.open) {
+                const bool empty = app.input[0] == '\0';
+                if (up && !prev_up && (empty || app.history.browsing()) &&
+                    app.history.can_prev()) {
+                    if (const std::string* s = app.history.prev()) {
+                        std::snprintf(app.input, sizeof(app.input), "%s",
+                                      s->c_str());
+                        app.recall_pending = app.recall_frame = true;
+                        device.key_events[NK_KEY_UP] = -1;
+                    }
+                }
+                if (down && !prev_down && app.history.can_next()) {
+                    if (const std::string* s = app.history.next()) {
+                        std::snprintf(app.input, sizeof(app.input), "%s",
+                                      s->c_str());
+                        app.recall_pending = app.recall_frame = true;
+                        device.key_events[NK_KEY_DOWN] = -1;
+                    }
+                }
+            }
+            prev_up = up;
+            prev_down = down;
         }
 
         // ---- chat selection & scroll hotkeys (only while the chat has focus,
@@ -4692,6 +4732,18 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             // Visible caret: 2 px wide accent-blue bar (Nuklear's default is a
             // 1 px line that is nearly invisible on the dark field).
             nk_style_push_float(ctx, &ctx->style.edit.cursor_size, 2.0f);
+            // A history recall filled the field from outside the widget:
+            // Nuklear would keep the old caret (0 on an empty field), so
+            // jump it to the end. nk_edit_string re-reads win->edit.cursor
+            // while the field is active (nuklear.h nk_edit_string).
+            if (app.recall_pending) {
+                app.recall_pending = false;
+                const int len = nk_utf_len(
+                    app.input, static_cast<int>(std::strlen(app.input)));
+                ctx->current->edit.cursor = len;
+                ctx->current->edit.sel_start = len;
+                ctx->current->edit.sel_end = len;
+            }
             const nk_flags edit_state = nk_edit_string_zero_terminated(
                 ctx,
                 (nk_flags)NK_EDIT_BOX | (nk_flags)NK_EDIT_SIG_ENTER |
@@ -4712,7 +4764,8 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             nk_style_pop_style_item(ctx); // normal
             nk_style_pop_color(ctx);      // border_color
             // Typing focus back on the input releases the chat selection keys.
-            if ((edit_state & NK_EDIT_ACTIVE) != 0)
+            app.input_active = (edit_state & NK_EDIT_ACTIVE) != 0;
+            if (app.input_active)
                 app.chat_focused = false;
             // A clipboard image was "pasted" while this field was focused.
             if (app.pending_image_paste) {
@@ -4722,9 +4775,12 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             nk_layout_row_end(ctx);
 
             // Enter sends (the action buttons live in the floating cluster
-            // drawn after nk_end).
+            // drawn after nk_end). The line enters the input history first
+            // (slash commands included, like bash); send() may still drop it
+            // (busy worker), which is fine - recall stays harmless.
             if ((edit_state & NK_EDIT_COMMITED) != 0 &&
                 app.worker == AppState::Worker::None) {
+                app.history.push(app.input);
                 app.send(app.input);
                 app.input[0] = '\0';
             }
@@ -4888,8 +4944,13 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         // Shader event feed: audio + assistant state + input activity.
         if (app.input != app.input_prev) {  // typed/pasted/edited this frame
             app.typing_pulse = 1.0f;
+            // A real user edit (not a recall injection) ends the history
+            // browsing: the next Up starts fresh from the newest entry.
+            if (!app.recall_frame)
+                app.history.leave();
             app.input_prev = app.input;
         }
+        app.recall_frame = false;
         app.typing_pulse = app.typing_pulse > 0.001f ? app.typing_pulse * 0.90f
                                                     : 0.0f;
         app.copy_pulse = app.copy_pulse > 0.001f ? app.copy_pulse * 0.92f
@@ -4960,6 +5021,54 @@ int run_gui_stack_test()
         if (!ok)
             ++failed;
     };
+
+    // ---- InputHistory (bash-style Up/Down recall, see input_history.h) ----
+    {
+        krastor::InputHistory h;
+        h.set_max(3);
+        h.push("  ");            // whitespace-only: ignored
+        h.push("first");
+        h.push("first");         // consecutive duplicate: ignored
+        h.push("second");
+        h.push("third");
+        check(h.size() == 3, "history trims and skips empty/duplicate lines");
+        h.push("fourth");        // cap 3: "first" evicted
+        check(h.size() == 3 && !h.browsing(),
+              "history evicts the oldest past the cap");
+        const std::string* c0 = h.prev();
+        const std::string* c1 = h.prev();
+        const std::string* c2 = h.prev();
+        check(c0 && *c0 == "fourth" && c1 && *c1 == "third" &&
+                  c2 && *c2 == "second",
+              "prev walks newest to oldest from an empty field");
+        krastor::InputHistory g;
+        g.set_max(10);
+        g.push("one");
+        g.push("two");
+        g.push("three");
+        const auto* p1 = g.prev();
+        const auto* p2 = g.prev();
+        const auto* p3 = g.prev();
+        const auto* p4 = g.prev();  // past the oldest: invalid
+        check(p1 && *p1 == "three" && p2 && *p2 == "two" &&
+                  p3 && *p3 == "one" && p4 == nullptr && g.browsing(),
+              "prev walks newest to oldest then stops");
+        const auto* n1 = g.next();
+        const auto* n2 = g.next();
+        const auto* n3 = g.next();  // past the newest: draft, browsing ends
+        check(n1 && *n1 == "two" && n2 && *n2 == "three" &&
+                  n3 && n3->empty() && !g.browsing(),
+              "next walks back and exits to the draft");
+        g.prev();  // start browsing again
+        g.leave();  // user edited the recalled line
+        const auto* p5 = g.prev();
+        check(p5 && *p5 == "three",
+              "leave() restarts browsing from the newest entry");
+        krastor::InputHistory off;
+        off.set_max(0);  // gui.history_size = 0
+        off.push("anything");
+        check(off.size() == 0 && !off.can_prev(), "max 0 disables the history");
+    }
 
     struct nk_context ctx;
     struct nk_user_font font;

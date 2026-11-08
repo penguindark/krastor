@@ -1233,28 +1233,33 @@ int run_config_test()
     // --- save() round-trip: state schema, no agents map ------------------------------
     {
         std::ofstream f(dir / "config.jsonc");
-        f << "{ \"gui\": { \"font_size\": 22 }, \"agents\": { \"a\": {} } }\n";
+        f << "{ \"gui\": { \"font_size\": 22, \"history_size\": 7 }, "
+             "\"agents\": { \"a\": {} } }\n";
     }
     krastor::Config c4 = krastor::Config::load((dir / "config.jsonc").string());
+    check("gui.history_size parses from config.jsonc", c4.gui.history_size == 7);
     c4.gui.font_size = 30;
+    c4.gui.history_size = 42;
     const std::string sp = (dir / "state2.json").string();
     c4.save(sp);
     check("save() round-trips through load()", [&] {
         { std::ofstream(dir / "state.json") << "{}\n"; }
         std::ofstream(dir / "config.jsonc", std::ios::trunc)
-            << "{ \"gui\": { \"font_size\": 22 }, \"agents\": { \"a\": {} } }\n";
+            << "{ \"gui\": { \"font_size\": 22, \"history_size\": 7 }, "
+               "\"agents\": { \"a\": {} } }\n";
         // simulate the two-level layout: state beside the config
         fs::copy_file(sp, dir / "state.json", fs::copy_options::overwrite_existing, ec);
         const krastor::Config c5 =
             krastor::Config::load((dir / "config.jsonc").string());
-        return c5.gui.font_size == 30;
+        return c5.gui.font_size == 30 && c5.gui.history_size == 42;
     }());
     {
         std::ifstream f(sp);
         const auto j = nlohmann::json::parse(f, nullptr, false);
         check("save() never writes the agents map",
               !j.is_discarded() && !j.contains("agents") &&
-                  j.contains("gui") && j["gui"]["font_size"] == 30);
+                  j.contains("gui") && j["gui"]["font_size"] == 30 &&
+                  j["gui"]["history_size"] == 42);
     }
 
     fs::remove_all(dir, ec);
