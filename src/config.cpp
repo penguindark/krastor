@@ -138,6 +138,7 @@ void apply_json(Config& cfg, const nlohmann::json& root, bool user_only)
             j.value("auto_compact", cfg.sessions.auto_compact);
         cfg.sessions.compact_buffer =
             j.value("compact_buffer", cfg.sessions.compact_buffer);
+        cfg.sessions.last_id = j.value("last_id", cfg.sessions.last_id);
     }
 }
 
@@ -362,6 +363,7 @@ void Config::save(const std::string& path) const
         {"continue_last", sessions.continue_last},
         {"auto_compact", sessions.auto_compact},
         {"compact_buffer", sessions.compact_buffer},
+        {"last_id", sessions.last_id},
     };
     // NOTE: the "agents" map and the "colors" scheme are deliberately NOT
     // written: they live only in config.jsonc, where the user's comments are

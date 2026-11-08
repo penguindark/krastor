@@ -131,6 +131,10 @@ struct SessionsConfig {
     bool continue_last = true;        // startup resumes the most recent session
     bool auto_compact = true;         // compact automatically near the limit
     std::string compact_buffer = "15%";  // free room kept ("NN%" or tokens)
+    // state.json only: id of the session that was active when the app last
+    // ran. Startup prefers it over "most recently updated", so switching to
+    // an older session and closing restarts on THAT session.
+    std::string last_id;
 };
 
 struct Config {

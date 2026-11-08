@@ -1953,3 +1953,53 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
 - Verified by screenshot on the gui-test sample diff (UITEST hook, temporarily
   expanded): violet pair row, green add row, aligned numbers and glyphs.
 - Both toolchains clean; all `--*-test` PASS.
+
+
+## 2026-11-08 - fix: dark 1px bars inside the selection highlight
+
+- The selection fill is drawn per token; `fill_px` rounds its rect OUTWARD
+  (the 89958ad seam fix for opaque backgrounds), so adjacent token fills
+  overlapped by ~1 px. The selection accent is translucent (alpha 115), so
+  every overlap double-blended into a dark vertical bar at each token
+  boundary - visible as bars inside the spaces of selected text.
+- Fix: the selection rect now tiles with floor on BOTH edges (start and end
+  both `std::floor`), so adjacent fills butt exactly - no gap, no overlap.
+  Opaque per-token backgrounds keep the outward `fill_px` rounding.
+- Verified by screenshot: the UITEST seeded selection (empty store sandbox)
+  is uniform across token boundaries at 3x zoom. Both toolchains clean;
+  all `--*-test` PASS.
+
+
+## 2026-11-08 - restart opened a NEW session instead of continuing the last
+
+- Cause: the screenshot sandbox runs (sel_test config) had written their own
+  `sessions.dir` (a temp folder) and `continue_last: false` into the
+  exe-dir `state.json`: the app saves state next to the exe no matter which
+  config was loaded, so the sandbox polluted the real state. On the next
+  normal start the app looked in the (empty) temp store and created a new
+  session.
+- Fix: cleaned `bin/state.json` (dropped `sessions.dir`/`continue_last`
+  so `config.jsonc` wins again, plus the stale `llm.system_prompt`).
+  Verified by restart: the app restored the "ciao" session and the state
+  re-saved clean (`dir: ""`, `continue_last: true`).
+- Rule for future sandbox screenshot runs: always reset `bin/state.json`
+  afterwards (or point the sandbox at a copy of the exe).
+- Recovered the orphaned "che ore sono?" session: copied its folder back from the
+  switch_test sandbox store into the real sessions/ store (17 messages).
+
+
+## 2026-11-08 - restart now resumes the session that was actually in use
+
+- `continue_last` used to resume `store.list().front()` (the most recently
+  UPDATED session): switching to an older session and closing without writing
+  restarted on the wrong one.
+- New state key `sessions.last_id` (state.json only): the GUI records it on
+  startup restore, `switch_to_session`, `new_session` and current-session
+  delete; the CLI records it at startup and on `/session new|open`,
+  `/reset`. Startup prefers `last_id` (if it still exists), falling back
+  to the most recent one.
+- Verified: with `last_id` pointing at the older "che ore sono?" session,
+  the app restarted on it (window title), not on the newer "ciao".
+- Screenshot harness no longer maximizes the window (SW_RESTORE): the earlier
+  SW_MAXIMIZE polluted `gui.window_*` in state.json (fullscreen on restart).
+- Both toolchains clean; all `--*-test` PASS.

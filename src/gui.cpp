@@ -584,23 +584,34 @@ struct AppState : AskHandler {
         lines.push_back({"sys", name + " ready. Type below (Enter sends, "
                                   "Shift+Enter = newline). Ctrl+V pastes text or "
                                   "an image. Settings = LLM/voice config."});
-        // ---- session restore (sessions_plan.md): continue the most recent
-        // session or start a fresh one; a restored history rebuilds the chat
+        // ---- session restore (sessions_plan.md): continue the session that
+        // was active on the previous run (state's sessions.last_id), falling
+        // back to the most recent one; a restored history rebuilds the chat
         // and the session's agent is restored with it.
         {
             const auto l = store.list();
-            if (!l.empty() && c.sessions.continue_last &&
-                store.load(l.front().id, conv)) {
-                session_id = l.front().id;
-                session_title = l.front().title;
-                if (!l.front().agent.empty())
-                    apply_agent(l.front().agent, /*persist=*/false);
+            std::string want = c.sessions.last_id;
+            if (want.empty() && !l.empty())
+                want = l.front().id;  // no recorded id: most recently updated
+            const bool known = std::any_of(l.begin(), l.end(),
+                                           [&](const SessionMeta& m) {
+                                               return m.id == want;
+                                           });
+            if (!want.empty() && c.sessions.continue_last && known &&
+                store.load(want, conv)) {
+                session_id = want;
+                SessionMeta sm;
+                store.meta_of(want, sm);
+                session_title = sm.title;
+                if (!sm.agent.empty())
+                    apply_agent(sm.agent, /*persist=*/false);
             }
             if (session_id.empty()) {
                 session_id = store.create("New session", c.llm.model_ref,
                                           agent_id);
                 session_title = "New session";
             }
+            c.sessions.last_id = session_id;  // keep state in sync
             saved_count = conv.messages().size();
             if (saved_count > 1)
                 rebuild_lines_from_conv();
@@ -1092,6 +1103,8 @@ struct AppState : AskHandler {
         store.meta_of(id, sm);
         session_id = id;
         session_title = sm.title;
+        cfg.sessions.last_id = id;  // restart resumes the session in use
+        cfg.save();
         saved_count = conv.messages().size();
         // The session's agent comes back with it (unknown ids keep the
         // current) BEFORE the rebuild, so the restored "you" bars wear it.
@@ -1109,6 +1122,8 @@ struct AppState : AskHandler {
         conv.reset();
         session_title = title.empty() ? "New session" : title;
         session_id = store.create(session_title, eff.model_ref, agent_id);
+        cfg.sessions.last_id = session_id;
+        cfg.save();
         saved_count = conv.messages().size();
         lines.push_back({"sys", "new session: " + session_title});
         follow_bottom = true;
@@ -1124,6 +1139,8 @@ struct AppState : AskHandler {
             conv.reset();
             session_id = store.create("New session", eff.model_ref, agent_id);
             session_title = "New session";
+            cfg.sessions.last_id = session_id;
+            cfg.save();
             saved_count = conv.messages().size();
             lines.clear();
             reset_chat_hit_state();
@@ -2779,8 +2796,17 @@ float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
                                        ? sel->hi_cp : b;
                     if (hb > ha) {
                         const float px = ww / ncp;
-                        fill_px(canvas, tx + (ha - a) * px, y, (hb - ha) * px,
-                                row_h, nk_rgba(60, 110, 200, 115));
+                        // Tile with floor on BOTH edges (not fill_px's outward
+                        // rounding): adjacent token fills must butt exactly -
+                        // a 1px overlap would double-blend the translucent
+                        // accent into dark bars at every token boundary.
+                        const float sx0 = std::floor(tx + (ha - a) * px);
+                        const float sx1 = std::floor(tx + (hb - a) * px);
+                        const float sy0 = std::floor(y);
+                        nk_fill_rect(canvas,
+                                     nk_rect(sx0, sy0, sx1 - sx0,
+                                             std::ceil(y + row_h) - sy0),
+                                     0, nk_rgba(60, 110, 200, 115));
                     }
                 }
             }

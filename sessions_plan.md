@@ -196,8 +196,11 @@ session folder** so the cleared state is persisted, matching user intent.
 ### 5.1 CLI (`main.cpp`)
 
 - Startup: `--session`/`--new-session`/flags above; default = **continue the
-  most recent session** if any (config `sessions.continue_last`, default true),
-  else create a new one. Print the session id at startup.
+  session active on the previous run** (state `sessions.last_id`, falling back
+  to the most recently updated one) if any (config `sessions.continue_last`,
+  default true), else create a new one. Print the session id at startup.
+  Every session change (`/session new|open`, `/reset`, startup) records the
+  active id back into state.json.
 - After every completed turn (incl. tool loop): `store.append(...)` the new
   messages; update `meta.json`.
 - `/compact` runs the compactor with a console spinner; permission to run is
@@ -208,6 +211,9 @@ session folder** so the cleared state is persisted, matching user intent.
 - `AppState` gets `SessionStore store; std::string session_id;`.
   Autosave hook in `poll()` where the LLM reply is drained (the single point
   where a turn is complete on the main thread).
+- Startup restore: resume `sessions.last_id` from state.json (the session that
+  was active on the previous run), falling back to the most recently updated
+  one; every switch/new/delete records the active id back into state.json.
 
 #### Session switching (first-class)
 

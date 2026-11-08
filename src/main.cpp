@@ -1451,9 +1451,13 @@ int main(int argc, char** argv)
         }
     }
     if (session_id.empty() && !new_session_flag && cfg.sessions.continue_last) {
-        const auto l = store.list();
-        if (!l.empty())
-            session_id = l.front().id;
+        // Prefer the session active on the previous run; fall back to the
+        // most recently updated one.
+        session_id = cfg.sessions.last_id;
+        if (session_id.empty() || !store.exists(session_id)) {
+            const auto l = store.list();
+            session_id = l.empty() ? std::string{} : l.front().id;
+        }
     }
     if (!session_id.empty() && store.load(session_id, conversation)) {
         krastor::SessionMeta sm;
@@ -1471,6 +1475,12 @@ int main(int argc, char** argv)
         std::cout << "session: " << session_id << " (new)\n";
     }
     size_t saved_count = conversation.messages().size();
+    // Record the active session so the next run resumes exactly this one.
+    auto remember_session = [&] {
+        cfg.sessions.last_id = session_id;
+        cfg.save();
+    };
+    remember_session();
 
     // Switch the whole CLI stack to an agent: effective llm config, client,
     // system prompt and the session's recorded agent. Shared by /agent use
@@ -1572,6 +1582,7 @@ int main(int argc, char** argv)
             session_id = store.create("New session", cfg.llm.model_ref,
                                       cfg.agent.active);
             session_title = "New session";
+            remember_session();
             saved_count = conversation.messages().size();
             std::cout << "(conversation cleared, new session " << session_id
                       << ")\n";
@@ -1602,6 +1613,7 @@ int main(int argc, char** argv)
                 session_id = store.create(title.empty() ? "New session" : title,
                                           cfg.llm.model_ref, cfg.agent.active);
                 session_title = title.empty() ? "New session" : title;
+                remember_session();
                 saved_count = conversation.messages().size();
                 std::cout << "new session " << session_id << "\n";
             } else if (sub == "open") {
@@ -1617,6 +1629,7 @@ int main(int argc, char** argv)
                         store.meta_of(id, sm);
                         session_id = id;
                         session_title = sm.title;
+                        remember_session();
                         saved_count = conversation.messages().size();
                         std::cout << "opened session " << id << " \""
                                   << session_title << "\"\n";
@@ -1642,6 +1655,7 @@ int main(int argc, char** argv)
                         session_id = store.create("New session", cfg.llm.model_ref,
                                                   cfg.agent.active);
                         session_title = "New session";
+                        remember_session();
                         saved_count = conversation.messages().size();
                         std::cout << "started a new session " << session_id << "\n";
                     }
