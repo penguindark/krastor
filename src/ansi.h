@@ -171,13 +171,20 @@ inline std::vector<AnsiRun> ansi_parse(const std::string& in,
 // Repairs SGR sequences that lost their ESC byte - models (and a few API
 // layers) often drop control characters when copying colored tool output into
 // a reply, leaving bare "[31m"/"[0m" text. Inserts the ESC back before every
-// bracketed numeric SGR sequence that is not already escaped. Deliberately
+// bracketed numeric SGR sequence that is not already escaped. The literal
+// text "\033[" (octal escape written as prose, common when the model copies
+// python color constants) is replaced by the real ESC byte instead of getting
+// a second one inserted, so no "\033" noise stays visible. Deliberately
 // conservative: a line is touched only when it clearly carries an ANSI
 // payload (two or more sequences, or an explicit "[0m" reset), so ordinary
 // prose like "wait [5m]" stays literal.
 inline std::string ansi_repair(const std::string& in)
 {
-    std::vector<size_t> starts;  // '[' positions of bare SGR sequences
+    struct fix {
+        size_t pos;  // where the ESC goes
+        size_t len;  // chars it replaces (4 for a literal "\033", 0 = insert)
+    };
+    std::vector<fix> fixes;  // '[' positions of bare SGR sequences
     bool has_reset = false;
     for (size_t i = 0; i + 1 < in.size(); ++i) {
         if (in[i] != '[' || (i > 0 && in[i - 1] == '\x1b'))
@@ -191,20 +198,23 @@ inline std::string ansi_repair(const std::string& in)
             ++j;
         }
         if (j < in.size() && in[j] == 'm' && j > i + 1) {
-            starts.push_back(i);
+            if (i >= 4 && in.compare(i - 4, 4, "\\033") == 0)
+                fixes.push_back({i - 4, 4});  // "\033[" -> ESC "["
+            else
+                fixes.push_back({i, 0});      // "[" -> ESC "["
             if (groups == 0 && in.compare(i, j - i + 1, "[0m") == 0)
                 has_reset = true;
         }
     }
-    if (starts.size() < 2 && !(has_reset && !starts.empty()))
+    if (fixes.size() < 2 && !(has_reset && !fixes.empty()))
         return in;
     std::string out;
-    out.reserve(in.size() + starts.size());
+    out.reserve(in.size() + fixes.size());
     size_t prev = 0;
-    for (size_t s : starts) {
-        out.append(in, prev, s - prev);
+    for (const auto& f : fixes) {
+        out.append(in, prev, f.pos - prev);
         out += '\x1b';
-        prev = s;
+        prev = f.pos + f.len;
     }
     out.append(in, prev, std::string::npos);
     return out;

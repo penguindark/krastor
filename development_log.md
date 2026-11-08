@@ -2060,3 +2060,49 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   tools). URL asks now grant their URL.
 - tool-test: 4 new checks (asks once / second run silent / /grants lists it /
   clear revokes). Both toolchains clean; all `--*-test` PASS.
+
+
+## 2026-11-08 - fix: python tool block showed the JSON envelope, not the output
+
+- Symptom: a python run that printed ANSI-colored ASCII art showed "11254 B"
+  in the tool block header but nothing readable when expanded (the art was
+  only visible in the Thought block, where the model repeated it).
+- Cause: the block body embedded tr.result verbatim - for python that is the
+  JSON dump {"stdout":"...","error":"..."} where newlines are literal "\n"
+  and ESC is "\u001b": the whole stdout collapsed into one unreadable line
+  of escape noise.
+- Fix: tool_result_body() (gui.cpp) decodes stdout/error envelopes back to
+  raw text in both the live on_done path and the session-restore fold; the
+  decoded text keeps its line structure and draw_chat_line's ansi_parse
+  renders the colors (16/256/truecolor, backgrounds). Non-envelope results
+  (files JSON) and truncated content stay raw after "result: ".
+- Both toolchains clean; all --*-test PASS.
+
+
+### follow-up: restored sessions hold cap_text-truncated JSON
+
+- The screenshots showed a RESTORED session (no "0.1s - N B" meta): the
+  stored tool result is capped at 8000 chars by cap_text, so the JSON is
+  cut mid-string and a strict parse fails - the block fell back to the raw
+  dump again.
+- tool_result_body now falls back to json_string_field(): a tolerant
+  scanner that finds "stdout"/"error" in truncated JSON, decodes standard
+  escapes and stops at the closing quote or end of input (the "[... output
+  truncated]" marker stays visible).
+- tool_args_body: a python "code" argument is decoded too, so the script
+  keeps its line structure instead of one wall of literal "\n".
+- Both toolchains clean; all --*-test PASS.
+
+
+## 2026-11-08 - fix: literal "\033" noise in replies that copy colored output
+
+- The python tool block now renders the decoded, colored output (verified
+  live). But when the model copies the art into its own reply it writes the
+  escape as the literal text "\033[" (octal prose): ansi_repair inserted the
+  missing ESC before "[...m" (colors worked) yet the 4-char "\033" stayed
+  visible as noise all over the maze.
+- ansi_repair now recognizes a bare SGR sequence preceded by the literal
+  "\033" text and REPLACES those 4 chars with the real ESC byte (insertion
+  positions became {pos,len} fixes). Same conservative gate as before.
+- tool-test: +1 check (literal \033 fully consumed, ESC-based colors in).
+- Both toolchains clean; all --*-test PASS.

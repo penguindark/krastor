@@ -487,6 +487,14 @@ int run_tool_test()
                   std::string::npos);
         check("ansi_repair keeps escaped sequences untouched",
               krastor::md_to_ansi("\x1b[31mred\x1b[0m") == "\x1b[31mred\x1b[0m");
+        // The literal text "\033[" (octal escape as prose): the 4 chars are
+        // replaced by a real ESC, no "\033" noise stays visible.
+        const std::string oct = krastor::md_to_ansi(
+            "\\033[1;92mS\\033[0m=inizio \\033[97;104m##\\033[0m");
+        check("ansi_repair converts literal \\033 text",
+              oct.find("\\033") == std::string::npos &&
+                  oct.find("\x1b[1;92mS\x1b[0m=inizio") != std::string::npos,
+              oct);
         // ANSI payload pasted inside a language-less fence (the model wraps
         // colored tool output in ```) is repaired too: the highlighter never
         // runs there, so without this the bare SGR text renders literally.

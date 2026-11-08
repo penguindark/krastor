@@ -352,6 +352,127 @@ struct SettingsState {
     }
 };
 
+// Extracts a JSON string field from possibly TRUNCATED JSON text (session
+// logs cap tool results mid-string): finds "key":"...", decodes standard
+// escapes and stops at the closing quote or end of input. False = key absent.
+bool json_string_field(const std::string& s, const std::string& key,
+                       std::string& out)
+{
+    const std::string pat = "\"" + key + "\":\"";
+    const size_t k = s.find(pat);
+    if (k == std::string::npos)
+        return false;
+    size_t i = k + pat.size();
+    out.clear();
+    auto hex4 = [&](size_t p) {  // 4 hex digits -> codepoint, -1 on garbage
+        int v = 0;
+        for (int n = 0; n < 4; ++n) {
+            const char d = s[p + n];
+            const int dv = (d >= '0' && d <= '9')   ? d - '0'
+                           : (d >= 'a' && d <= 'f') ? d - 'a' + 10
+                           : (d >= 'A' && d <= 'F') ? d - 'A' + 10
+                                                    : -1;
+            if (dv < 0)
+                return -1;
+            v = v * 16 + dv;
+        }
+        return v;
+    };
+    while (i < s.size()) {
+        const char c = s[i];
+        if (c == '"')
+            break;  // closing quote: value complete
+        if (c == '\\' && i + 1 < s.size()) {
+            const char e = s[i + 1];
+            switch (e) {
+            case 'n': out += '\n'; break;
+            case 't': out += '\t'; break;
+            case 'r': out += '\r'; break;
+            case 'b': out += '\b'; break;
+            case 'f': out += '\f'; break;
+            case '"': out += '"'; break;
+            case '\\': out += '\\'; break;
+            case '/': out += '/'; break;
+            case 'u': {
+                if (i + 5 < s.size()) {
+                    const int cp = hex4(i + 2);
+                    // BMP only; surrogates (rare here: output is utf8_clean'd)
+                    // are skipped rather than encoded as invalid UTF-8.
+                    if (cp >= 0 && (cp < 0x80 || (cp < 0x800) ||
+                                    cp < 0xD800 || cp > 0xDFFF)) {
+                        if (cp < 0x80) {
+                            out += static_cast<char>(cp);
+                        } else if (cp < 0x800) {
+                            out += static_cast<char>(0xC0 | (cp >> 6));
+                            out += static_cast<char>(0x80 | (cp & 0x3F));
+                        } else {
+                            out += static_cast<char>(0xE0 | (cp >> 12));
+                            out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+                            out += static_cast<char>(0x80 | (cp & 0x3F));
+                        }
+                    }
+                    i += 4;
+                }
+                break;
+            }
+            default: out += e; break;
+            }
+            i += 2;
+            continue;
+        }
+        out += c;
+        ++i;
+    }
+    return true;
+}
+
+// Tool-block body text for a successful result. Python-style envelopes
+// ({"stdout": "...", "error": "..."}) are decoded to their raw text: the
+// JSON dump escapes newlines as literal "\n" and ESC as "\u001b", which
+// collapsed ASCII art into one unreadable line; the decoded text keeps the
+// line structure and lets draw_chat_line's ansi_parse render the colors.
+// Restored sessions hold cap_text-truncated JSON, so a failed parse falls
+// back to the tolerant field extractor. Non-envelope results (files JSON)
+// stay raw after "result: ".
+std::string tool_result_body(const std::string& result)
+{
+    std::string out, er;
+    const auto j = nlohmann::json::parse(result, nullptr, false);
+    if (!j.is_discarded() && j.is_object()) {
+        if (j.contains("stdout") && j["stdout"].is_string())
+            out = j["stdout"].get<std::string>();
+        if (j.contains("error") && j["error"].is_string())
+            er = j["error"].get<std::string>();
+        if (out.empty() && er.empty() && !j.contains("stdout") &&
+            !j.contains("error"))
+            return "result: " + result;  // not an envelope: keep raw JSON
+    } else {
+        json_string_field(result, "stdout", out);
+        json_string_field(result, "error", er);
+        if (out.empty() && er.empty())
+            return "result: " + result;
+    }
+    if (!er.empty())
+        out += out.empty() ? er : "\n" + er;
+    if (out.empty())
+        out = "(no output)";
+    return out;
+}
+
+// Tool-block args line: a "code" argument (python tool) is decoded so the
+// script keeps its line structure instead of one wall of literal "\n".
+std::string tool_args_body(const std::string& args_json)
+{
+    const auto j = nlohmann::json::parse(args_json, nullptr, false);
+    if (!j.is_discarded() && j.is_object() && j.contains("code") &&
+        j["code"].is_string()) {
+        const std::string code = j["code"].get<std::string>();
+        if (!code.empty())
+            return "args:\n" + code;
+    }
+    return "args: " + args_json;
+}
+
 struct AppState : AskHandler {
     Config& cfg;
     VoiceRegistry& voices;
@@ -844,8 +965,8 @@ struct AppState : AskHandler {
                                   ? tr.error.substr(0, 60) + "..."
                                   : tr.error;
                 }
-                ev.body = "args: " + info.args_json + "\n" +
-                          (tr.ok ? "result: " + tr.result
+                ev.body = tool_args_body(info.args_json) + "\n" +
+                          (tr.ok ? tool_result_body(tr.result)
                                  : "error: " + tr.error);
                 if (!tr.stderr_text.empty())
                     ev.body += "\nlog: " + tr.stderr_text;
@@ -1019,7 +1140,7 @@ struct AppState : AskHandler {
                         aj["action"].is_string())
                         action = aj["action"].get<std::string>();
                     tl.think_label = "\xE2\x9A\x99 " + tc.name + " \xC2\xB7 " + action;
-                    tl.thinking = "args: " + tc.arguments;
+                    tl.thinking = tool_args_body(tc.arguments);
                     lines.push_back(std::move(tl));
                 }
                 if (!m.content.empty()) {
@@ -1062,7 +1183,7 @@ struct AppState : AskHandler {
                 // Fold the result into the last tool block above it.
                 for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
                     if (it->who == "sys" && !it->think_label.empty()) {
-                        it->thinking += "\nresult: " + m.content;
+                        it->thinking += "\n" + tool_result_body(m.content);
                         break;
                     }
                 }
