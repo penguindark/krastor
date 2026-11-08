@@ -211,11 +211,11 @@ session folder** so the cleared state is persisted, matching user intent.
 
 #### Session switching (first-class)
 
-- **Quick switcher**: a combo in the top bar showing the current session
-  title; opening it lists the 10 most recent sessions (title + date) plus a
-  "+ new session" entry — one click switches. Implemented as a Nuklear combo
-  inside the main window, so it cannot ROM the UI like a child window would.
-  Hotkey **Ctrl+O** opens the full session modal; **Ctrl+Shift+O** cycles to
+- **Session button**: a top-bar button showing the current session title
+  (fitted to its column); clicking it opens the session modal below — one
+  code path for switching/deleting/renaming. The earlier quick-switcher
+  combo popup was removed (it duplicated the modal's logic).
+  Hotkey **Ctrl+O** also opens the modal; **Ctrl+Shift+O** cycles to
   the previous session (list order).
 - **Session modal** (same pattern as the Settings modal, scaled like the
   permission modal): opened from the top-bar button, Ctrl+O or `/sessions`.
@@ -242,7 +242,7 @@ session folder** so the cleared state is persisted, matching user intent.
 | **A — Store** | `session_store.{h,cpp}` + `Conversation` accessors + config keys + `--session-test` self-test |
 | **B — CLI** | auto-save, continue-last, `--session/--new-session/--list-sessions/--delete-session/--compact` flags, `/sessions /session /compact` commands |
 | **C — Compactor** | `compactor.{h,cpp}` budget + rolling summary + archive; wired to `/compact` in CLI |
-| **D — GUI** | autosave, session switching (quick-switcher popup, Ctrl+O modal, Ctrl+Shift+O cycle, shared `switch_to_session()`), session modal (list/open/new/delete/rename), title bar, slash-command parsing in the input box, GUI `/compact` worker |
+| **D — GUI** | autosave, session switching (top-bar session button -> modal, Ctrl+O modal, Ctrl+Shift+O cycle, shared `switch_to_session()`), session modal (list/open/new/delete/rename), title bar, slash-command parsing in the input box, GUI `/compact` worker |
 | **E — Polish** | docs sync (project.md Phase 7, development.md, COLD_START.md, AGENT.md, development_log.md), dual-toolchain clean, manual test pass |
 
 ## 7. Decisions & non-goals (first increment)

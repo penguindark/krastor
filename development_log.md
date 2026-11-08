@@ -1877,3 +1877,65 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   panel's bottom edge (no bottom padding) - the probe row IS the top spacer.
 - Verified by screenshot harness on both sandbox sessions (text blocks, tool
   block, 100x40 ASCII-art image block); both toolchains clean, all tests PASS.
+
+
+## 2026-11-08 - fix: Thought block collapsed on mouse release
+
+- Clicking "+ Thought" opened the block on press and closed it again on
+  release. Cause: Nuklear's `mouse.buttons[L].clicked` is a counter bumped
+  on BOTH press and release (cleared in nk_input_begin), so the chat click
+  pass gated on the raw `L->clicked` ran twice per click and toggled the
+  block twice. Same double-fire also inflated the double/triple-click
+  counter (a plain click counted as two).
+- Fix: gate the chat click pass on `L->clicked && L->down` - exactly what
+  `nk_input_is_mouse_pressed` does internally.
+- Both toolchains clean; all `--*-test` PASS.
+
+
+## 2026-11-08 - max-tokens ceiling 128000 + base-prompt/tool-awareness fixes
+
+- Settings "Max tokens" ceiling raised 32000 -> 128000 (user set 64000 in
+  state.json).
+- Diagnosed "base agent seems unaware of the tools": two config-level traps,
+  no code regression.
+  1. `bin\state.json` carried the short default English system prompt, which
+     (precedence defaults < config.jsonc < state.json) shadowed the rich
+     prompt in `config.jsonc` - a Settings Save from an instance started
+     before the config edit had persisted the stale default. Fix: removed
+     `llm.system_prompt` from state.json so config.jsonc wins again.
+  2. `llm_models.jsonc` lived only in the repo root and was found through
+     the working-directory fallback: launching with any other CWD silently
+     disabled the tool registry (supports_tools=false -> no tool schemas, no
+     tool prompt suffix). Fix: copied `llm_models.jsonc` next to the exe
+     (the lookup prefers the exe dir), making tools CWD-proof.
+
+
+## 2026-11-08 - fix: assistant reply hidden below its thought/tool panel
+
+- The block engine regression: an assistant line carrying BOTH thinking/tool
+  and text entered the panel branch, where only "you" text is painted inside
+  the panel - the final reply was never drawn (visible as a tool block with
+  a meta line but no answer).
+- Fix: after the panel's bottom padding, non-"you" text is drawn as plain
+  flow below the panel (diff lines carry no plain text, guarded on
+  `!l.text.empty()`).
+- Verified on the real "che ore sono?" session by screenshot: the reply
+  renders under the python tool block. Both toolchains clean; all tests PASS.
+
+
+## 2026-11-08 - top-bar session combo replaced by a modal button
+
+- The session dropdown combo is gone: the top bar now shows a plain button
+  with the current session title (fitted to the column with `fit_text`)
+  that opens the existing session manager modal - the same one Ctrl+O
+  toggles. Switching, deleting (with the "sure?" confirm), new and rename
+  now live in exactly one place (sessions_plan.md §5).
+- Tried first: a full-width combo popup with per-row delete buttons. Two
+  traps: `nk_layout_widget_bounds` returns the REMAINING row width (not
+  the pushed column, so the popup spanned to the window edge and clipped
+  the delete column), and the popup duplicated modal logic. Reverted in
+  favour of the modal.
+- The hit-state reset comment in `reset_chat_hit_state` updated: switches
+  now happen between frames (modal row, Ctrl+O, /session), not mid-frame
+  through a popup overlapping the chat group.
+- Both toolchains clean; all `--*-test` PASS.

@@ -948,9 +948,8 @@ struct AppState : AskHandler {
 
     // The selection and the clickable rect/hit maps index into `lines` and
     // were built while the OLD session was displayed. A session switch can
-    // happen mid-frame (the session combo popup overlaps the chat group, so
-    // its click is also seen by chat_panel's click pass, which runs before
-    // the maps are rebuilt): without this reset the stale indices point past
+    // happen between frames (session modal row, Ctrl+O cycle, /session
+    // command): without this reset the stale indices point past
     // the end of the new, shorter `lines` vector.
     void reset_chat_hit_state()
     {
@@ -2296,7 +2295,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
     nk_layout_row_dynamic(ctx, 26, 1);
     nk_property_float(ctx, "Temperature", 0.0f, &s.temperature, 2.0f, 0.05f, 0.01f);
     nk_layout_row_dynamic(ctx, 26, 1);
-    nk_property_int(ctx, "Max tokens", 1, &s.max_tokens, 32000, 64, 1.0f);
+    nk_property_int(ctx, "Max tokens", 1, &s.max_tokens, 128000, 64, 1.0f);
 
     nk_layout_row_dynamic(ctx, 18, 1);
     nk_label(ctx, "System prompt", NK_LEFT);
@@ -3280,7 +3279,11 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         // Clicks on the floating action button strip are not selection clicks.
         const bool on_fab = app.fab_rect.w > 0.0f &&
                             nk_input_is_mouse_hovering_rect(in, app.fab_rect);
-        if (L->clicked && over && !modal_blocks && !on_fab) {
+        // L->clicked is a counter bumped on BOTH press and release (cleared
+        // every frame), so the raw flag would run this pass twice per click -
+        // a Thought header would open on press and close again on release.
+        // Gate on down too: that is exactly nk_input_is_mouse_pressed.
+        if (L->clicked && L->down && over && !modal_blocks && !on_fab) {
             app.chat_focused = true;
             // A click on an image block copies it to the clipboard (like a
             // text selection copy) and is not a selection click.
@@ -3544,6 +3547,15 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                 }
                 nk_layout_row_dynamic(ctx, lay.pad_y, 1);
                 content_h += ph + block_gap;
+                // The assistant/sys reply is plain flow BELOW its thought/
+                // tool/media panel (only "you" text lives inside the panel).
+                // Diff lines carry no plain text of their own.
+                if (l.who != "you" && !l.text.empty())
+                    content_h += draw_chat_line(ctx, prefix, l.text, col,
+                                                text_w, src, &app.chat_hits,
+                                                has_sel ? &sel : nullptr,
+                                                &app.emoji) +
+                                 block_gap;
             } else if (has_text) {
                 // Plain flow: assistant/sys text (and empty placeholders).
                 content_h += draw_chat_line(ctx, prefix, l.text, col, text_w, src,
@@ -4232,27 +4244,18 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             }
             nk_layout_row_push(ctx, 0.40f);
             {
-                // One-click switch over the most recent sessions; the combo
-                // lives inside the main window, so it cannot ROM the UI the
-                // way a child window would (see the fab comment below).
-                if (nk_combo_begin_label(ctx, app.session_title.c_str(),
-                                         nk_vec2(360.0f, 280.0f))) {
-                    nk_layout_row_dynamic(ctx, 24, 1);
-                    int shown = 0;
-                    for (const auto& s : app.store.list()) {
-                        if (++shown > 10)
-                            break;
-                        const std::string item = s.title + "  -  " +
-                            (s.updated.size() >= 16 ? s.updated.substr(0, 16)
-                                                    : s.updated);
-                        if (nk_combo_item_label(ctx, item.c_str(), NK_TEXT_LEFT) &&
-                            s.id != app.session_id)
-                            app.switch_to_session(s.id);
-                    }
-                    if (nk_combo_item_label(ctx, "+ new session", NK_TEXT_LEFT))
-                        app.new_session();
-                    nk_combo_end(ctx);
-                }
+                // Current-session button: opens the session manager modal
+                // (the same one Ctrl+O toggles), so switching/deleting/
+                // renaming live in exactly one place (sessions_plan.md §5).
+                // Labels do not clip, so the title is fitted to the column.
+                const struct nk_panel* lay = ctx->current->layout;
+                const float col_w = 0.40f * nk_layout_row_calculate_usable_space(
+                    &ctx->style, lay->type, lay->bounds.w, lay->row.columns);
+                const std::string lbl = fit_text(
+                    ctx->style.font, app.session_title,
+                    col_w - 4.0f * ctx->style.button.padding.x);
+                if (nk_button_label(ctx, lbl.c_str()))
+                    app.sessions_open = true;
             }
             // Tooltips for the icon-only buttons: hover + slot rect are
             // captured here, the bubble is drawn at the end of the frame
