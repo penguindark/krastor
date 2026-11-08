@@ -90,7 +90,6 @@ struct GuiConfig {
 // marker bar is not here: it always uses the active agent's color.
 struct ColorScheme {
     std::string text = "#FFFFFF";          // default chat text
-    std::string assistant = "#82DC96";     // "Krastor: " role prefix
     std::string system = "#A0A0A0";        // "! " system/error lines
     std::string meta = "#6E6E78";          // dim stats sub-line
     std::string thinking = "#E6963C";      // "+ Thought · Ns" header

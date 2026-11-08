@@ -1813,3 +1813,43 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   harness: amber bars on every user message (783 amber px in the chat band,
   0 stray azzurro), white text on the shared grid.
 - Both toolchains clean; all `--*-test` PASS.
+
+---
+
+## 2026-11-08 - even bar-to-text spacing + assistant label removed
+
+- Request: same clean space between the user-message color bar and the text;
+  assistant replies no longer carry the agent-name label (the `Krastor: `
+  prefix is gone - the name lives in the top bar).
+- `draw_chat_line` gained an `indent` parameter (replacing `prefix_col`, no
+  longer needed): it shrinks `text_w` and shifts the drawn area right, so
+  "you" lines start at a fixed 14 px from the bar and every wrapped line
+  keeps that same gap. The chat loop passes `indent = 14` only for "you"
+  lines; the assistant prefix is now `""` for every role except "sys" (`! `).
+- `colors.assistant` became dead weight (it only colored the removed prefix):
+  dropped from `ColorScheme`, `config.cpp`, `config.example.jsonc` and the
+  AppState color members.
+- Verified with the screenshot harness (Poeta/amber): uniform bar-to-text
+  gap on user messages, replies start straight with their text.
+- Both toolchains clean; all `--*-test` PASS.
+
+
+## 2026-11-08 - crash fix: session switch via the combo (second switch)
+
+- Bug: starting in "ciao", switching to another session and back through the
+  session combo froze the app, then closed it (WER: 0xc0000409 fastfail 7 =
+  abort from an uncaught C++ exception).
+- Root cause: the combo popup overlaps the chat group, so the click that
+  picks a session is also seen by chat_panel's click pass in the SAME frame,
+  after switch_to_session already rebuilt `lines`. The click handlers use
+  the previous frame's hit maps (image_rects / thought_rects / diff_rects /
+  chat_hits) whose ChatLine indices belong to the OLD session: switching from
+  the 206-line session back to the 23-line one indexed `lines` far past the
+  end (garbage MediaRef -> huge vector copy -> freeze -> bad_alloc -> abort).
+  The first switch never crashed because the outgoing session had no images.
+- Fix: `AppState::reset_chat_hit_state()` (clears selection, chat_hits and
+  the three clickable-rect maps) is called from `rebuild_lines_from_conv`
+  and `delete_session`; the three click loops also bounds-check their index
+  as cheap insurance.
+- Both toolchains clean; all `--*-test` PASS.
+

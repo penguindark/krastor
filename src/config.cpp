@@ -101,7 +101,6 @@ void apply_json(Config& cfg, const nlohmann::json& root, bool user_only)
     if (user_only && root.contains("colors") && root["colors"].is_object()) {
         const auto& j = root["colors"];
         cfg.colors.text = j.value("text", cfg.colors.text);
-        cfg.colors.assistant = j.value("assistant", cfg.colors.assistant);
         cfg.colors.system = j.value("system", cfg.colors.system);
         cfg.colors.meta = j.value("meta", cfg.colors.meta);
         cfg.colors.thinking = j.value("thinking", cfg.colors.thinking);

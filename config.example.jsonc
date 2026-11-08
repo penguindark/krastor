@@ -47,7 +47,6 @@
   // the chat always uses the active agent's "color", it is not here.
   "colors": {
     "text": "#FFFFFF",            // default chat text
-    "assistant": "#82DC96",       // "Krastor: " role prefix
     "system": "#A0A0A0",          // "! " system lines
     "meta": "#6E6E78",            // dim stats sub-line (model - time - tok/s)
     "thinking": "#E6963C",        // "+ Thought · Ns" header
