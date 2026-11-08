@@ -94,7 +94,19 @@ struct ColorScheme {
     std::string meta = "#6E6E78";          // dim stats sub-line
     std::string thinking = "#E6963C";      // "+ Thought · Ns" header
     std::string thinking_body = "#9696A0"; // expanded thought text
+    std::string block_bg = "#16181F";      // chat block panel background
     MdPalette md;                          // markdown palette ("colors"."md_*")
+};
+
+// Chat block layout in px (config.jsonc "chat", user-owned like colors):
+// every block is [bar bar_w][bar_gap][panel: content with pad_x/pad_y
+// padding], blocks are separated by block_gap.
+struct ChatLayout {
+    float bar_w = 3.0f;      // colored left bar width
+    float bar_gap = 14.0f;   // bar -> panel horizontal gap
+    float pad_x = 12.0f;     // panel border -> text, horizontal
+    float pad_y = 10.0f;     // panel border -> text, vertical
+    float block_gap = 10.0f; // vertical gap between blocks
 };
 
 struct AgentConfig {
@@ -128,6 +140,7 @@ struct Config {
     GuiConfig gui;
     AgentConfig agent;
     ColorScheme colors;
+    ChatLayout chat;
     ToolsConfig tools;
     SessionsConfig sessions;
     // Selectable agents from config.jsonc "agents" (file order). When the

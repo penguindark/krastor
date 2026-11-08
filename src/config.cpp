@@ -106,10 +106,19 @@ void apply_json(Config& cfg, const nlohmann::json& root, bool user_only)
         cfg.colors.thinking = j.value("thinking", cfg.colors.thinking);
         cfg.colors.thinking_body =
             j.value("thinking_body", cfg.colors.thinking_body);
+        cfg.colors.block_bg = j.value("block_bg", cfg.colors.block_bg);
         // md_* keys feed the markdown palette ("md_code" -> palette "code").
         for (const auto& [k, v] : j.items())
             if (v.is_string() && k.size() > 3 && k.rfind("md_", 0) == 0)
                 cfg.colors.md.set(k.substr(3), v.get<std::string>());
+    }
+    if (user_only && root.contains("chat") && root["chat"].is_object()) {
+        const auto& j = root["chat"];
+        cfg.chat.bar_w = j.value("bar_w", cfg.chat.bar_w);
+        cfg.chat.bar_gap = j.value("bar_gap", cfg.chat.bar_gap);
+        cfg.chat.pad_x = j.value("pad_x", cfg.chat.pad_x);
+        cfg.chat.pad_y = j.value("pad_y", cfg.chat.pad_y);
+        cfg.chat.block_gap = j.value("block_gap", cfg.chat.block_gap);
     }
     if (root.contains("tools") && root["tools"].is_object()) {
         const auto& j = root["tools"];

@@ -1139,14 +1139,22 @@ int run_config_test()
     // --- colors: user-only scheme + markdown palette override -----------------
     {
         std::ofstream f(dir / "config.jsonc");
-        f << "{ \"colors\": { \"text\": \"#FF0000\", \"md_code\": \"#00FF00\" } }\n";
+        f << "{ \"colors\": { \"text\": \"#FF0000\", \"md_code\": \"#00FF00\","
+             " \"block_bg\": \"#111111\" }, \"chat\": { \"pad_x\": 20 } }\n";
     }
     { std::ofstream(dir / "state.json")
-        << "{ \"colors\": { \"text\": \"#00FF00\" } }\n"; }
+        << "{ \"colors\": { \"text\": \"#00FF00\" }, \"chat\": { \"pad_x\": 99 } }\n"; }
     cfg = krastor::Config::load((dir / "config.jsonc").string());
     check("colors parsed from config.jsonc", cfg.colors.text == "#FF0000");
     check("colors are user-only (state.json ignored)",
           cfg.colors.text == "#FF0000");
+    check("colors.block_bg parsed", cfg.colors.block_bg == "#111111");
+    check("chat layout parsed from config.jsonc", cfg.chat.pad_x == 20.0f);
+    check("chat layout is user-only (state.json ignored)",
+          cfg.chat.pad_x == 20.0f);
+    check("chat layout keeps defaults for unset keys",
+          cfg.chat.pad_y == 10.0f && cfg.chat.bar_w == 3.0f &&
+              cfg.chat.bar_gap == 14.0f && cfg.chat.block_gap == 10.0f);
     check("md_* overrides the markdown palette",
           krastor::md_to_ansi("a `b`", nullptr, cfg.colors.md)
               .find("\x1b[38;2;0;255;0m") != std::string::npos);

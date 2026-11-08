@@ -370,7 +370,7 @@ struct AppState : AskHandler {
     // User-owned like the agents map: parsed once at startup, never edited
     // at runtime, so no reload path is needed.
     struct nk_color col_text, col_system, col_meta,
-                    col_thinking, col_think_body;
+                    col_thinking, col_think_body, col_block;
     LlmConfig eff;                 // effective LLM config for the active agent
     bool tools_active = false;     // tool-usage suffix applies to the prompt
     LlmModelRegistry models;       // llm_models.jsonc (Settings model combo)
@@ -565,6 +565,7 @@ struct AppState : AskHandler {
             col_meta = hex(c.colors.meta);
             col_thinking = hex(c.colors.thinking);
             col_think_body = hex(c.colors.thinking_body);
+            col_block = hex(c.colors.block_bg);
         }
         // Agent bootstrap: effective LLM config (model_ref + thinking), the
         // composed system prompt (base + usage suffixes) and the persona
@@ -2655,7 +2656,8 @@ float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
                      const std::string& body, struct nk_color default_color,
                      float text_w, int src_line,
                      std::vector<ChatHitLine>* hits, const SelRange* sel,
-                     const EmojiAtlas* em = nullptr, float indent = 0.0f)
+                     const EmojiAtlas* em = nullptr, float indent = 0.0f,
+                     bool dry = false)
 {
     const struct nk_user_font* f = ctx->style.font;
     const float row_h = f && f->height > 0.0f ? f->height : 18.0f;
@@ -2718,6 +2720,9 @@ float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
     // Reserve the space, then draw tokens manually at absolute positions so
     // each word keeps its own color (nk_label cannot do styled runs).
     const float total_h = static_cast<float>(lines.size()) * row_h + 6.0f;
+    if (dry)
+        return total_h;  // measure-only pass: a block panel needs its height
+                         // before the first content row is drawn
     nk_layout_row_dynamic(ctx, total_h, 1);
     struct nk_rect area = nk_widget_bounds(ctx);
     area.x += indent;
@@ -2904,11 +2909,12 @@ std::vector<DiffRow> diff_rows(const nlohmann::json& diff)
 // the header rect is recorded into `rects` so a click can toggle it.
 float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
                       int src_line, const EmojiAtlas* em,
-                      std::vector<std::pair<int, struct nk_rect>>* rects)
+                      std::vector<std::pair<int, struct nk_rect>>* rects,
+                      float indent = 0.0f, bool dry = false)
 {
     const struct nk_user_font* f = ctx->style.font;
     const float row_h = f && f->height > 0.0f ? f->height : 18.0f;
-    text_w = text_w < 40.0f ? 40.0f : text_w;
+    const float inner_w = (text_w < 40.0f ? 40.0f : text_w) - indent;
 
     // Keep at most the last two path components so the header stays short.
     std::string path = l.diff_path;
@@ -2925,17 +2931,19 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
         std::to_string(l.diff_removed) + "\x1b[0m";
     float total = draw_chat_line(ctx, "\xE2\x86\x90 ", head,
                                  nk_rgb(230, 150, 60), text_w, -1, nullptr,
-                                 nullptr, em);
-    rects->push_back({src_line, nk_widget_bounds(ctx)});
-    if (!l.diff_open || !l.diff.is_object() || !l.diff.contains("ops") ||
-        !l.diff["ops"].is_array())
+                                 nullptr, em, indent, dry);
+    if (!dry)
+        rects->push_back({src_line, nk_widget_bounds(ctx)});
+    const bool open = l.diff_open && l.diff.is_object() &&
+                      l.diff.contains("ops") && l.diff["ops"].is_array();
+    if (!open)
         return total;
 
     const auto rows = diff_rows(l.diff);
-    const bool side = text_w >= 640.0f;
+    const bool side = inner_w >= 640.0f;
     const float gutter = 4.0f * text_w_px(f, "0", 1) + 6.0f;
     const float gap_w = 10.0f;
-    const float pane_w = side ? (text_w - gap_w) / 2.0f : text_w;
+    const float pane_w = side ? (inner_w - gap_w) / 2.0f : inner_w;
     const struct nk_color c_ctx = nk_rgb(170, 170, 175);
     const struct nk_color c_del = nk_rgb(246, 142, 142);
     const struct nk_color c_add = nk_rgb(140, 227, 158);
@@ -2944,11 +2952,32 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
     const struct nk_color bg_add = nk_rgba(24, 84, 44, 120);
     constexpr int kMaxViewRows = 240;
 
+    if (dry) {  // measure: one row_h per display row, same counting rules
+        int shown = 0;
+        for (const auto& r : rows) {
+            if (shown >= kMaxViewRows) {
+                total += row_h;  // the "... N more lines" note
+                break;
+            }
+            ++shown;
+            if (r.gap || side) {
+                total += row_h;
+                continue;
+            }
+            total += row_h * ((r.kind == '-' || r.kind == '~' ? 1 : 0) +
+                              (r.kind == '+' || r.kind == '~' ? 1 : 0) +
+                              (r.kind == ' ' ? 1 : 0));
+        }
+        if (l.diff.value("truncated", false))
+            total += row_h;
+        return total;
+    }
+
     struct nk_command_buffer* cv = nk_window_get_canvas(ctx);
     auto dim_note = [&](const std::string& s) {
         nk_layout_row_dynamic(ctx, row_h, 1);
         const struct nk_rect a = nk_widget_bounds(ctx);
-        draw_token_mixed(cv, a.x + 6, a.y, row_h, s, f, c_num, em);
+        draw_token_mixed(cv, a.x + indent + 6, a.y, row_h, s, f, c_num, em);
         total += row_h;
     };
     // Unified row: mark + dim line number + clipped text on a full-width bg.
@@ -2956,16 +2985,17 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
                        struct nk_color fg, struct nk_color bg) {
         nk_layout_row_dynamic(ctx, row_h, 1);
         const struct nk_rect a = nk_widget_bounds(ctx);
+        const float ax = a.x + indent;
         if (bg.a)
-            fill_px(cv, a.x, a.y, text_w, row_h, bg);
+            fill_px(cv, ax, a.y, inner_w, row_h, bg);
         const std::string ns = no ? std::to_string(no) : std::string();
         const float nw = text_w_px(f, ns.data(), (int)ns.size());
-        draw_token_mixed(cv, a.x + 2, a.y, row_h, std::string(1, mark), f, fg,
+        draw_token_mixed(cv, ax + 2, a.y, row_h, std::string(1, mark), f, fg,
                          em);
-        draw_token_mixed(cv, a.x + 18 + gutter - nw, a.y, row_h, ns, f, c_num,
+        draw_token_mixed(cv, ax + 18 + gutter - nw, a.y, row_h, ns, f, c_num,
                          em);
-        draw_token_mixed(cv, a.x + 18 + gutter, a.y, row_h,
-                         clip_line_w(f, text, text_w - gutter - 24), f, fg, em);
+        draw_token_mixed(cv, ax + 18 + gutter, a.y, row_h,
+                         clip_line_w(f, text, inner_w - gutter - 24), f, fg, em);
         total += row_h;
     };
 
@@ -2993,20 +3023,21 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
         }
         nk_layout_row_dynamic(ctx, row_h, 1);
         const struct nk_rect a = nk_widget_bounds(ctx);
-        const float rx = a.x + pane_w + gap_w;
+        const float ax = a.x + indent;
+        const float rx = ax + pane_w + gap_w;
         if (r.kind == '-' || r.kind == '~')
-            fill_px(cv, a.x, a.y, pane_w, row_h, bg_del);
+            fill_px(cv, ax, a.y, pane_w, row_h, bg_del);
         if (r.kind == '+' || r.kind == '~')
             fill_px(cv, rx, a.y, pane_w, row_h, bg_add);
         const std::string ons = r.old_no ? std::to_string(r.old_no) : "";
         const std::string nns = r.new_no ? std::to_string(r.new_no) : "";
-        draw_token_mixed(cv, a.x + gutter - 6 -
+        draw_token_mixed(cv, ax + gutter - 6 -
                                  text_w_px(f, ons.data(), (int)ons.size()),
                          a.y, row_h, ons, f, c_num, em);
         draw_token_mixed(cv, rx + gutter - 6 -
                                  text_w_px(f, nns.data(), (int)nns.size()),
                          a.y, row_h, nns, f, c_num, em);
-        draw_token_mixed(cv, a.x + gutter, a.y, row_h,
+        draw_token_mixed(cv, ax + gutter, a.y, row_h,
                          clip_line_w(f, r.old_text, pane_w - gutter - 6), f,
                          (r.kind == '-' || r.kind == '~') ? c_del : c_ctx, em);
         draw_token_mixed(cv, rx + gutter, a.y, row_h,
@@ -3103,18 +3134,23 @@ void media_ensure_loaded(AppState& app, const MediaRef& m)
 // the click-to-copy handler (rects are from the previous frame, like the
 // Thought headers).
 float draw_media_image(nk_context* ctx, AppState& app, const MediaRef& m,
-                       float text_w, float max_h, int src_line)
+                       float text_w, float max_h, int src_line,
+                       float indent = 0.0f, bool dry = false)
 {
     media_ensure_loaded(app, m);
     if (m->failed)
         return draw_chat_line(ctx, "! ", "image failed (" + m->error +
                                              "): " + m->src,
                               nk_rgb(235, 110, 110), text_w, -1, nullptr,
-                              nullptr, &app.emoji);
+                              nullptr, &app.emoji, indent, dry);
     float w = 0.0f, h = 0.0f;
-    media_fit(*m, text_w, max_h, w, h);
+    media_fit(*m, (text_w < 40.0f ? 40.0f : text_w) - indent, max_h, w, h);
+    if (dry)
+        return h + 4.0f;
     nk_layout_row_dynamic(ctx, h + 4.0f, 1);
-    const struct nk_rect slot = nk_widget_bounds(ctx);
+    struct nk_rect slot = nk_widget_bounds(ctx);
+    slot.x += indent;
+    slot.w -= indent;
     const struct nk_image img =
         atlas_image(m->tex, m->nat_w, m->nat_h, 0, 0, m->nat_w, m->nat_h);
     const struct nk_rect drawn = nk_rect(slot.x, slot.y, w, h);
@@ -3127,15 +3163,20 @@ float draw_media_image(nk_context* ctx, AppState& app, const MediaRef& m,
 // progress bar. Clicks never push chat lines (the chat loop is iterating):
 // playback errors land in the block and show in its label.
 float draw_media_sound(nk_context* ctx, AppState& app, const MediaRef& m,
-                       float text_w)
+                       float text_w, float indent = 0.0f, bool dry = false)
 {
     const float h = ctx->style.font->height + 8.0f;
+    if (dry)
+        return h;
     const bool active = app.player.playing_src(m->src);
-    nk_layout_row_begin(ctx, NK_DYNAMIC, h, 3);
-    nk_layout_row_push(ctx, 0.18f);
+    // Static columns so the row can start at `indent` (inside a block panel).
+    const float avail = (text_w < 40.0f ? 40.0f : text_w) - indent;
+    nk_layout_row_begin(ctx, NK_STATIC, h, 4);
+    nk_layout_row_push(ctx, indent < 0.0f ? 0.0f : indent);
+    nk_layout_row_push(ctx, 0.18f * avail);
     const bool clicked = button_icon(ctx, app.icons, active ? "square" : "play",
                                      active ? "Stop" : "Play");
-    nk_layout_row_push(ctx, 0.47f);
+    nk_layout_row_push(ctx, 0.47f * avail);
     std::string label = m->label;
     if (!m->error.empty())
         label = m->label + " - " + m->error;
@@ -3146,9 +3187,9 @@ float draw_media_sound(nk_context* ctx, AppState& app, const MediaRef& m,
         label += t;
     }
     nk_label_colored(ctx,
-                     fit_text(ctx->style.font, label, 0.47f * text_w).c_str(),
+                     fit_text(ctx->style.font, label, 0.47f * avail).c_str(),
                      NK_LEFT, nk_rgb(200, 200, 205));
-    nk_layout_row_push(ctx, 0.35f);
+    nk_layout_row_push(ctx, 0.35f * avail);
     const double dur = active ? app.player.duration_s() : 0.0;
     nk_size cur = 0, max = 100;
     if (dur > 0.0)
@@ -3385,68 +3426,130 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
         app.thought_rects.clear();
         app.diff_rects.clear();
         app.image_rects.clear();
-        // User-message agent bars are painted after nk_group_end: the marker
-        // lives in the group's left padding, outside the group's clip rect.
-        std::vector<std::pair<struct nk_rect, struct nk_color>> you_bars;
+        // Block scheme (opencode): every block is [bar bar_w][bar_gap][panel],
+        // the panel holds its content with pad_x/pad_y inner padding and blocks
+        // are separated by block_gap. "you" wears the agent color, tool/thought/
+        // diff/media the dim meta gray; assistant/sys text stays plain. The
+        // panel background is painted BEFORE the content rows (painter's
+        // order), so each block's height is measured first with dry passes.
+        const ChatLayout& lay = app.cfg.chat;
+        const float block_gap = lay.block_gap > 0.0f ? lay.block_gap : spacing;
+        const float indent_in = lay.bar_w + lay.bar_gap + lay.pad_x;
+        auto thought_head = [](const ChatLine& c) {
+            std::string head = std::string(c.thought_open ? "- " : "+ ") +
+                               (c.think_label.empty() ? "Thought"
+                                                      : c.think_label);
+            if (!c.think_meta.empty())
+                head += " \xC2\xB7 " + c.think_meta;
+            return head;
+        };
         // Images are always contained inside the chat text area: the max
         // block height is the visible group height (no scroll needed to see
         // a whole image), the max width is text_w (media_fit does the rest).
-        const float media_max_h =
-            height - 2.0f * ctx->style.window.padding.y - 8.0f;
+        const float media_max_h = height - 2.0f * ctx->style.window.padding.y -
+                                  8.0f - 2.0f * lay.pad_y;
         for (const auto& l : app.lines) {
             // No role prefix on the assistant: the reply starts straight with
-            // its text (the agent name lives in the top bar). "you" lines are
-            // marked by the agent-color bar in the left margin and indented
-            // away from it; "sys" lines keep the "! " marker.
+            // its text (the agent name lives in the top bar). "sys" lines keep
+            // the "! " marker.
             const std::string prefix = l.who == "sys" ? "! " : "";
             const struct nk_color col =
                 l.who == "sys" ? app.col_system : app.col_text;
-            const float indent = l.who == "you" ? 14.0f : 0.0f;
-            const struct nk_color bar_col = nk_rgb(l.bar_r, l.bar_g, l.bar_b);
-            // File-edit diff (files edit/write): its own collapsible block,
-            // no plain text row of its own.
+            const struct nk_color bar_col =
+                l.who == "you" ? nk_rgb(l.bar_r, l.bar_g, l.bar_b)
+                               : app.col_meta;
+            const bool has_text =
+                !l.text.empty() || (l.thinking.empty() && !l.media);
+            // ---- measure the panel content (dry: no layout, no drawing) ----
+            bool panel = false;
+            float inner_h = 0.0f;
             if (!l.diff.is_null()) {
-                content_h += draw_diff_block(ctx, l, text_w, src, &app.emoji,
-                                             &app.diff_rects) +
-                             spacing;
-                ++src;
-                continue;
+                panel = true;
+                inner_h += draw_diff_block(ctx, l, text_w, src, &app.emoji,
+                                           &app.diff_rects, indent_in, true);
             }
-            // Collapsible block (opencode-style "Thought · Ns"; tool calls
-            // reuse it with a "⚙ tool · action" label).
-            if (!l.thinking.empty()) {
-                std::string head = std::string(l.thought_open ? "- " : "+ ") +
-                                   (l.think_label.empty() ? "Thought"
-                                                          : l.think_label);
-                if (!l.think_meta.empty())
-                    head += " \xC2\xB7 " + l.think_meta;
-                content_h += draw_chat_line(ctx, "", head, app.col_thinking,
-                                            text_w, -1, nullptr, nullptr,
-                                            &app.emoji) +
-                             spacing;
-                app.thought_rects.push_back({src, nk_widget_bounds(ctx)});
-                if (l.thought_open)
-                    content_h += draw_chat_line(
-                        ctx, "  \xE2\x94\x82 ", l.thinking, app.col_think_body,
-                        text_w, -1, nullptr, nullptr, &app.emoji) +
-                                 spacing;
+            else {
+                if (!l.thinking.empty()) {
+                    panel = true;
+                    inner_h += draw_chat_line(ctx, "", thought_head(l),
+                                              app.col_thinking, text_w, -1,
+                                              nullptr, nullptr, &app.emoji,
+                                              indent_in, true);
+                    if (l.thought_open)
+                        inner_h += draw_chat_line(
+                            ctx, "  \xE2\x94\x82 ", l.thinking,
+                            app.col_think_body, text_w, -1, nullptr, nullptr,
+                            &app.emoji, indent_in, true);
+                }
+                if (l.media) {
+                    panel = true;
+                    inner_h += l.media->kind == MediaBlock::Kind::Image
+                                   ? draw_media_image(ctx, app, l.media, text_w,
+                                                      media_max_h, src,
+                                                      indent_in, true)
+                                   : draw_media_sound(ctx, app, l.media, text_w,
+                                                      indent_in, true);
+                }
+                if (l.who == "you" && has_text) {
+                    panel = true;
+                    inner_h += draw_chat_line(ctx, "", l.text, app.col_text,
+                                              text_w, src, nullptr, nullptr,
+                                              &app.emoji, indent_in, true);
+                }
             }
-            // Media blocks (image/sound) get their own row in the flow.
-            if (l.media)
-                content_h +=
-                    (l.media->kind == MediaBlock::Kind::Image
-                         ? draw_media_image(ctx, app, l.media, text_w,
-                                            media_max_h, src)
-                         : draw_media_sound(ctx, app, l.media, text_w)) +
-                    spacing;
-            // Pure tool blocks carry no text line of their own.
-            if (!l.text.empty() || (l.thinking.empty() && !l.media)) {
+            if (panel) {
+                // The top padding row doubles as the probe: its slot is the
+                // block's top-left corner, so the panel rect is known before
+                // any content row is drawn (painter's order needs the panel
+                // background below the text).
+                nk_layout_row_dynamic(ctx, lay.pad_y, 1);
+                const struct nk_rect probe = nk_widget_bounds(ctx);
+                const float px = probe.x + lay.bar_w + lay.bar_gap;
+                const float pw = probe.w - lay.bar_w - lay.bar_gap;
+                const float ph = inner_h + 2.0f * lay.pad_y;
+                struct nk_command_buffer* cv = &ctx->current->buffer;
+                nk_fill_rect(cv, nk_rect(px, probe.y, pw, ph), 4.0f,
+                             app.col_block);
+                nk_fill_rect(cv, nk_rect(probe.x, probe.y + 2.0f, lay.bar_w,
+                                         ph - 4.0f), 0.0f, bar_col);
+                if (!l.diff.is_null()) {
+                    draw_diff_block(ctx, l, text_w, src, &app.emoji,
+                                    &app.diff_rects, indent_in, false);
+                }
+                else {
+                    if (!l.thinking.empty()) {
+                        draw_chat_line(ctx, "", thought_head(l),
+                                       app.col_thinking, text_w, -1, nullptr,
+                                       nullptr, &app.emoji, indent_in);
+                        app.thought_rects.push_back({src, nk_widget_bounds(ctx)});
+                        if (l.thought_open)
+                            draw_chat_line(
+                                ctx, "  \xE2\x94\x82 ", l.thinking,
+                                app.col_think_body, text_w, -1, nullptr,
+                                nullptr, &app.emoji, indent_in);
+                    }
+                    if (l.media) {
+                        if (l.media->kind == MediaBlock::Kind::Image)
+                            draw_media_image(ctx, app, l.media, text_w,
+                                             media_max_h, src, indent_in);
+                        else
+                            draw_media_sound(ctx, app, l.media, text_w,
+                                             indent_in);
+                    }
+                    if (l.who == "you" && has_text)
+                        draw_chat_line(ctx, "", l.text, app.col_text, text_w,
+                                       src, &app.chat_hits,
+                                       has_sel ? &sel : nullptr, &app.emoji,
+                                       indent_in);
+                }
+                nk_layout_row_dynamic(ctx, lay.pad_y, 1);
+                content_h += ph + block_gap;
+            } else if (has_text) {
+                // Plain flow: assistant/sys text (and empty placeholders).
                 content_h += draw_chat_line(ctx, prefix, l.text, col, text_w, src,
                                             &app.chat_hits, has_sel ? &sel : nullptr,
-                                            &app.emoji, indent) +
-                             spacing;
-                if (l.who == "you")
-                    you_bars.push_back({nk_widget_bounds(ctx), bar_col});
+                                            &app.emoji) +
+                             block_gap;
             }
             // Dim stats sub-line under the reply (model - time - tok/s).
             if (!l.meta.empty())
@@ -3454,7 +3557,7 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                                             app.col_meta, text_w,
                                             -1, nullptr, nullptr,
                                             &app.emoji) +
-                             spacing;
+                             block_gap;
             ++src;
         }
         // opencode-style block cursor: while the LLM thinks, a blinking █
@@ -3512,25 +3615,6 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
             nk_group_set_scroll(ctx, "##chat", 0, (nk_uint)bottom);
         }
         nk_group_end(ctx);
-        // User-message agent bars, now on the main window's clip (the group's
-        // own clip would cut the marker in the left padding). Clamped to the
-        // group's visible rect so a scrolled-out message paints nothing over
-        // the top bar or the input box.
-        {
-            struct nk_command_buffer* cv = nk_window_get_canvas(ctx);
-            for (const auto& b : you_bars) {
-                // The scissor after nk_group_end still starts at the group's
-                // left bound, so the marker hugs gb.x: a few px left of the
-                // text, outside the character grid (opencode style).
-                float x0 = b.first.x - 9.0f;
-                if (x0 < gb.x) x0 = gb.x;
-                float y0 = b.first.y + 2.0f, y1 = b.first.y + b.first.h - 2.0f;
-                if (y0 < gb.y) y0 = gb.y;
-                if (y1 > gb.y + gb.h) y1 = gb.y + gb.h;
-                if (y1 > y0)
-                    fill_px(cv, x0, y0, 3.0f, y1 - y0, b.second);
-            }
-        }
         // Post-end bookkeeping on the persistent offset:
         // - clamp any overshoot (Nuklear's own clamp stops working once the
         //   scrollbar auto-hides) so it can never be rendered;

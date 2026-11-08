@@ -51,6 +51,7 @@
     "meta": "#6E6E78",            // dim stats sub-line (model - time - tok/s)
     "thinking": "#E6963C",        // "+ Thought · Ns" header
     "thinking_body": "#9696A0",   // expanded thought text
+    "block_bg": "#16181F",        // chat block panel background (user/tool/thought/media)
     // Markdown palette (headings, lists, code, tables):
     "md_h1": "#609BFF",           // # heading
     "md_h2": "#56C7D9",           // ## and deeper headings
@@ -62,6 +63,17 @@
     "md_code_bg": "#262830",      // `inline code` background
     "md_block_bg": "#181A21",     // fenced code block background
     "md_table_head": "#C678DD"    // table header row text
+  },
+
+  // Chat block layout in px, user-owned like colors. Every block is
+  // [barra bar_w][bar_gap][pannello col contenuto rientrato di pad_x/pad_y],
+  // i blocchi sono separati verticalmente da block_gap.
+  "chat": {
+    "bar_w": 3.0,                 // width of the colored left bar
+    "bar_gap": 14.0,              // bar -> panel horizontal gap
+    "pad_x": 12.0,                // panel border -> text, horizontal
+    "pad_y": 10.0,                // panel border -> text, vertical
+    "block_gap": 10.0             // vertical gap between blocks
   },
 
   "tts": {

@@ -1853,3 +1853,27 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   as cheap insurance.
 - Both toolchains clean; all `--*-test` PASS.
 
+
+
+## 2026-11-08 - chat block scheme (opencode-style panels)
+
+- Every chat block is now `[bar bar_w][bar_gap][panel block_bg + pad_x/pad_y]`
+  with `block_gap` between blocks - all configurable in the new user-owned
+  `chat` section of config.jsonc; `colors.block_bg` added (default #16181F).
+- Mapping: "you" = agent-color bar + panel; tool/thought/diff/media = meta-gray
+  bar + panel (images and the sound player live inside their panels too, so a
+  future video player slots into the same container); assistant replies and sys
+  lines stay plain (faithful to opencode).
+- Engine: the panel background must precede the content rows (painter's order),
+  so block heights are measured with dry passes - `draw_chat_line`,
+  `draw_diff_block`, `draw_media_image` and `draw_media_sound` gained
+  `indent` + `dry` parameters (dry = measure only). The top padding row
+  doubles as the layout probe that anchors the panel rect. The old post-group
+  `you_bars` painting hack is gone: bars are inside the group clip now and
+  scroll naturally.
+- The sound player row switched from ratio columns to static columns so it can
+  start at the panel's inner indent.
+- Fixed while verifying: a duplicated top-padding row pushed block text to the
+  panel's bottom edge (no bottom padding) - the probe row IS the top spacer.
+- Verified by screenshot harness on both sandbox sessions (text blocks, tool
+  block, 100x40 ASCII-art image block); both toolchains clean, all tests PASS.
