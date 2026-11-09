@@ -1319,7 +1319,10 @@ struct AppState : AskHandler {
                     // Same media-token split as live replies: restored
                     // sessions re-render their image/sound blocks (base64
                     // tokens are self-contained; file paths need the file).
+                    // Control tokens are live-only: skipped on restore.
                     for (auto& s : split_media_tokens(m.content)) {
+                        if (s.action != MediaSegment::None)
+                            continue;
                         if (s.media) {
                             ChatLine ml{"krastor", ""};
                             ml.media = std::move(s.media);
@@ -1897,14 +1900,34 @@ struct AppState : AskHandler {
                 // Media tokens ([image: ...] / [sound: ...] on their own
                 // line) split the reply into ordered text/media chat lines;
                 // the tokens never reach markdown formatting or the TTS.
+                // Control tokens ([sound: stop] / [sound: pause]) act on the
+                // player and leave no line behind.
                 auto segs = split_media_tokens(reply.content);
                 std::vector<ChatLine> out;
                 std::string speak_text;
                 size_t first_text = static_cast<size_t>(-1);
                 for (auto& s : segs) {
+                    if (s.action == MediaSegment::StopSound) {
+                        player.stop();
+                        continue;
+                    }
+                    if (s.action == MediaSegment::PauseSound) {
+                        player.pause();
+                        continue;
+                    }
                     if (s.media) {
                         ChatLine ml{"krastor", ""};
                         ml.media = std::move(s.media);
+                        // Music player: a sound shown by the model starts
+                        // right away (gui.media_autoplay); restored sessions
+                        // never autoplay (see the load path).
+                        if (cfg.gui.media_autoplay &&
+                            ml.media->kind == MediaBlock::Kind::Sound) {
+                            std::string err;
+                            if (!play_block(*ml.media, err))
+                                ml.media->error =
+                                    err.empty() ? "no audio output device" : err;
+                        }
                         out.push_back(std::move(ml));
                     } else {
                         if (first_text == static_cast<size_t>(-1))
@@ -3552,9 +3575,20 @@ float draw_media_image(nk_context* ctx, AppState& app, const MediaRef& m,
     return h + 4.0f;
 }
 
-// Sound block: mini player row - Play/Stop button, name (+progress text),
-// progress bar. Clicks never push chat lines (the chat loop is iterating):
-// playback errors land in the block and show in its label.
+// seconds -> "m:ss" for the player label.
+static std::string fmt_mmss(double s)
+{
+    if (s < 0.0)
+        s = 0.0;
+    const int t = (int)(s + 0.5);
+    char b[16];
+    std::snprintf(b, sizeof(b), "%d:%02d", t / 60, t % 60);
+    return b;
+}
+
+// Music/sound player block: play-pause + stop, seekable progress bar and a
+// volume slider (player-wide state). Clicks never push chat lines (the chat
+// loop is iterating): playback errors land in the block and show in its label.
 float draw_media_sound(nk_context* ctx, AppState& app, const MediaRef& m,
                        float text_w, float indent = 0.0f, bool dry = false)
 {
@@ -3562,37 +3596,67 @@ float draw_media_sound(nk_context* ctx, AppState& app, const MediaRef& m,
     if (dry)
         return h;
     const bool active = app.player.playing_src(m->src);
-    // Static columns so the row can start at `indent` (inside a block panel).
-    const float avail = (text_w < 40.0f ? 40.0f : text_w) - indent;
-    nk_layout_row_begin(ctx, NK_STATIC, h, 4);
+    const bool paused = app.player.paused_src(m->src);
+    const bool loaded = active || paused;
+    // Static columns so the row can start at `indent` (inside a block
+    // panel): the indent slot needs a real spacer widget - nk_layout_row_push
+    // only sets the NEXT widget's width, so two pushes in a row would just
+    // overwrite each other. Nuklear also inserts window.spacing.x between
+    // every pair of widgets, so the four gaps must come off the available
+    // width or the row overflows and the volume slider gets clipped.
+    const float gap = ctx->style.window.spacing.x;
+    float avail = text_w - indent - 4.0f * gap;
+    if (avail < 240.0f)
+        avail = 240.0f;  // narrow window: overflow beats a negative label
+    const float btn_w = ctx->style.font->height * 1.6f;
+    const float vol_w = 0.12f * avail;
+    const float prog_w = 0.34f * avail;
+    const float lbl_w = avail - btn_w - vol_w - prog_w;
+    nk_layout_row_begin(ctx, NK_STATIC, h, 5);
     nk_layout_row_push(ctx, indent < 0.0f ? 0.0f : indent);
-    nk_layout_row_push(ctx, 0.18f * avail);
-    const bool clicked = button_icon(ctx, app.icons, active ? "square" : "play",
-                                     active ? "Stop" : "Play");
-    nk_layout_row_push(ctx, 0.47f * avail);
+    nk_spacer(ctx);
+    nk_layout_row_push(ctx, btn_w);
+    // One button for the transport: play starts, pause halts keeping the
+    // position, the same button resumes. No stop button: pause is enough
+    // (starting another sound replaces this one, [sound: stop] still works
+    // for the agent). Icon-only: button_icon would also draw its text label.
+    const bool pp = button_icon_only(ctx, app.icons, active ? "pause" : "play",
+                                     active ? "||" : ">");
+    nk_layout_row_push(ctx, lbl_w);
     std::string label = m->label;
     if (!m->error.empty())
-        label = m->label + " - " + m->error;
-    else if (active) {
-        char t[48];
-        std::snprintf(t, sizeof(t), "  %.0f / %.0fs", app.player.position_s(),
-                      app.player.duration_s());
-        label += t;
-    }
-    nk_label_colored(ctx,
-                     fit_text(ctx->style.font, label, 0.47f * avail).c_str(),
-                     NK_LEFT, nk_rgb(200, 200, 205));
-    nk_layout_row_push(ctx, 0.35f * avail);
-    const double dur = active ? app.player.duration_s() : 0.0;
-    nk_size cur = 0, max = 100;
+        label = m->error;  // the error alone: "name - error" gets truncated
+    else if (loaded)
+        label += "  " + fmt_mmss(app.player.position_s()) + " / " +
+                 fmt_mmss(app.player.duration_s());
+    // NK_TEXT_LEFT (not NK_LEFT): includes ALIGN_MIDDLE, so the text sits
+    // on the icon's center line instead of the top of the row.
+    nk_label_colored(ctx, fit_text(ctx->style.font, label, lbl_w).c_str(),
+                     NK_TEXT_LEFT,
+                     m->error.empty() ? nk_rgb(200, 200, 205)
+                                      : nk_rgb(240, 130, 115));
+    nk_layout_row_push(ctx, prog_w);
+    const double dur = loaded ? app.player.duration_s() : 0.0;
+    nk_size cur = 0, max = 1000;
     if (dur > 0.0)
-        cur = (nk_size)(app.player.position_s() / dur * 100.0);
-    nk_progress(ctx, &cur, max, nk_false);
+        cur = (nk_size)(app.player.position_s() / dur * 1000.0);
+    // Interactive only while a track is loaded: dragging the bar seeks.
+    const bool seeked = nk_progress(ctx, &cur, max,
+                                    loaded ? nk_true : nk_false) != 0;
+    nk_layout_row_push(ctx, vol_w);
+    float vol = app.player.volume();
+    const bool volled = nk_slider_float(ctx, 0.0f, &vol, 1.0f, 0.01f) != 0;
     nk_layout_row_end(ctx);
-    if (clicked) {
-        if (active) {
-            app.player.stop();
-        } else {
+    if (seeked && dur > 0.0)
+        app.player.seek((double)cur / 1000.0 * dur);
+    if (volled)
+        app.player.set_volume(vol);
+    if (pp) {
+        if (active)
+            app.player.pause();
+        else if (paused)
+            app.player.resume();
+        else {
             m->error.clear();
             std::string err;
             if (!app.play_block(*m, err))
@@ -5388,6 +5452,74 @@ int run_gui_stack_test()
     click_at(50, 550);
     click_at(400, 250);
     check(hits == 3, "modal keeps responding after repeated base clicks");
+
+    // ---- media player row shape: buttons must get clicks even with the
+    // interactive progress bar and the volume slider in the same row, and
+    // inside a scrolled group with the raw nk_do_button path (button_icon_only) ----
+    {
+        int pp = 0;
+        struct nk_rect pp_rect = {0, 0, 0, 0};
+        auto media_frame = [&]() {
+            nk_begin(&ctx, "MediaRow", nk_rect(0, 0, 800, 200),
+                     NK_WINDOW_BACKGROUND);
+            nk_layout_row_dynamic(&ctx, 180, 1);
+            if (!nk_group_begin(&ctx, "##media_chat", NK_WINDOW_BORDER)) {
+                nk_group_end(&ctx);
+                nk_end(&ctx);
+                nk_clear(&ctx);
+                return;
+            }
+            nk_layout_row_begin(&ctx, NK_STATIC, 26.0f, 5);
+            // indent slot: a real spacer widget (a bare row_push would be
+            // overwritten by the next push) - same as draw_media_sound.
+            nk_layout_row_push(&ctx, 20.0f);
+            nk_spacer(&ctx);
+            nk_layout_row_push(&ctx, 34.0f);
+            // nk_widget_bounds PEEKS the next slot: capture before the button.
+            pp_rect = nk_widget_bounds(&ctx);
+            // Same path as button_icon(): manual slot + nk_do_button.
+            {
+                struct nk_rect slot;
+                nk_panel_alloc_space(&slot, &ctx);
+                nk_flags st = 0;
+                struct nk_rect content;
+                if (nk_do_button(&st, &ctx.current->buffer, slot,
+                                 &ctx.style.button, &ctx.input,
+                                 NK_BUTTON_DEFAULT, &content))
+                    ++pp;
+            }
+            nk_layout_row_push(&ctx, 250.0f);
+            nk_label(&ctx, "song.mp3  0:10 / 3:30", NK_TEXT_LEFT);
+            nk_layout_row_push(&ctx, 150.0f);
+            nk_size cur = 100, max = 1000;
+            nk_progress(&ctx, &cur, max, nk_true);
+            nk_layout_row_push(&ctx, 60.0f);
+            float vol = 1.0f;
+            nk_slider_float(&ctx, 0.0f, &vol, 1.0f, 0.01f);
+            nk_layout_row_end(&ctx);
+            nk_group_end(&ctx);
+            nk_end(&ctx);
+            nk_clear(&ctx);
+        };
+        media_frame();  // one frame to lay out and capture the button rect
+        const int px = (int)(pp_rect.x + pp_rect.w / 2.0f);
+        const int py = (int)(pp_rect.y + pp_rect.h / 2.0f);
+        nk_input_begin(&ctx);
+        nk_input_motion(&ctx, px, py);
+        nk_input_button(&ctx, NK_BUTTON_LEFT, px, py, nk_true);
+        nk_input_end(&ctx);
+        media_frame();
+        nk_input_begin(&ctx);
+        nk_input_motion(&ctx, px, py);
+        nk_input_button(&ctx, NK_BUTTON_LEFT, px, py, nk_false);
+        nk_input_end(&ctx);
+        media_frame();
+        std::printf("  media row play rect=%.0f,%.0f,%.0f,%.0f click at %d,%d -> pp=%d\n",
+                    pp_rect.x, pp_rect.y, pp_rect.w, pp_rect.h, px, py, pp);
+        check(pp == 1, "media row: play button gets the click");
+        // indent slot (spacer 20 + one gap) must shift the first button.
+        check(pp_rect.x > 25.0f, "media row: indent slot is honored");
+    }
 
     nk_free(&ctx);
     std::printf("gui-test: %d failed - %s\n", failed, failed ? "FAIL" : "PASS");

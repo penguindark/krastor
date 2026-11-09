@@ -1041,6 +1041,18 @@ int run_media_test()
     check("split text 4", segs.size() == 5 && segs[4].text == "after");
     const auto plain = split_media_tokens("no media here");
     check("split plain", plain.size() == 1 && plain[0].text == "no media here");
+
+    // ---- player control tokens ([sound: stop] / [sound: pause]) ----
+    const auto ctl = split_media_tokens(
+        "one\n[sound: stop]\ntwo\n[sound: pause]\n[sound: real.wav]");
+    check("control tokens are actions, not blocks",
+          ctl.size() == 5 && !ctl[1].media && !ctl[3].media &&
+              ctl[1].action == MediaSegment::StopSound &&
+              ctl[3].action == MediaSegment::PauseSound,
+          std::to_string(ctl.size()));
+    check("real sound stays a block",
+          ctl.size() == 5 && ctl[4].media &&
+              ctl[4].media->src == "real.wav");
     std::string speak;
     for (const auto& s : split_media_tokens("l1\n[image: a.png]\nl2")) {
         if (s.media)
@@ -1295,6 +1307,7 @@ int run_config_test()
     }
     krastor::Config c4 = krastor::Config::load((dir / "config.jsonc").string());
     check("gui.history_size parses from config.jsonc", c4.gui.history_size == 7);
+    check("gui.media_autoplay defaults to on", c4.gui.media_autoplay);
     c4.gui.font_size = 30;
     c4.gui.history_size = 42;
     const std::string sp = (dir / "state2.json").string();

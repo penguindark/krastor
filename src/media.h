@@ -7,7 +7,9 @@
 // The LLM triggers blocks with a dedicated line in its reply:
 //   [image: <src> | <width> | <height>]   (sizes optional, "-" = auto)
 //   [sound: <src>]
-// and the user with the /image and /play slash commands (see gui.cpp).
+// plus two player control tokens that run an action instead of showing a
+// block: [sound: stop] and [sound: pause]. The user triggers sounds with the
+// /image and /play slash commands (see gui.cpp).
 //
 // SoundPlayer decodes audio files (WAV/MP3/FLAC/OGG via miniaudio's decoder)
 // or raw PCM buffers and plays them on a dedicated output device, separate
@@ -50,7 +52,11 @@ inline constexpr const char* kMediaUsagePrompt =
     "optional pixels ('-' or empty = automatic); the media is always scaled "
     "to fit the chat area. To show an image to the user ALWAYS prefer the "
     "[image: ...] token over merely describing or naming the file, unless "
-    "the user asked for something else. Images the user attaches to the chat "
+    "the user asked for something else. A [sound: ...] block starts playing "
+    "immediately: to play music or a sound for the user just emit the token "
+    "with the file path; [sound: stop] stops playback and [sound: pause] "
+    "pauses it (resume happens on the block's play button). Images the user "
+    "attaches to the chat "
     "are saved to disk and their file paths are listed in the user message "
     "([attached files saved at: ...]) - look there before saying an "
     "attachment is unavailable.";
@@ -64,10 +70,14 @@ int parse_media_size(const std::string& s);
 // On success fills `out` (kind/src/req_w/req_h/label) and returns true.
 bool parse_media_token(const std::string& line, MediaBlock& out);
 
-// One piece of a reply: either plain text or a media block.
+// One piece of a reply: either plain text or a media block. Control tokens
+// ([sound: stop] / [sound: pause]) come back as an action segment: the GUI
+// runs it on the player and shows no block (live replies only - restored
+// sessions skip them).
 struct MediaSegment {
     std::string text;   // set when media == nullptr
     MediaRef media;
+    enum Action { None, StopSound, PauseSound } action = None;
 };
 
 // Split reply text into ordered segments: every line that is exactly a media
@@ -96,9 +106,11 @@ bool decode_audio_bytes(const std::vector<unsigned char>& bytes,
 // Generate a short test tone (mono float PCM) - the /play beep buffer source.
 std::vector<float> make_beep_pcm(int& rate);
 
-// One-shot mini player: plays a decoded file or PCM buffer; a new play()
-// replaces the current one. Thread-safe (the miniaudio callback thread reads
-// the state under a mutex, like the TTS device does).
+// Mini music player: plays a decoded file or PCM buffer; a new play()
+// replaces the current one. Supports pause/resume, seek and a per-player
+// volume (the track stays loaded until the next play or stop).
+// Thread-safe (the miniaudio callback thread reads the state under a mutex,
+// like the TTS device does).
 class SoundPlayer {
 public:
     SoundPlayer();
@@ -112,9 +124,20 @@ public:
     // Play an in-memory mono buffer (the beep test).
     bool play_pcm(const std::vector<float>& pcm, int rate, const std::string& src);
     void stop();
+    // Pause keeps the loaded track and its position; resume continues.
+    void pause();
+    void resume();
+    // Jump to `s` seconds inside the loaded track (only while playing or
+    // paused; out-of-range values clamp).
+    void seek(double s);
+    // Player-device volume, 0..1 (does not touch the system volume).
+    void set_volume(float v);
+    float volume() const;
 
     bool playing() const;
     bool playing_src(const std::string& src) const;  // this exact block?
+    bool paused() const;
+    bool paused_src(const std::string& src) const;   // paused on this block?
     double position_s() const;
     double duration_s() const;
 

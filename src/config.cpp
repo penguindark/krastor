@@ -75,6 +75,8 @@ void apply_json(Config& cfg, const nlohmann::json& root, bool user_only)
         cfg.gui.window_y = j.value("window_y", cfg.gui.window_y);
         cfg.gui.format_output = j.value("format_output", cfg.gui.format_output);
         cfg.gui.history_size = j.value("history_size", cfg.gui.history_size);
+        cfg.gui.media_autoplay =
+            j.value("media_autoplay", cfg.gui.media_autoplay);
     }
     if (root.contains("agent") && root["agent"].is_object()) {
         const auto& j = root["agent"];
@@ -356,6 +358,7 @@ void Config::save(const std::string& path) const
         {"window_y", gui.window_y},
         {"format_output", gui.format_output},
         {"history_size", gui.history_size},
+        {"media_autoplay", gui.media_autoplay},
     };
     root["agent"] = {
         {"name", agent.name},

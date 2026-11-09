@@ -2252,3 +2252,53 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   at end when unfocused, token deleted -> attachment drops, renumber
   to 1..N, image/sound kinds independent, caret insertion).
 - Both toolchains clean; all --*-test PASS.
+
+
+## 2026-11-09 - feat: music player in the chat (autoplay + transport + control tokens)
+
+- SoundPlayer upgraded from one-shot to a real mini player: pause/resume
+  (device keeps running on silence, PCM cursor frozen), seek (clamped,
+  only while playing/paused), per-player volume (gain applied in the
+  miniaudio data callback, system volume untouched). stop() clears the
+  paused state too.
+- Sound block UI (draw_media_sound): play/pause toggle (new
+  data/icons/pause.svg, Lucide style) + stop button, progress bar now
+  interactive (drag = seek, 1/1000 resolution), volume slider
+  (player-wide), time label in mm:ss.
+- Autoplay: a [sound: ...] shown by the model in a LIVE reply starts
+  immediately (gui.media_autoplay, default true; config-test check).
+  Restored sessions never autoplay and control segments are skipped
+  there (live-only).
+- Control tokens for the agent: [sound: stop] / [sound: pause] become
+  MediaSegment actions (StopSound/PauseSound) - the GUI runs them on
+  the player and shows no chat line. kMediaUsagePrompt updated so the
+  model knows sounds autoplay and how to stop/pause them.
+- --media-test +2 checks (control tokens are actions not blocks, real
+  sound stays a block); --config-test +1 (media_autoplay default).
+- Fix pass after first user test (buttons "dead" + visual glitches):
+  - Row overflow: Nuklear adds window.spacing.x between every pair of
+    widgets, so the widths summing to the full available width pushed the
+    volume slider past the clip. Now 5 gaps are subtracted up front.
+  - Indent was never applied: consecutive nk_layout_row_push calls
+    overwrite each other (push only sets the NEXT widget's width). The
+    indent slot is now a real nk_spacer widget, so the row starts after
+    the block bar instead of under it.
+  - Playback errors showed as "name - error" truncated by fit_text (the
+    error tail - the useful part - was cut). The label now shows the
+    error alone in red.
+  - --gui-test +2 checks: headless repro of the media row (group +
+    nk_do_button path + interactive progress + slider) asserting the
+    play button receives a synthetic click and the indent slot shifts
+    it. Note: nk_widget_bounds PEEKS the NEXT slot, so a button rect
+    must be captured BEFORE the button call.
+  - "File not found" on bare names: the app's CWD is its install folder, so
+    a relative [sound: name.mp3] never resolved. resolve_media_bytes now
+    retries relative paths under workspace_dir(), then the home dir
+    (expand_home("~")); the error still shows the original src.
+  - Second user pass: stop button removed (pause is enough - another sound
+    replaces the current one, [sound: stop] still works for the agent);
+    play/pause switched to button_icon_only (button_icon also draws its
+    text label - the stray ">" and "[x]" next to the icons); label now
+    uses NK_TEXT_LEFT (ALIGN_MIDDLE) so the text sits on the icon center
+    line instead of the top of the row. --gui-test row repro updated.
+- Both toolchains clean; all --*-test PASS.

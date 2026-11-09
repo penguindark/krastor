@@ -17,6 +17,7 @@
 #include <miniaudio.h>
 
 #include "clipboard.h"
+#include "permissions.h"  // workspace_dir, expand_home (relative-path fallback)
 #include "session_store.h"  // base64_decode
 
 namespace krastor {
@@ -122,7 +123,13 @@ std::vector<MediaSegment> split_media_tokens(const std::string& text)
         MediaBlock mb;
         if (parse_media_token(line, mb)) {
             flush();
-            segs.push_back({"", std::make_shared<MediaBlock>(std::move(mb))});
+            // Player control tokens: an action segment, not a block.
+            if (mb.kind == MediaBlock::Kind::Sound && mb.src == "stop")
+                segs.push_back({"", nullptr, MediaSegment::StopSound});
+            else if (mb.kind == MediaBlock::Kind::Sound && mb.src == "pause")
+                segs.push_back({"", nullptr, MediaSegment::PauseSound});
+            else
+                segs.push_back({"", std::make_shared<MediaBlock>(std::move(mb))});
         } else {
             if (!pending.empty())
                 pending += '\n';
@@ -156,7 +163,22 @@ bool resolve_media_bytes(const std::string& src,
         bytes = img.png;
         return true;
     }
-    std::ifstream f(std::filesystem::path(src), std::ios::binary);
+    std::filesystem::path path(src);
+    std::ifstream f(path, std::ios::binary);
+    if (!f && path.is_relative()) {
+        // The app's CWD is its install folder, so a bare file name from the
+        // model ("suonami ding.mp3") never resolves. Try the two places a
+        // user would actually put the file: the workspace, then the home dir.
+        for (const std::string& base : {workspace_dir(), expand_home("~")}) {
+            std::filesystem::path cand = std::filesystem::path(base) / path;
+            std::ifstream g(cand, std::ios::binary);
+            if (g) {
+                path = cand;
+                f = std::move(g);
+                break;
+            }
+        }
+    }
     if (!f) {
         err = "file not found: " + src;
         return false;
@@ -252,6 +274,8 @@ struct SoundPlayer::Impl {
     size_t frame_pos = 0;
     std::string src;
     std::atomic<bool> playing{false};
+    std::atomic<bool> paused{false};
+    float volume = 1.0f;         // protected by mtx (read in data_cb)
     ma_device dev{};         // opened lazily, reopened on format change
     bool dev_open = false;
     bool dev_stereo = true;
@@ -268,6 +292,11 @@ struct SoundPlayer::Impl {
         auto* self = static_cast<Impl*>(dev->pUserData);
         std::lock_guard<std::mutex> lk(self->mtx);
         float* o = static_cast<float*>(out);
+        // Paused: keep the device running but feed silence, cursor frozen.
+        if (self->paused.load()) {
+            std::memset(o, 0, frames * self->channels * sizeof(float));
+            return;
+        }
         const size_t total = self->pcm.size() / self->channels;
         size_t avail = self->frame_pos < total ? total - self->frame_pos : 0;
         const ma_uint32 n = frames < avail ? frames : (ma_uint32)avail;
@@ -277,6 +306,9 @@ struct SoundPlayer::Impl {
         if (n < frames)
             std::memset(o + n * self->channels, 0,
                         (frames - n) * self->channels * sizeof(float));
+        if (self->volume != 1.0f)
+            for (ma_uint32 i = 0; i < n * self->channels; ++i)
+                o[i] *= self->volume;
         self->frame_pos += n;
         if (self->frame_pos >= total)
             self->playing.store(false);
@@ -318,6 +350,7 @@ struct SoundPlayer::Impl {
         this->channels = channels;
         this->frame_pos = 0;
         this->src = src;
+        paused.store(false);
         playing.store(true);
         return true;
     }
@@ -352,8 +385,58 @@ void SoundPlayer::stop()
 {
     std::lock_guard<std::mutex> lk(impl_->mtx);
     impl_->playing.store(false);
+    impl_->paused.store(false);
     impl_->frame_pos = 0;
     impl_->src.clear();
+}
+
+void SoundPlayer::pause()
+{
+    std::lock_guard<std::mutex> lk(impl_->mtx);
+    if (impl_->playing.load()) {
+        impl_->playing.store(false);
+        impl_->paused.store(true);
+    }
+}
+
+void SoundPlayer::resume()
+{
+    std::lock_guard<std::mutex> lk(impl_->mtx);
+    if (impl_->paused.load()) {
+        impl_->paused.store(false);
+        impl_->playing.store(true);
+    }
+}
+
+void SoundPlayer::seek(double s)
+{
+    std::lock_guard<std::mutex> lk(impl_->mtx);
+    if ((!impl_->playing.load() && !impl_->paused.load()) ||
+        !impl_->rate || !impl_->channels)
+        return;
+    const double total = double(impl_->pcm.size() / impl_->channels);
+    double pos = s * impl_->rate;
+    if (pos < 0.0)
+        pos = 0.0;
+    if (pos > total)
+        pos = total;
+    impl_->frame_pos = (size_t)pos;
+}
+
+void SoundPlayer::set_volume(float v)
+{
+    if (v < 0.0f)
+        v = 0.0f;
+    if (v > 1.0f)
+        v = 1.0f;
+    std::lock_guard<std::mutex> lk(impl_->mtx);
+    impl_->volume = v;
+}
+
+float SoundPlayer::volume() const
+{
+    std::lock_guard<std::mutex> lk(impl_->mtx);
+    return impl_->volume;
 }
 
 bool SoundPlayer::playing() const
@@ -365,6 +448,17 @@ bool SoundPlayer::playing_src(const std::string& src) const
 {
     std::lock_guard<std::mutex> lk(impl_->mtx);
     return impl_->playing.load() && impl_->src == src;
+}
+
+bool SoundPlayer::paused() const
+{
+    return impl_->paused.load();
+}
+
+bool SoundPlayer::paused_src(const std::string& src) const
+{
+    std::lock_guard<std::mutex> lk(impl_->mtx);
+    return impl_->paused.load() && impl_->src == src;
 }
 
 double SoundPlayer::position_s() const
