@@ -2309,3 +2309,17 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   literal "?". The diff header now uses "- N" and "<- ", and the old-pane
   glyph column (mark_w + draw) uses ASCII "-" like the new pane's "+".
 - Both toolchains clean; all --*-test PASS.
+
+## 2026-11-09 — salvage text-form tool calls (llm_client)
+- User-reported: some models emit the tool call as plain text (Hermes/Qwen
+  `<tool_call><function=NAME><parameter=KEY>..</function>`) when the
+  server does not parse the XML dialect - the raw markup leaked into the
+  chat and nothing executed.
+- LlmClient::complete now calls salvage_text_tool_calls() when the reply
+  has no structured tool_calls and tools are configured: both the Hermes
+  and the Claude (`<function_calls><invoke name="NAME">`) shapes become
+  real ToolCalls (id "text_N", parameter values keep JSON types), the
+  markup is stripped from content. Unknown tool names stay prose (a chat
+  about tools is not a call); plain replies untouched.
+- --tool-test +7 checks (both shapes, typed params, prose cases).
+- Both toolchains clean; all --*-test PASS.

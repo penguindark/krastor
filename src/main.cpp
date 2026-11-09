@@ -547,6 +547,54 @@ int run_tool_test()
         return failed;
     }
 
+    // --- text-form tool calls salvaged from the reply content ---------------
+    {
+        const std::string known = reg.tools_json();
+        // Hermes/Qwen shape (the user-reported leak).
+        std::string text =
+            "Ripeto il riavvio.\n\n<tool_call>\n<function=python>\n"
+            "<parameter=code>\nimport time\nprint(1 + 1)\n</parameter>\n"
+            "</function>\n<tool_call>";
+        std::vector<krastor::ToolCall> calls;
+        krastor::salvage_text_tool_calls(known, text, calls);
+        check("salvage: tool_call block becomes a ToolCall",
+              calls.size() == 1 && calls[0].name == "python");
+        check("salvage: parameter text -> arguments JSON",
+              calls.size() == 1 &&
+                  calls[0].arguments.find("import time") != std::string::npos);
+        check("salvage: markup stripped from content",
+              text == "Ripeto il riavvio.");
+        // Claude shape + typed values + multiple params.
+        text = "ok\n<function_calls>\n<invoke name=\"files\">\n"
+               "<parameter=action>list</parameter>\n"
+               "<parameter=depth>2</parameter>\n</invoke>\n</function_calls>";
+        calls.clear();
+        krastor::salvage_text_tool_calls(known, text, calls);
+        check("salvage: invoke shape parsed",
+              calls.size() == 1 && calls[0].name == "files" && text == "ok");
+        bool typed = false;
+        if (calls.size() == 1) {
+            const auto j = nlohmann::json::parse(calls[0].arguments,
+                                                 nullptr, false);
+            typed = !j.is_discarded() && j.value("action", std::string()) ==
+                            "list" &&
+                    j.value("depth", 0) == 2;
+        }
+        check("salvage: numeric parameter keeps JSON type", typed);
+        // Unknown tool names stay prose (a chat about tools is not a call).
+        text = "use <function=magic> to <parameter=x>1</parameter></function>";
+        calls.clear();
+        krastor::salvage_text_tool_calls(known, text, calls);
+        check("salvage: unknown tool left as prose",
+              calls.empty() && text.find("<function=magic>") != std::string::npos);
+        // Plain replies untouched.
+        text = "just <b>markdown</b>, no tools here";
+        calls.clear();
+        krastor::salvage_text_tool_calls(known, text, calls);
+        check("salvage: plain reply untouched",
+              calls.empty() && text == "just <b>markdown</b>, no tools here");
+    }
+
     // --- files: sandbox write / read / edit / list ----------------------------
     const std::string tag =
         "selftest_" +

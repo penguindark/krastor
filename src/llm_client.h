@@ -59,6 +59,16 @@ struct LlmReply {
     double cost_usd = 0.0;
 };
 
+// Salvage tool calls that some models emit as plain text instead of the
+// structured tool_calls field (Hermes/Qwen <function=NAME><parameter=KEY>..
+// and Claude <function_calls><invoke name="NAME">.. shapes): appends the
+// parsed calls to `out` and strips their markup from `content`. Names not
+// present in `known_tools` (the registry's tools_json; empty = accept all)
+// are left in the text. Defined in llm_client.cpp; exposed for --tool-test.
+void salvage_text_tool_calls(const std::string& known_tools,
+                             std::string& content,
+                             std::vector<ToolCall>& out);
+
 class LlmClient {
 public:
     explicit LlmClient(LlmConfig config);

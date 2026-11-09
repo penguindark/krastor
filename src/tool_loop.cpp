@@ -89,6 +89,7 @@ LlmReply agent_complete(const LlmClient& client, Conversation& conv,
 {
     const std::string tools = registry.empty() ? std::string() : registry.tools_json();
     LlmReply reply = client.complete(conv, cancel, tools);
+
     // The turn's cost is the sum of all rounds (each complete() reports its
     // own usage.cost); prompt_tokens stay the final round's = the current
     // context occupancy.
