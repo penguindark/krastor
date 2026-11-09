@@ -3320,12 +3320,14 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
         if (s2 != std::string::npos)
             path = "..." + path.substr(s2);
     }
+    // ASCII "-"/"<-": the chat font has no U+2212/U+2190 glyphs (they would
+    // render as literal "?").
     const std::string head =
         std::string(l.diff_open ? "- " : "+ ") +
         "\x1b[33mEdit \x1b[0m" + path + " \x1b[32m+" +
-        std::to_string(l.diff_added) + " \x1b[31m\xE2\x88\x92" +
+        std::to_string(l.diff_added) + " \x1b[31m-" +
         std::to_string(l.diff_removed) + "\x1b[0m";
-    float total = draw_chat_line(ctx, "\xE2\x86\x90 ", head,
+    float total = draw_chat_line(ctx, "<- ", head,
                                  nk_rgb(230, 150, 60), text_w, -1, nullptr,
                                  nullptr, em, indent, dry);
     if (!dry)
@@ -3351,7 +3353,7 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
     const struct nk_color c_mod = nk_rgb(205, 170, 245);
     const struct nk_color bg_mod = nk_rgba(72, 46, 104, 140);
     // glyph column: "-" on the old pane, "+" on the new one (aligned text)
-    const float mark_w = text_w_px(f, "\xE2\x88\x92 ", 4) + 2.0f;
+    const float mark_w = text_w_px(f, "- ", 2) + 2.0f;
     constexpr int kMaxViewRows = 240;
 
     if (dry) {  // measure: one row_h per display row, same counting rules
@@ -3447,7 +3449,7 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
                          a.y, row_h, nns, f, c_num, em);
         // glyph column: "-" on the old pane, "+" on the new one
         if (r.kind == '-' || mod)
-            draw_token_mixed(cv, ax + gutter, a.y, row_h, "\xE2\x88\x92", f,
+            draw_token_mixed(cv, ax + gutter, a.y, row_h, "-", f,
                              mod ? c_mod : c_del, em);
         if (r.kind == '+' || mod)
             draw_token_mixed(cv, rx + gutter, a.y, row_h, "+", f,

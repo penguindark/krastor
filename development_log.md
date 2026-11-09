@@ -2302,3 +2302,10 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
     uses NK_TEXT_LEFT (ALIGN_MIDDLE) so the text sits on the icon center
     line instead of the top of the row. --gui-test row repro updated.
 - Both toolchains clean; all --*-test PASS.
+
+## 2026-11-09 — diff header: "?" glyphs replaced with ASCII (gui.cpp)
+- User spotted "? - Edit path +0 ?2": the chat font has no U+2212 (−) or
+  U+2190 (←) glyphs, so the removed-count and the line prefix rendered as
+  literal "?". The diff header now uses "- N" and "<- ", and the old-pane
+  glyph column (mark_w + draw) uses ASCII "-" like the new pane's "+".
+- Both toolchains clean; all --*-test PASS.
