@@ -67,6 +67,14 @@ public:
     std::vector<std::string> attachment_paths(const std::string& id,
                                               int count) const;
 
+    // Copies an external file (a dropped sound) into the session's
+    // attachments/ dir as <prefix>-<n><ext>, first free slot. Returns the
+    // absolute path of the copy, empty when the session or the file is
+    // missing or the copy fails.
+    std::string import_attachment(const std::string& id,
+                                  const std::string& src_path,
+                                  const std::string& prefix) const;
+
     // Reads the log back into `conv` (its system prompt is kept). Malformed
     // lines are skipped (crash tolerance: a half-written last line is lost,
     // the rest of the session is not).

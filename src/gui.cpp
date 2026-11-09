@@ -514,13 +514,25 @@ struct AppState : AskHandler {
     EmojiAtlas emoji;              // color emoji sprite atlas (data/fonts)
     IconAtlas icons;               // SVG UI icon atlas (data/icons, LunaSVG)
 
-    // Images pasted/attached to the message being composed (sent as vision
-    // attachments together with the text).
+    // Images/sounds pasted or dropped onto the message being composed
+    // (sent as vision attachments together with the text). Each attachment
+    // owns a [imageN]/[soundN] token inside the input text (opencode
+    // style): the token is the handle - deleting it drops the attachment,
+    // and the remaining tokens renumber (see sync_tokens_core).
     struct Attachment {
-        int width, height;
-        std::vector<unsigned char> png;
+        bool is_sound = false;
+        int num = 0;                              // token number for its kind
+        int width = 0, height = 0;                // image
+        std::vector<unsigned char> png;           // image
+        std::string path;                         // sound: source file
+        std::string token() const
+        {
+            return std::string(is_sound ? "[sound" : "[image") +
+                   std::to_string(num) + "]";
+        }
     };
     std::vector<Attachment> attachments;
+    std::vector<std::string> pending_tokens;     // labels awaiting insertion
     bool pending_image_paste = false;  // set by the clipboard paste hook
 
     enum class Worker { None, Thinking, Listening, Compacting } worker = Worker::None;
@@ -729,7 +741,8 @@ struct AppState : AskHandler {
         icons.load_default();
         lines.push_back({"sys", name + " ready. Type below (Enter sends, "
                                   "Shift+Enter = newline). Ctrl+V pastes text or "
-                                  "an image. Settings = LLM/voice config."});
+                                  "an image (a [imageN] marker lands in the "
+                                  "text). Settings = LLM/voice config."});
         // ---- session restore (sessions_plan.md): continue the session that
         // was active on the previous run (state's sessions.last_id), falling
         // back to the most recent one; a restored history rebuilds the chat
@@ -885,6 +898,17 @@ struct AppState : AskHandler {
         }
     }
 
+    // Next free token number for a kind (max existing + 1: stays unique
+    // even after the user deletes a token in the middle).
+    int next_num(bool sound) const
+    {
+        int mx = 0;
+        for (const auto& a : attachments)
+            if (a.is_sound == sound)
+                mx = a.num > mx ? a.num : mx;
+        return mx + 1;
+    }
+
     // Grabs a clipboard bitmap (if any) and queues it as an attachment.
     // Returns true when an image was attached.
     bool attach_clipboard_image()
@@ -892,8 +916,124 @@ struct AppState : AskHandler {
         PastedImage img = clipboard_get_image();
         if (!img.ok())
             return false;
-        attachments.push_back({img.width, img.height, std::move(img.png)});
+        Attachment a;
+        a.width = img.width;
+        a.height = img.height;
+        a.png = std::move(img.png);
+        a.num = next_num(false);
+        pending_tokens.push_back(a.token());
+        attachments.push_back(std::move(a));
         return true;
+    }
+
+    // ---- attachment tokens in the chat input ---------------------------
+    // Byte offset of glyph index g in a UTF-8 string (clamped to the end).
+    static size_t glyph_byte(const char* s, int g)
+    {
+        size_t b = 0;
+        while (g-- > 0 && s[b]) {
+            nk_rune u;
+            const int l = nk_utf_decode(s + b, &u, (int)std::strlen(s + b));
+            if (l <= 0)
+                break;
+            b += (size_t)l;
+        }
+        return b;
+    }
+    // Glyph index of the glyph covering byte offset `byte` (clamped).
+    static int byte_glyph(const char* s, size_t byte)
+    {
+        size_t b = 0;
+        int g = 0;
+        while (s[b] && b < byte) {
+            nk_rune u;
+            const int l = nk_utf_decode(s + b, &u, (int)std::strlen(s + b));
+            if (l <= 0)
+                break;
+            b += (size_t)l;
+            g++;
+        }
+        return g;
+    }
+
+    // Pure token/attachment sync, testable without a live nk context.
+    // 1) pending tokens go in at caret_in, 2) tokens the user deleted drop
+    // their attachment, 3) the rest renumber per kind (1..N). caret_in is
+    // the caret glyph, or -1 when the field is not focused (tokens append
+    // at the end). Returns the new caret glyph, or -1 to leave it alone.
+    static int sync_tokens_core(char* input, size_t cap,
+                                std::vector<Attachment>& attachments,
+                                std::vector<std::string>& pending_tokens,
+                                int caret_in,
+                                std::vector<std::string>* removed = nullptr)
+    {
+        for (const auto& tok : pending_tokens) {
+            const size_t cur = std::strlen(input);
+            if (cur + tok.size() >= cap - 1)
+                continue;  // no room: the attachment drops in step 2
+            const int total = nk_utf_len(input, (int)cur);
+            const int caret = caret_in < 0 ? total : NK_CLAMP(0, caret_in, total);
+            std::string s(input);
+            s.insert(glyph_byte(input, caret), tok);
+            std::memcpy(input, s.c_str(), s.size() + 1);
+            if (caret_in >= 0)
+                caret_in += (int)tok.size();  // ASCII token
+        }
+        pending_tokens.clear();
+
+        for (size_t i = attachments.size(); i-- > 0;)
+            if (!std::strstr(input, attachments[i].token().c_str())) {
+                if (removed)
+                    removed->push_back(attachments[i].token());
+                attachments.erase(attachments.begin() + (long)i);
+            }
+
+        int caret_byte = -1;
+        if (caret_in >= 0)
+            caret_byte = (int)glyph_byte(
+                input, NK_CLAMP(0, caret_in,
+                                nk_utf_len(input, (int)std::strlen(input))));
+        int n_img = 0, n_snd = 0;
+        for (auto& a : attachments) {
+            const int nn = a.is_sound ? ++n_snd : ++n_img;
+            if (nn == a.num)
+                continue;
+            const std::string oldtok = a.token();
+            a.num = nn;
+            const std::string newtok = a.token();
+            const char* p = std::strstr(input, oldtok.c_str());
+            if (!p)
+                continue;  // cannot happen: step 2 kept only tokened ones
+            const size_t off = (size_t)(p - input);
+            std::string s(input);
+            s.replace(off, oldtok.size(), newtok);
+            std::memcpy(input, s.c_str(), s.size() + 1);
+            if (caret_byte >= 0 && (int)off < caret_byte)
+                caret_byte += (int)newtok.size() - (int)oldtok.size();
+        }
+        return caret_byte >= 0 ? byte_glyph(input, (size_t)NK_MAX(caret_byte, 0))
+                               : -1;
+    }
+
+    // Keeps the [imageN]/[soundN] tokens in the input text and the
+    // attachment list in sync; called right before the input widget so
+    // ctx->current->edit still holds the caret of the previous frame.
+    void sync_input_tokens(struct nk_context* ctx)
+    {
+        const int caret_in =
+            input_active ? ctx->current->edit.cursor : -1;
+        std::vector<std::string> removed;
+        const int caret_out = sync_tokens_core(input, sizeof(input),
+                                               attachments, pending_tokens,
+                                               caret_in, &removed);
+        for (const auto& tok : removed)
+            lines.push_back({"sys", "attachment removed: " + tok +
+                                    " (token deleted from the input)"});
+        if (caret_out >= 0) {
+            ctx->current->edit.cursor = caret_out;
+            ctx->current->edit.sel_start = caret_out;
+            ctx->current->edit.sel_end = caret_out;
+        }
     }
 
     void speak_async(const std::string& text)
@@ -921,33 +1061,38 @@ struct AppState : AskHandler {
         if ((text.empty() && attachments.empty()) || worker != Worker::None)
             return;
         std::vector<std::string> b64;
-        b64.reserve(attachments.size());
-        for (const auto& a : attachments)
-            b64.push_back(base64_encode(a.png.data(), a.png.size()));
+        std::vector<std::string> sound_paths;
+        for (const auto& a : attachments) {
+            if (a.is_sound)
+                sound_paths.push_back(a.path);
+            else
+                b64.push_back(base64_encode(a.png.data(), a.png.size()));
+        }
         std::string shown = text;
         std::string model_text = text;
-        if (!b64.empty()) {
-            if (!shown.empty())
-                shown += ' ';
-            shown += "[+" + std::to_string(b64.size()) +
-                     (b64.size() == 1 ? " image]" : " images]");
-            // Tell the model where the images WILL be saved (autosave writes
-            // them to the session's attachments/ at the end of the turn,
-            // same numbering as attachment_paths): without this the agent
-            // cannot re-find a pasted image later and claims it is gone.
-            if (cfg.sessions.autosave && !session_id.empty()) {
+        // The [imageN]/[soundN] tokens already mark the attachments inside
+        // the text, so no "[+N images]" suffix is needed; the model just
+        // needs to know where the files live. Images are written by the
+        // end-of-turn autosave (same numbering as attachment_paths) -
+        // without this note the agent cannot re-find a pasted image later
+        // and claims it is gone. Sounds are copied into the session now.
+        if (cfg.sessions.autosave && !session_id.empty() &&
+            (!b64.empty() || !sound_paths.empty())) {
+            std::string note;
+            if (!b64.empty()) {
                 const auto paths =
                     store.attachment_paths(session_id, (int)b64.size());
-                if (!paths.empty()) {
-                    model_text += "\n[attached files saved at: ";
-                    for (size_t k = 0; k < paths.size(); ++k) {
-                        if (k)
-                            model_text += ", ";
-                        model_text += paths[k];
-                    }
-                    model_text += "]";
-                }
+                for (const auto& p : paths)
+                    note += (note.empty() ? "" : ", ") + p;
             }
+            for (const auto& sp : sound_paths) {
+                const std::string dest =
+                    store.import_attachment(session_id, sp, "sound");
+                if (!dest.empty())
+                    note += (note.empty() ? "" : ", ") + dest;
+            }
+            if (!note.empty())
+                model_text += "\n[attached files saved at: " + note + "]";
         }
         {
             ChatLine you{"you", shown};
@@ -958,6 +1103,7 @@ struct AppState : AskHandler {
         }
         conv.add_user(model_text, std::move(b64));
         attachments.clear();
+        pending_tokens.clear();
         overflow_retried = false;  // fresh turn: the retry budget resets
         follow_bottom = true;  // own message always scrolls into view
         launch_llm();
@@ -2150,8 +2296,8 @@ void help_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
         rows({{"Enter", "send the message"},
               {"Shift+Enter", "newline in the input box"},
               {"Up / Down", "recall submitted lines (empty input)"},
-              {"Ctrl+V", "paste text / attach clipboard image"},
-              {"drag & drop", "attach an image file"},
+              {"Ctrl+V", "paste text / attach clipboard image ([imageN] marker)"},
+              {"drag & drop", "attach an image/sound file ([imageN]/[soundN])"},
               {"click + drag in chat", "select text (Ctrl+C copies it)"},
               {"Esc", "interrupt the running request (or clear selection)"},
               {"Shift+Tab", "switch to the next agent (circular)"},
@@ -4164,11 +4310,29 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 if (has_ext_ci(path, {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tga"})) {
                     PastedImage img = load_image_file(path);
                     if (img.ok()) {
-                        app.attachments.push_back(
-                            {img.width, img.height, std::move(img.png)});
+                        AppState::Attachment a;
+                        a.width = img.width;
+                        a.height = img.height;
+                        a.png = std::move(img.png);
+                        a.num = app.next_num(false);
+                        app.pending_tokens.push_back(a.token());
+                        app.attachments.push_back(std::move(a));
                         app.lines.push_back({"sys", "attached image: " + path});
                     } else {
                         app.lines.push_back({"sys", "cannot read image: " + path});
+                    }
+                } else if (has_ext_ci(path, {".wav", ".mp3", ".ogg", ".flac", ".m4a"})) {
+                    std::ifstream probe(path, std::ios::binary);
+                    if (!probe.is_open()) {
+                        app.lines.push_back({"sys", "cannot read sound: " + path});
+                    } else {
+                        AppState::Attachment a;
+                        a.is_sound = true;
+                        a.path = path;
+                        a.num = app.next_num(true);
+                        app.pending_tokens.push_back(a.token());
+                        app.attachments.push_back(std::move(a));
+                        app.lines.push_back({"sys", "attached sound: " + path});
                     }
                 } else if (has_ext_ci(path, {".txt", ".md", ".log", ".json", ".jsonc",
                                              ".xml", ".html", ".css", ".js", ".ts",
@@ -4485,7 +4649,6 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             const float top_h = fh * 1.7f;
             const float input_h = fh * 3.7f;
             const float status_h = fh * 1.2f;
-            const float chip_h = fh * 1.45f;
             const float fab_sz = fh * 1.45f;  // floating action button size
 
             // Top bar: title | session quick switcher | hands-free | speak | settings.
@@ -4600,16 +4763,15 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             // Chat history: this Nuklear has no "fill remaining" row, so the
             // group height is the window height minus the other rows (all
             // font-proportional) plus row spacing/padding.
-            const float attach_h = app.attachments.empty() ? 0.0f : chip_h + 4.0f;
             const float chat_h = (float)h - top_h - input_h - status_h -
-                                 attach_h - 40.0f;
+                                 40.0f;
             // Floating action button strip: lower-right corner, floating over
             // the chat just above the input box. Computed before chat_panel so
             // the selection handler can ignore clicks on it.
             const float fab_gap = 6.0f, fab_pad = 6.0f;
             const struct nk_rect fab_strip = nk_rect(
                 (float)w - (7.0f * fab_sz + 6.0f * fab_gap + 2.0f * fab_pad) - 10.0f,
-                (float)h - (status_h + input_h + attach_h + 14.0f) -
+                (float)h - (status_h + input_h + 14.0f) -
                     (fab_sz + 2.0f * fab_pad),
                 7.0f * fab_sz + 6.0f * fab_gap + 2.0f * fab_pad,
                 fab_sz + 2.0f * fab_pad);
@@ -4747,26 +4909,8 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                     app.speak_async("Ciao, la voce funziona.");
             }
 
-            // Attachment chips: one per pasted image, click a chip to remove it.
-            if (!app.attachments.empty()) {
-                nk_layout_row_begin(ctx, NK_STATIC, chip_h, (int)app.attachments.size());
-                size_t remove_idx = SIZE_MAX;
-                for (size_t i = 0; i < app.attachments.size(); ++i) {
-                    // With the icon atlas the leading "[x]" becomes the x
-                    // icon; without it the text hint stays (same fallback
-                    // chain as every other icon button).
-                    const bool has_x = app.icons.ok() && app.icons.find("x");
-                    char chip[64];
-                    std::snprintf(chip, sizeof(chip), has_x ? "%dx%d" : "[x] %dx%d",
-                                  app.attachments[i].width, app.attachments[i].height);
-                    nk_layout_row_push(ctx, fh * 6.5f);
-                    if (button_icon(ctx, app.icons, "x", chip))
-                        remove_idx = i;
-                }
-                nk_layout_row_end(ctx);
-                if (remove_idx != SIZE_MAX)
-                    app.attachments.erase(app.attachments.begin() + (long)remove_idx);
-            }
+            // Attachment chips are gone: the [imageN]/[soundN] tokens now
+            // live inside the input text itself (see sync_input_tokens).
 
             // Input: OpenCode-style full-width box - dark field, blue accent
             // bar on the left edge (Enter sends, Shift+Enter newline).
@@ -4795,6 +4939,11 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             // Visible caret: 2 px wide accent-blue bar (Nuklear's default is a
             // 1 px line that is nearly invisible on the dark field).
             nk_style_push_float(ctx, &ctx->style.edit.cursor_size, 2.0f);
+            // Keep [imageN]/[soundN] tokens and the attachment list in sync
+            // (pending paste/drop markers go in at the caret; deleted tokens
+            // drop their attachment). Must run before nk_edit_string, while
+            // ctx->current->edit still holds the caret of the previous frame.
+            app.sync_input_tokens(ctx);
             // A history recall filled the field from outside the widget:
             // Nuklear would keep the old caret (0 on an empty field), so
             // jump it to the end. nk_edit_string re-reads win->edit.cursor
@@ -5140,6 +5289,56 @@ int run_gui_stack_test()
     // ---- cost formatting (usage.cost display) ----
     check(fmt_cost(0.0042) == "$0.0042" && fmt_cost(1.5) == "$1.50",
           "fmt_cost: 4 decimals below $1, 2 at/above");
+
+    // ---- attachment token sync (sync_tokens_core, opencode-style) ----
+    {
+        char buf[256];
+        std::vector<AppState::Attachment> atts;
+        std::vector<std::string> pend;
+        AppState::Attachment a1;  // num assigned by next_num at attach time
+        a1.num = 1;
+        atts.push_back(a1);
+        pend.push_back(a1.token());
+
+        buf[0] = '\0';
+        check(AppState::sync_tokens_core(buf, sizeof(buf), atts, pend, -1) == -1 &&
+                  std::strcmp(buf, "[image1]") == 0 && atts.size() == 1,
+              "pending token appended at end when field unfocused");
+
+        buf[0] = '\0';  // user deleted the token
+        AppState::sync_tokens_core(buf, sizeof(buf), atts, pend, -1);
+        check(atts.empty(), "deleting the token drops the attachment");
+
+        std::strcpy(buf, "[image2]");  // [image1] deleted, [image2] left
+        AppState::Attachment b1, b2;
+        b1.num = 1;
+        b2.num = 2;
+        atts = {b1, b2};
+        AppState::sync_tokens_core(buf, sizeof(buf), atts, pend, -1);
+        check(atts.size() == 1 && atts[0].num == 1 &&
+                  std::strcmp(buf, "[image1]") == 0,
+              "deleted token renumbers the rest to 1..N");
+
+        std::strcpy(buf, "x [sound7] y [image3]");
+        AppState::Attachment s7, i3;
+        s7.is_sound = true;
+        s7.num = 7;
+        i3.num = 3;
+        atts = {s7, i3};
+        AppState::sync_tokens_core(buf, sizeof(buf), atts, pend, -1);
+        check(atts.size() == 2 &&
+                  std::strcmp(buf, "x [sound1] y [image1]") == 0,
+              "image and sound kinds renumber independently");
+
+        std::strcpy(buf, "ab");
+        AppState::Attachment c1;
+        c1.num = 1;
+        atts = {c1};
+        pend = {c1.token()};
+        check(AppState::sync_tokens_core(buf, sizeof(buf), atts, pend, 2) == 10 &&
+                  std::strcmp(buf, "ab[image1]") == 0,
+              "pending token lands at the caret and caret moves past it");
+    }
 
     struct nk_context ctx;
     struct nk_user_font font;

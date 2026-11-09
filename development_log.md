@@ -2222,3 +2222,33 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   and horizontal scroll-follow is disabled when wrap_width > 0 (a
   caret at a row end used to jitter the view).
 - Both toolchains clean; all --*-test PASS.
+
+
+## 2026-11-09 - feat: [imageN]/[soundN] attachment tokens in the chat input
+
+- Pasted/dropped media now leaves an opencode-style marker inside the
+  input text at the caret: images get [imageN], sounds [soundN]. The
+  token IS the handle: deleting it (backspace, select-all, ...) drops
+  the attachment; remaining tokens renumber per kind (1..N) with the
+  caret kept in place. Sync runs in AppState::sync_input_tokens right
+  before the input widget (ctx->current->edit still holds the caret;
+  same hook pattern as the history recall).
+- Sound attachments are new: dropping .wav/.mp3/.ogg/.flac/.m4a queues
+  a sound attachment; on send the file is copied into the session's
+  attachments/ (SessionStore::import_attachment, sound-<n>.<ext>) and
+  the model gets the path in the [attached files saved at: ...] note
+  (images keep the predicted img-<n>.png paths).
+- Attachment chips row removed (tokens replace it): chat/fab height
+  math simplified (no attach_h/chip_h). The "[+N images]" suffix on
+  sent messages is gone - the tokens already mark positions in text.
+- send() splits attachments into b64 images + sound paths; help texts
+  (welcome line, help modal) updated. --session-test +3 checks
+  (import_attachment copy / next slot / missing file).
+- Feedback line: deleting a token logs `! attachment removed: [imageN]
+  (token deleted from the input)` so the state is unambiguous (the
+  `! attached image:` line is a permanent drop log, not the attachment
+  state - that was the user-visible confusion). The sync core is a pure
+  `AppState::sync_tokens_core` covered by 5 --gui-test checks (append
+  at end when unfocused, token deleted -> attachment drops, renumber
+  to 1..N, image/sound kinds independent, caret insertion).
+- Both toolchains clean; all --*-test PASS.

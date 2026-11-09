@@ -360,6 +360,33 @@ std::vector<std::string> SessionStore::attachment_paths(const std::string& id,
     return out;
 }
 
+std::string SessionStore::import_attachment(const std::string& id,
+                                            const std::string& src_path,
+                                            const std::string& prefix) const
+{
+    std::error_code ec;
+    if (!exists(id))
+        return {};
+    const fs::path src(src_path);
+    if (!fs::is_regular_file(src, ec))
+        return {};
+    const fs::path sdir = fs::path(dir_) / id / "attachments";
+    fs::create_directories(sdir, ec);
+    if (ec)
+        return {};
+    const std::string ext = src.extension().string();
+    fs::path dest;
+    for (int n = 1;; ++n) {
+        dest = sdir / (prefix + "-" + std::to_string(n) + ext);
+        if (!fs::exists(dest, ec))
+            break;
+    }
+    fs::copy_file(src, dest, fs::copy_options::skip_existing, ec);
+    if (ec)
+        return {};
+    return dest.string();
+}
+
 bool SessionStore::load(const std::string& id, Conversation& conv,
                         SessionMeta* meta) const
 {

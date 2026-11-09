@@ -789,6 +789,26 @@ int run_session_test()
           fs::exists(predicted[0]) && fs::exists(predicted[1]));
     store.remove(id_pred);  // keep the session-count checks below unaffected
 
+    // --- import_attachment (dropped sounds copied into the session) ---
+    {
+        const fs::path snd = dir / "drop-src.wav";
+        { std::ofstream f(snd, std::ios::binary); f << "RIFFfake"; }
+        const std::string id_snd = store.create("sound import", "test/model");
+        const std::string dest =
+            store.import_attachment(id_snd, snd.string(), "sound");
+        check("import_attachment copies the file",
+              !dest.empty() && fs::exists(dest) &&
+                  fs::path(dest) == dir / id_snd / "attachments" / "sound-1.wav");
+        check("import_attachment takes the next free slot",
+              store.import_attachment(id_snd, snd.string(), "sound") ==
+                  (dir / id_snd / "attachments" / "sound-2.wav").string());
+        check("import_attachment refuses missing files",
+              store.import_attachment(id_snd,
+                                      (dir / "nope.wav").string(), "sound").empty());
+        store.remove(id_snd);  // keep the session-count checks below unaffected
+        fs::remove(snd);
+    }
+
     krastor::Conversation back("SYS");
     check("load", store.load(id, back, &m));
     const auto& ms = back.messages();
