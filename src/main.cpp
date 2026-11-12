@@ -1257,7 +1257,7 @@ int run_config_test()
              "                 \"system_prompt\": \"Sei un poeta.\", \"thinking\": \"max\" },\n"
              "    \"sec\": { \"color\": \"#FF0000\" }\n"
              "  },\n"
-             "  \"agent\": { \"active\": \"poeta\" }\n"
+             "  \"agent\": { \"active\": \"poeta\", \"max_tool_rounds\": 5 }\n"
              "}\n";
     }
     krastor::Config cfg = krastor::Config::load((dir / "config.jsonc").string());
@@ -1272,6 +1272,9 @@ int run_config_test()
                               poeta->thinking == "max" &&
                               poeta->system_prompt == "Sei un poeta.");
     check("active from config.jsonc", cfg.agent.active == "poeta");
+    check("max_tool_rounds parsed", cfg.agent.max_tool_rounds == 5);
+    check("max_tool_rounds default 16",
+          krastor::Config{}.agent.max_tool_rounds == 16);
     check("base agent synthesized from agent.name",
           cfg.find_agent("krastor")->name == "Krastor");
 
@@ -2034,7 +2037,7 @@ int main(int argc, char** argv)
         };
         auto reply = krastor::agent_complete(llm, conversation, tool_registry,
                                              tool_runner, &tool_ask, nullptr,
-                                             hooks);
+                                             hooks, cfg.agent.max_tool_rounds);
         std::cout << "\r" << std::string(40, ' ') << "\r";  // clear the placeholder
         if (reply.ok) {
             conversation.add_assistant(reply.content);

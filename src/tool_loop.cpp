@@ -39,7 +39,6 @@ std::string utf8_clean(const std::string& in)
 
 namespace {
 
-constexpr int kMaxRounds = 8;      // hard cap on tool-loop iterations
 constexpr size_t kToolResultCap = 8000;  // chars of tool output fed back
 
 std::string action_of(const ToolCall& tc)
@@ -85,7 +84,7 @@ std::string strip_diff_for_model(const std::string& result)
 LlmReply agent_complete(const LlmClient& client, Conversation& conv,
                         const ToolRegistry& registry, ToolRunner& runner,
                         AskHandler* ask, CancelToken* cancel,
-                        const ToolLoopHooks& hooks)
+                        const ToolLoopHooks& hooks, int max_rounds)
 {
     const std::string tools = registry.empty() ? std::string() : registry.tools_json();
     LlmReply reply = client.complete(conv, cancel, tools);
@@ -107,7 +106,7 @@ LlmReply agent_complete(const LlmClient& client, Conversation& conv,
             reply.error = "cancelled";
             break;
         }
-        if (++rounds > kMaxRounds) {
+        if (++rounds > max_rounds) {
             // Keep the history consistent, tell the model to wrap up and take
             // one final tool-less answer.
             conv.add_assistant(reply.content, reply.tool_calls);

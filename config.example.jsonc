@@ -119,7 +119,8 @@
     "name": "Krastor",              // base persona name (synthesized base agent)
     "active": "krastor",            // selected agent id (the app updates it)
     "continuous": false,            // hands-free mic -> STT -> LLM -> TTS loop
-    "ignore_while_speaking": true   // drop mic segments while thinking/speaking
+    "ignore_while_speaking": true,  // drop mic segments while thinking/speaking
+    "max_tool_rounds": 16           // tool-loop cap per user message (anti-runaway)
   },
 
   "tools": {

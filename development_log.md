@@ -2418,3 +2418,13 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   font-zoom row now documents Ctrl+0 (reset) and the duplicated
   "click + drag in chat" row was folded into the new section.
 - Both toolchains clean; all --*-test PASS.
+
+## 2026-11-12 - tool-loop round cap configurable (agent.max_tool_rounds)
+- Users hit "out of turns" when a task needed more than the hard-capped
+  8 tool-loop rounds per user message. The cap is now
+  agent.max_tool_rounds in config.jsonc (default 16, clamped >= 1):
+  AgentConfig field + parse/save, agent_complete takes max_rounds,
+  GUI worker and CLI pass cfg.agent.max_tool_rounds.
+- config.example.jsonc documents it; --config-test +2 checks (parsed
+  value, default 16).
+- Both toolchains clean; all --*-test PASS.

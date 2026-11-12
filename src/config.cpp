@@ -1,5 +1,6 @@
 #include "config.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
@@ -85,6 +86,8 @@ void apply_json(Config& cfg, const nlohmann::json& root, bool user_only)
         cfg.agent.continuous = j.value("continuous", cfg.agent.continuous);
         cfg.agent.ignore_while_speaking =
             j.value("ignore_while_speaking", cfg.agent.ignore_while_speaking);
+        cfg.agent.max_tool_rounds =
+            (std::max)(1, j.value("max_tool_rounds", cfg.agent.max_tool_rounds));
     }
     if (user_only && root.contains("agents") && root["agents"].is_object()) {
         cfg.agents.clear();
@@ -365,6 +368,7 @@ void Config::save(const std::string& path) const
         {"active", agent.active},
         {"continuous", agent.continuous},
         {"ignore_while_speaking", agent.ignore_while_speaking},
+        {"max_tool_rounds", agent.max_tool_rounds},
     };
     root["tools"] = {{"enabled", tools.enabled}};
     if (!tools.overrides_json.empty()) {

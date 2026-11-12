@@ -1164,7 +1164,8 @@ struct AppState : AskHandler {
             // The worker owns `conv` while worker != None (send() is guarded),
             // so the loop can append assistant/tool messages directly.
             LlmReply r = agent_complete(client, conv, tool_registry,
-                                        tool_runner, this, cancel.get(), hooks);
+                                        tool_runner, this, cancel.get(), hooks,
+                                        cfg.agent.max_tool_rounds);
             r.elapsed_ms = std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - t_start).count();
             return r;

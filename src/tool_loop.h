@@ -40,9 +40,12 @@ struct ToolLoopHooks {
 // ask are denied (and no tools are sent at all when the registry is empty).
 // The final reply (no tool_calls, or the loop limit hit) is returned; all
 // intermediate assistant/tool messages are already appended to `conv`.
+// `max_rounds` caps the tool-loop iterations per user message
+// (agent.max_tool_rounds in config.jsonc).
 LlmReply agent_complete(const LlmClient& client, Conversation& conv,
                         const ToolRegistry& registry, ToolRunner& runner,
                         AskHandler* ask, CancelToken* cancel,
-                        const ToolLoopHooks& hooks = {});
+                        const ToolLoopHooks& hooks = {},
+                        int max_rounds = 16);
 
 } // namespace krastor

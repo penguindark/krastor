@@ -120,6 +120,7 @@ struct AgentConfig {
     std::string active;                 // id of the selected agent in `agents`
     bool continuous = false;            // hands-free mic -> STT -> LLM -> TTS loop
     bool ignore_while_speaking = true;  // drop mic segments while thinking/speaking
+    int max_tool_rounds = 16;           // tool-loop cap per user message (see tool_loop)
 };
 
 struct ToolsConfig {
