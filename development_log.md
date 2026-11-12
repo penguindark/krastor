@@ -2363,3 +2363,58 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   bar slot the volume follows the mouse x (bar = slot minus the slider's
   2 px padding). The handle-drag path still works on top of it.
 - Both toolchains clean; all --*-test PASS.
+
+## 2026-11-12 - chat group: gray border removed (gui.cpp)
+- The vertical gray line at the left of the chat was the chat group's
+  NK_WINDOW_BORDER: nk_panel_end strokes a rectangle around the group
+  (only the left edge was clearly visible, the right hides under the
+  scrollbar). The flag is gone; the group keeps its translucent
+  background and its clipping (independent of the flag).
+- Both toolchains clean; all --*-test PASS.
+
+## 2026-11-12 - modular syntax highlighting: markup/yaml/markdown modes
+- The data-driven Highlighter (data/languages/*.json packs) only had the
+  keyword-scanner mode: useless for tag- and key-based languages. Packs now
+  carry a "mode" field selecting the scanner: code (default, unchanged),
+  markup (html/xml: tags, attributes, quoted values, entities, <!..>/<?..>
+  declarations, <!-- --> across lines), yaml (keys, bullets, --- markers,
+  anchors/aliases/!!tags, literals, numbers, | > block scalars), markdown
+  (headings, blockquotes, bullets, **em**, backtick code, [links], `
+  fences across lines). Unknown mode skips the pack (like broken JSON).
+- New optional "colors" map per pack (token class -> #rrggbb) overrides the
+  built-in palette; invalid hex keeps the default color.
+- New packs: html.json (htm/html5/xhtml), xml.json (svg/rss/atom/xsl/xsd),
+  yaml.json (yml), markdown.json (md/mdown/mdtxt). cpp already aliases
+  c/cc/cxx/hpp.
+- --tool-test +8 checks (pack load, html tags/attrs/entity, yaml keys/
+  comments, md headings/spans, aliases, code mode intact, unknown lang
+  plain). Both toolchains clean; all --*-test PASS.
+
+## 2026-11-12 - diff block: continuous rows, card fits the diff (gui.cpp)
+- Nuklear inserts window.spacing.y between layout rows: the diff bg bands
+  were spaced apart, and every row consumed row_h + spacing while the dry
+  measurement counted only row_h - the card ended above the diff content.
+  draw_diff_block now pushes window.spacing.y = 0 around its whole body
+  (popped on every return): rows stack continuously and the drawn height
+  matches the dry measurement, so the card wraps the diff exactly.
+- Both toolchains clean; all --*-test PASS.
+
+## 2026-11-12 - input line-kill hotkeys: Ctrl+K / Ctrl+Shift+K (gui.cpp)
+- Ctrl+K deletes from the caret to end of line (readline style),
+  Ctrl+Shift+K deletes the whole line including its break (VS Code style);
+  on the last line the break above is eaten instead. Edge-detected next to
+  the Up/Down history keys, gated on input focus; the edit applies them
+  before nk_edit_string (same previous-frame caret window as the recall
+  block): app.input is memmove-ed and the caret rewritten in codepoint
+  indices, UTF-8 safe via cp_len. Editing ends history browsing.
+- Help modal (Chat section) lists both.
+- Both toolchains clean; all --*-test PASS.
+
+## 2026-11-12 - help window: complete key list (gui.cpp)
+- The Aiuto (F1) list only covered the send/paste hotkeys. Added two
+  sections: "Input editing" (Home/End, Ctrl+Left/Right word jumps, Ctrl+A,
+  Ctrl+Z/Y) and "Chat scroll & select" (wheel, Up/Down/PgUp/PgDn/Home/End
+  scroll, Shift+arrows/Home/End keyboard selection, Ctrl+A/Ctrl+C); the
+  font-zoom row now documents Ctrl+0 (reset) and the duplicated
+  "click + drag in chat" row was folded into the new section.
+- Both toolchains clean; all --*-test PASS.

@@ -549,6 +549,7 @@ struct AppState : AskHandler {
     InputHistory history;    // submitted lines, capped by gui.history_size
     bool input_active = false;   // input field had focus last frame
     bool recall_pending = false; // caret jumps to the end after a recall
+    int kill_mode = 0;  // pending line kill: 1 = Ctrl+K (to EOL), 2 = Ctrl+Shift+K (whole line)
     bool recall_frame = false;   // edit detector: skip the recall injection
     // Clipboard-copy toast (opencode-style): visible 2 s after any copy
     // (chat selection, input box, image block); a new copy resets the
@@ -2320,12 +2321,24 @@ void help_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
         rows({{"Enter", "send the message"},
               {"Shift+Enter", "newline in the input box"},
               {"Up / Down", "recall submitted lines (empty input)"},
+              {"Ctrl+K", "delete from the caret to end of line"},
+              {"Ctrl+Shift+K", "delete the whole line"},
               {"Ctrl+V", "paste text / attach clipboard image ([imageN] marker)"},
               {"drag & drop", "attach an image/sound file ([imageN]/[soundN])"},
-              {"click + drag in chat", "select text (Ctrl+C copies it)"},
               {"Esc", "interrupt the running request (or clear selection)"},
               {"Shift+Tab", "switch to the next agent (circular)"},
-              {"Ctrl++ / Ctrl+-", "font zoom in / out"}});
+              {"Ctrl++ / Ctrl+- / Ctrl+0", "font zoom in / out / reset"}});
+        section("Input editing");
+        rows({{"Home / End", "caret to start / end of line"},
+              {"Ctrl+Left / Ctrl+Right", "caret one word left / right"},
+              {"Ctrl+A", "select all in the input box"},
+              {"Ctrl+Z / Ctrl+Y", "undo / redo in the input box"}});
+        section("Chat scroll & select");
+        rows({{"mouse wheel", "scroll the chat"},
+              {"Up / Down / PgUp / PgDn / Home / End", "scroll the chat"},
+              {"Shift + arrows / Home / End", "select text from the keyboard"},
+              {"Ctrl+A / Ctrl+C", "select all / copy the chat text"},
+              {"click + drag", "select text with the mouse (Ctrl+C copies)"}});
         section("Sessions");
         rows({{"Ctrl+O", "open the session manager"},
               {"Ctrl+Shift+O", "cycle to the next recent session"},
@@ -3312,6 +3325,12 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
     const struct nk_user_font* f = ctx->style.font;
     const float row_h = f && f->height > 0.0f ? f->height : 18.0f;
     const float inner_w = (text_w < 40.0f ? 40.0f : text_w) - indent;
+    // Continuous rows: Nuklear inserts window.spacing.y between layout rows,
+    // which spaced the bg bands apart AND made the drawn block taller than
+    // the dry measurement (the card ended above the diff). Zero it for the
+    // whole block; every return below pops it back.
+    nk_style_push_vec2(ctx, &ctx->style.window.spacing,
+                       nk_vec2(ctx->style.window.spacing.x, 0.0f));
 
     // Keep at most the last two path components so the header stays short.
     std::string path = l.diff_path;
@@ -3335,8 +3354,10 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
         rects->push_back({src_line, nk_widget_bounds(ctx)});
     const bool open = l.diff_open && l.diff.is_object() &&
                       l.diff.contains("ops") && l.diff["ops"].is_array();
-    if (!open)
+    if (!open) {
+        nk_style_pop_vec2(ctx);
         return total;
+    }
 
     const auto rows = diff_rows(l.diff);
     const bool side = inner_w >= 640.0f;
@@ -3375,6 +3396,7 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
         }
         if (l.diff.value("truncated", false))
             total += row_h;
+        nk_style_pop_vec2(ctx);
         return total;
     }
 
@@ -3466,6 +3488,7 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
     }
     if (l.diff.value("truncated", false))
         dim_note("... diff too large, showing the first part");
+    nk_style_pop_vec2(ctx);
     return total;
 }
 
@@ -3745,8 +3768,10 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
     nk_layout_row_begin(ctx, NK_DYNAMIC, height, 1);
     nk_layout_row_push(ctx, 1.0f);
     // Translucent panel background so the shader effect shows through.
+    // No NK_WINDOW_BORDER: it stroked a gray rectangle around the chat
+    // (only the left edge was clearly visible); clipping is independent.
     nk_style_push_color(ctx, &ctx->style.window.background, nk_rgba(14, 16, 22, 105));
-    if (nk_group_begin(ctx, "##chat", NK_WINDOW_BORDER)) {
+    if (nk_group_begin(ctx, "##chat", 0)) {
         const float spacing = ctx->style.window.spacing.y;
         // Usable text width inside the group: window width minus group padding,
         // border and the vertical scrollbar.
@@ -4618,6 +4643,23 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             }
             prev_up = up;
             prev_down = down;
+            // ---- line-kill hotkeys: Ctrl+K deletes from the caret to end of
+            // line (readline style), Ctrl+Shift+K deletes the whole line
+            // (VS Code style). Edge-detected like the history keys; the edit
+            // runs later in the frame, where the pending flag is applied to
+            // app.input + the caret (see kill_mode below).
+            static bool prev_k = false;
+            const bool k = glfwGetKey(win, GLFW_KEY_K) != 0;
+            if (app.input_active && !app.settings.open && k && !prev_k) {
+                const bool ctrl = glfwGetKey(win, GLFW_KEY_LEFT_CONTROL) ||
+                                  glfwGetKey(win, GLFW_KEY_RIGHT_CONTROL);
+                if (ctrl) {
+                    const bool shift = glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) ||
+                                       glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT);
+                    app.kill_mode = shift ? 2 : 1;
+                }
+            }
+            prev_k = k;
         }
 
         // ---- chat selection & scroll hotkeys (only while the chat has focus,
@@ -5093,6 +5135,39 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 ctx->current->edit.cursor = len;
                 ctx->current->edit.sel_start = len;
                 ctx->current->edit.sel_end = len;
+            }
+            // Line kill (see the hotkeys above): app.input is edited here and
+            // the caret rewritten, both in codepoint indices like Nuklear.
+            if (app.kill_mode) {
+                const bool whole = app.kill_mode == 2;
+                app.kill_mode = 0;
+                const size_t blen = std::strlen(app.input);
+                int caret = ctx->current->edit.cursor;
+                const int cplen = nk_utf_len(app.input, static_cast<int>(blen));
+                caret = caret < 0 ? 0 : (caret > cplen ? cplen : caret);
+                size_t cb = 0;  // caret codepoint -> byte offset
+                for (int i = 0; i < caret; ++i)
+                    cb += cp_len(static_cast<unsigned char>(app.input[cb]));
+                size_t ls = cb, le = cb;
+                while (ls > 0 && app.input[ls - 1] != '\n')
+                    --ls;
+                while (app.input[le] && app.input[le] != '\n')
+                    ++le;
+                size_t del_from = cb, del_to = le, newcaret = cb;
+                if (whole) {
+                    del_from = ls;
+                    del_to = app.input[le] ? le + 1 : le;  // take the break too
+                    if (del_to == le && ls > 0)
+                        del_from = ls - 1;  // last line: eat the break above
+                    newcaret = del_from;
+                }
+                std::memmove(app.input + del_from, app.input + del_to,
+                             blen - del_to + 1);  // +1: the NUL too
+                const int nc = nk_utf_len(app.input, static_cast<int>(del_from));
+                ctx->current->edit.cursor = nc;
+                ctx->current->edit.sel_start = nc;
+                ctx->current->edit.sel_end = nc;
+                app.history.leave();  // editing ends Up/Down browsing
             }
             const nk_flags edit_state = nk_edit_string_zero_terminated(
                 ctx,
