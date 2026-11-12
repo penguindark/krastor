@@ -1,0 +1,7 @@
+{
+  "name": "HTML",
+  "mode": "markup",
+  "aliases": ["htm", "html5", "xhtml"],
+  "block_comment": ["<!--", "-->"],
+  "strings": ["\"", "'"]
+}

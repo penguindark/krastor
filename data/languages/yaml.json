@@ -1,0 +1,9 @@
+{
+  "name": "YAML",
+  "mode": "yaml",
+  "aliases": ["yml"],
+  "line_comment": "#",
+  "strings": ["\"", "'"],
+  "types": ["true", "false", "null", "True", "False", "Null", "TRUE", "FALSE",
+            "NULL", "yes", "no", "on", "off", "~"]
+}

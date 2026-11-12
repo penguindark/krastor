@@ -2,16 +2,22 @@
 // Language definitions are JSON "plugins"
 // in data/languages/*.json (same philosophy as the GLSL shader plugins):
 //
-//   { "name": "Python", "aliases": ["py"],
+//   { "name": "Python", "aliases": ["py"], "mode": "code",
 //     "line_comment": "#", "block_comment": ["/*", "*/"],
 //     "strings": ["\"", "'"], "triples": ["\"\"\"", "'''"],
 //     "keywords": ["def", "class", ...], "types": ["int", ...],
-//     "builtins": ["print", ...], "decorators": true }
+//     "builtins": ["print", ...], "decorators": true,
+//     "colors": { "keyword": "#c678dd", ... } }
 //
-// The highlighter is a per-line scanner (comments/strings -> numbers ->
-// identifiers) with state carried across lines only for triple strings and
-// block comments. Output uses truecolor fg codes + fg-only resets (39) so the
-// code-block background applied by the markdown pass survives.
+// "mode" selects the scanner: "code" (default) is a per-line scanner
+// (comments/strings -> numbers -> identifiers) with state carried across
+// lines only for triple strings and block comments; "markup" (html/xml)
+// colors tags/attributes/entities/declarations; "yaml" colors keys/bullets/
+// anchors/block scalars; "markdown" colors headings/emphasis/links/fences.
+// An unknown mode skips the pack. "colors" optionally overrides the palette
+// per token class with #rrggbb. Output uses truecolor fg codes + fg-only
+// resets (39) so the code-block background applied by the markdown pass
+// survives.
 
 #pragma once
 
@@ -26,6 +32,7 @@ class Highlighter {
 public:
     struct LangDef {
         std::string name;
+        std::string mode = "code";  // code | markup | yaml | markdown
         std::vector<std::string> strings;      // quote delimiters (" ' `)
         std::vector<std::string> triples;      // multi-line quotes (\"\"\" ''')
         std::string line_comment;              // "" = none
@@ -33,6 +40,8 @@ public:
         std::set<std::string> keywords, types, builtins;
         bool decorators = false;               // highlight @name tokens
         bool escapes = true;                   // backslash escapes in strings
+        // token class -> "#rrggbb" override (missing = built-in palette)
+        std::map<std::string, std::string> colors;
     };
 
     // Loads every *.json in `dir` (unknown fields ignored, broken files

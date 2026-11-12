@@ -595,6 +595,38 @@ int run_tool_test()
               calls.empty() && text == "just <b>markdown</b>, no tools here");
     }
 
+    // --- syntax highlighting packs (data/languages/*.json) ------------------
+    {
+        krastor::Highlighter hl;
+        check("highlight: packs load", hl.load_default() && hl.size() >= 13);
+        const std::string esc = "\x1b[";
+        auto s = hl.highlight("<div class=\"a\">x &amp;</div>", "html");
+        check("highlight: html tags + attrs + entity colored",
+              s.find(esc) != std::string::npos &&
+                  s.find("div") != std::string::npos &&
+                  s.find("class") != std::string::npos &&
+                  s.find("&amp;") != std::string::npos);
+        check("highlight: htm alias resolves",
+              !hl.highlight("<p/>", "htm").empty());
+        s = hl.highlight("key: value  # note\nlist:\n  - 1\n", "yaml");
+        check("highlight: yaml keys + comments colored",
+              s.find(esc) != std::string::npos &&
+                  s.find("key:") != std::string::npos &&
+                  s.find("# note") != std::string::npos);
+        check("highlight: yml alias resolves",
+              !hl.highlight("a: 1", "yml").empty());
+        s = hl.highlight("# Title\nsome *em* and `code`\n", "md");
+        check("highlight: markdown headings + spans colored",
+              s.find(esc) != std::string::npos &&
+                  s.find("# Title") != std::string::npos &&
+                  s.find("*em*") != std::string::npos);
+        check("highlight: code mode still works",
+              hl.highlight("def f():\n    pass\n", "py").find(esc) !=
+              std::string::npos);
+        check("highlight: unknown language stays plain",
+              hl.highlight("x = 1", "klingon").empty());
+    }
+
     // --- files: sandbox write / read / edit / list ----------------------------
     const std::string tag =
         "selftest_" +

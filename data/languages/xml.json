@@ -1,0 +1,7 @@
+{
+  "name": "XML",
+  "mode": "markup",
+  "aliases": ["svg", "rss", "atom", "xsl", "xsd"],
+  "block_comment": ["<!--", "-->"],
+  "strings": ["\"", "'"]
+}
