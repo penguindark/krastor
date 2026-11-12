@@ -575,6 +575,7 @@ struct AppState : AskHandler {
 
     // ---- Inline media (see media.h) ----
     SoundPlayer player;  // mini sound player (own output device)
+    float vol_before_mute = 0.7f;  // speaker-icon mute restores this level
     // Loaded image textures in load order (oldest first) for LRU eviction;
     // blocks are owned by `lines`, these are just observers.
     std::vector<std::weak_ptr<MediaBlock>> tex_lru;
@@ -3604,17 +3605,19 @@ float draw_media_sound(nk_context* ctx, AppState& app, const MediaRef& m,
     // panel): the indent slot needs a real spacer widget - nk_layout_row_push
     // only sets the NEXT widget's width, so two pushes in a row would just
     // overwrite each other. Nuklear also inserts window.spacing.x between
-    // every pair of widgets, so the four gaps must come off the available
-    // width or the row overflows and the volume slider gets clipped.
+    // every pair of widgets, so the five gaps and the right margin must come
+    // off the available width or the row overflows past the viewport edge.
     const float gap = ctx->style.window.spacing.x;
-    float avail = text_w - indent - 4.0f * gap;
+    const float right_pad = 12.0f;  // keep the row off the viewport edge
+    float avail = text_w - indent - right_pad - 6.0f * gap;
     if (avail < 240.0f)
         avail = 240.0f;  // narrow window: overflow beats a negative label
     const float btn_w = ctx->style.font->height * 1.6f;
+    const float icon_w = ctx->style.font->height;  // speaker icon column
     const float vol_w = 0.12f * avail;
     const float prog_w = 0.34f * avail;
-    const float lbl_w = avail - btn_w - vol_w - prog_w;
-    nk_layout_row_begin(ctx, NK_STATIC, h, 5);
+    const float lbl_w = avail - btn_w - icon_w - vol_w - prog_w;
+    nk_layout_row_begin(ctx, NK_STATIC, h, 7);
     nk_layout_row_push(ctx, indent < 0.0f ? 0.0f : indent);
     nk_spacer(ctx);
     nk_layout_row_push(ctx, btn_w);
@@ -3624,6 +3627,71 @@ float draw_media_sound(nk_context* ctx, AppState& app, const MediaRef& m,
     // for the agent). Icon-only: button_icon would also draw its text label.
     const bool pp = button_icon_only(ctx, app.icons, active ? "pause" : "play",
                                      active ? "||" : ">");
+    // Speaker icon + volume slider right after the transport button
+    // (player-wide state). The icon says what the slider is for and toggles
+    // mute: volume-x while muted, volume-2 otherwise; no atlas entry -> a
+    // plain "vol" button (button_icon_only's fallback).
+    nk_layout_row_push(ctx, icon_w);
+    {
+        const bool muted = app.player.volume() < 0.01f;
+        if (button_icon_only(ctx, app.icons, muted ? "volume-x" : "volume-2",
+                             "vol")) {
+            if (!muted) {
+                app.vol_before_mute = app.player.volume();
+                app.player.set_volume(0.0f);
+            } else {
+                app.player.set_volume(app.vol_before_mute > 0.01f
+                                          ? app.vol_before_mute
+                                          : 0.7f);
+            }
+        }
+    }
+    // Pill slider at the progress bar's height: dark rounded track, fill in
+    // the agent's accent color, small round handle blended into the fill.
+    const struct nk_color acol = nk_rgb(app.agent_r, app.agent_g, app.agent_b);
+    nk_style_push_float(ctx, &ctx->style.slider.bar_height, h - 8.0f);
+    nk_style_push_float(ctx, &ctx->style.slider.rounding, (h - 8.0f) * 0.5f);
+    nk_style_push_vec2(ctx, &ctx->style.slider.cursor_size,
+                       nk_vec2(6.0f, h - 8.0f));
+    nk_style_push_color(ctx, &ctx->style.slider.bar_normal, nk_rgb(45, 50, 62));
+    nk_style_push_color(ctx, &ctx->style.slider.bar_hover, nk_rgb(52, 58, 72));
+    nk_style_push_color(ctx, &ctx->style.slider.bar_active, nk_rgb(52, 58, 72));
+    nk_style_push_color(ctx, &ctx->style.slider.bar_filled, acol);
+    nk_style_push_style_item(ctx, &ctx->style.slider.cursor_normal,
+                             nk_style_item_color(acol));
+    nk_style_push_style_item(ctx, &ctx->style.slider.cursor_hover,
+                             nk_style_item_color(acol));
+    nk_style_push_style_item(ctx, &ctx->style.slider.cursor_active,
+                             nk_style_item_color(acol));
+    nk_layout_row_push(ctx, vol_w);
+    // Click anywhere on the bar sets the level (no drag needed): Nuklear's
+    // slider only drags its handle, so while the left button is held over
+    // the slot the volume follows the mouse. The handle-drag path still
+    // works on top of this. The bar is the slot minus the slider's 2 px
+    // padding, matching what nk_draw_slider fills.
+    const struct nk_rect vslot = nk_widget_bounds(ctx);  // PEEK the slot
+    const struct nk_rect vbar =
+        nk_rect(vslot.x + 2.0f, vslot.y, NK_MAX(1.0f, vslot.w - 4.0f), vslot.h);
+    float vol = app.player.volume();
+    bool click_set = false;
+    if (ctx->input.mouse.buttons[NK_BUTTON_LEFT].down &&
+        nk_input_has_mouse_click_down_in_rect(&ctx->input, NK_BUTTON_LEFT, vbar,
+                                              nk_true)) {
+        vol = (ctx->input.mouse.pos.x - vbar.x) / vbar.w;
+        vol = vol < 0.0f ? 0.0f : (vol > 1.0f ? 1.0f : vol);
+        click_set = true;
+    }
+    const bool volled = nk_slider_float(ctx, 0.0f, &vol, 1.0f, 0.01f) != 0;
+    nk_style_pop_style_item(ctx);  // cursor_active
+    nk_style_pop_style_item(ctx);  // cursor_hover
+    nk_style_pop_style_item(ctx);  // cursor_normal
+    nk_style_pop_color(ctx);       // bar_filled
+    nk_style_pop_color(ctx);       // bar_active
+    nk_style_pop_color(ctx);       // bar_hover
+    nk_style_pop_color(ctx);       // bar_normal
+    nk_style_pop_vec2(ctx);        // slider cursor_size
+    nk_style_pop_float(ctx);       // slider rounding
+    nk_style_pop_float(ctx);       // slider bar_height
     nk_layout_row_push(ctx, lbl_w);
     std::string label = m->label;
     if (!m->error.empty())
@@ -3645,13 +3713,13 @@ float draw_media_sound(nk_context* ctx, AppState& app, const MediaRef& m,
     // Interactive only while a track is loaded: dragging the bar seeks.
     const bool seeked = nk_progress(ctx, &cur, max,
                                     loaded ? nk_true : nk_false) != 0;
-    nk_layout_row_push(ctx, vol_w);
-    float vol = app.player.volume();
-    const bool volled = nk_slider_float(ctx, 0.0f, &vol, 1.0f, 0.01f) != 0;
+    // Trailing spacer: the last real widget keeps right_pad px of margin.
+    nk_layout_row_push(ctx, right_pad);
+    nk_spacer(ctx);
     nk_layout_row_end(ctx);
     if (seeked && dur > 0.0)
         app.player.seek((double)cur / 1000.0 * dur);
-    if (volled)
+    if (volled || click_set)
         app.player.set_volume(vol);
     if (pp) {
         if (active)
@@ -5476,7 +5544,7 @@ int run_gui_stack_test()
                 nk_clear(&ctx);
                 return;
             }
-            nk_layout_row_begin(&ctx, NK_STATIC, 26.0f, 5);
+            nk_layout_row_begin(&ctx, NK_STATIC, 26.0f, 7);
             // indent slot: a real spacer widget (a bare row_push would be
             // overwritten by the next push) - same as draw_media_sound.
             nk_layout_row_push(&ctx, 20.0f);
@@ -5495,14 +5563,20 @@ int run_gui_stack_test()
                                  NK_BUTTON_DEFAULT, &content))
                     ++pp;
             }
+            // speaker icon column (spacer in the test: no atlas here)
+            nk_layout_row_push(&ctx, 18.0f);
+            nk_spacer(&ctx);
+            // volume right after the transport button (new column order)
+            nk_layout_row_push(&ctx, 60.0f);
+            float vol = 1.0f;
+            nk_slider_float(&ctx, 0.0f, &vol, 1.0f, 0.01f);
             nk_layout_row_push(&ctx, 250.0f);
             nk_label(&ctx, "song.mp3  0:10 / 3:30", NK_TEXT_LEFT);
             nk_layout_row_push(&ctx, 150.0f);
             nk_size cur = 100, max = 1000;
             nk_progress(&ctx, &cur, max, nk_true);
-            nk_layout_row_push(&ctx, 60.0f);
-            float vol = 1.0f;
-            nk_slider_float(&ctx, 0.0f, &vol, 1.0f, 0.01f);
+            nk_layout_row_push(&ctx, 12.0f);
+            nk_spacer(&ctx);
             nk_layout_row_end(&ctx);
             nk_group_end(&ctx);
             nk_end(&ctx);

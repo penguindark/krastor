@@ -2331,3 +2331,35 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   (same rule as the Settings modal). Chat, input, top and status bars all
   get the 16 px margins; the group adds its own 4 px inside the chat.
 - Both toolchains clean; all --*-test PASS.
+
+## 2026-11-12 - media player row: volume after the button, right margin (gui.cpp)
+- Row order is now indent | play/pause | volume | label + time | progress |
+  12 px trailing spacer: the volume slider sits right after the transport
+  button and the trailing spacer keeps the last widget off the viewport
+  edge (6 static columns, five gaps + right_pad subtracted from the width).
+- The slider is styled like the progress bar: its bar already uses the
+  same track color, so bar_height = row h - 8 (the progress box height)
+  and cursor_size = (8, h-8) make the two widgets read as one family.
+- --gui-test media-row repro updated to the 6-column order.
+- Both toolchains clean; all --*-test PASS.
+
+## 2026-11-12 - media player: speaker icon + pill volume slider (gui.cpp)
+- The volume slider was an unlabeled thin line: nobody could tell what it
+  was. A speaker icon from the SVG atlas now sits right before it
+  (volume-x when muted, volume-2 otherwise, plain "vol" label fallback
+  when the atlas is unavailable), and the slider became a pill: rounded
+  dark track, fill in the active agent's accent color, small round
+  handle blended into the fill, all at the progress bar's height.
+- Row is now 7 static columns (indent | btn | icon | volume | label |
+  progress | 12 px right margin); --gui-test repro updated.
+- Both toolchains clean; all --*-test PASS.
+
+## 2026-11-12 - media player: speaker mute + click-to-set volume (gui.cpp)
+- The speaker icon is now a button (button_icon_only, "vol" fallback):
+  clicking it mutes the player (level remembered in vol_before_mute,
+  restored on unmute; the icon flips to volume-x while muted).
+- Clicking anywhere on the volume bar sets the level directly: Nuklear's
+  slider only drags its handle, so while the left button is held over the
+  bar slot the volume follows the mouse x (bar = slot minus the slider's
+  2 px padding). The handle-drag path still works on top of it.
+- Both toolchains clean; all --*-test PASS.
