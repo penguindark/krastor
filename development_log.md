@@ -2323,3 +2323,11 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   about tools is not a call); plain replies untouched.
 - --tool-test +7 checks (both shapes, typed params, prose cases).
 - Both toolchains clean; all --*-test PASS.
+
+## 2026-11-12 - 16 px side padding on the main window (gui.cpp)
+- Chat and input box were flush against the window edges. The main window
+  now pushes window.padding (16, 4) around nk_begin/nk_end: nk_panel_begin
+  caches the padding at nk_begin, so the push must wrap the whole window
+  (same rule as the Settings modal). Chat, input, top and status bars all
+  get the 16 px margins; the group adds its own 4 px inside the chat.
+- Both toolchains clean; all --*-test PASS.

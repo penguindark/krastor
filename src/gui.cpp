@@ -4696,6 +4696,10 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
         // then contain every point, so the modals above can never regain the
         // top and Nuklear marks them NK_WINDOW_ROM - every widget inside,
         // including the title-bar X, stops responding (frozen-modal bug).
+        // 16 px side padding: chat, input box and the bars breathe away from
+        // the window edges. nk_panel_begin caches the padding at nk_begin, so
+        // the push must wrap the whole window (same rule as the Settings modal).
+        nk_style_push_vec2(ctx, &ctx->style.window.padding, nk_vec2(16.0f, 4.0f));
         nk_begin(ctx, "Krastor", nk_rect(0, 0, (float)w, (float)h),
                  NK_WINDOW_BACKGROUND);
         {
@@ -5153,6 +5157,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
                 nk_label(ctx, status_buf.c_str(), NK_MIDDLE_LEFT);
         }
         nk_end(ctx);
+        nk_style_pop_vec2(ctx);  // window padding
 
         settings_modal(ctx, cfg, voices, app.settings, w, h, fx, app.models,
                        app.icons);
