@@ -209,7 +209,9 @@ window-size persistence, wheel/keyboard scrolling with follow-bottom, chat text
 selection & UTF-8 copy (mouse + Shift+arrows). **Output formatting plugins**:
 Markdown -> ANSI formatter styles LLM
 replies (headings, bold/italic, inline code, lists, quotes, tables), data-driven
-syntax highlighting (`data/languages/*.json`), collapsible "Thought" blocks for
+syntax highlighting (`data/languages/*.json` packs, scanner modes
+`code`/`markup`/`yaml`/`markdown` + per-pack color overrides), collapsible
+"Thought" blocks for
 model reasoning, and full-color emoji via a Noto sprite atlas. **Stop button**
 aborts an in-flight LLM request instantly (cross-thread WinHTTP handle close /
 curl progress abort) and cuts TTS playback mid-utterance. **SVG UI icons**:
@@ -249,7 +251,8 @@ not Krastor's own voice or room noise; toggles `stt.denoise`/`stt.echo_cancel`
   context limit (`sessions.auto_compact`, buffer `max(NN%, 16k)`) and
   automatic compact-and-retry on provider context-overflow errors. The
   `files edit/write` tools return a structured line diff that the GUI renders
-  as a clickable side-by-side block (`← Edit path +N −M`, red/green panes,
+  as a clickable side-by-side block (`<- Edit path +N -M`, ASCII markers -
+  the chat font lacks U+2212/U+2190; red/green panes, continuous rows,
   unified fallback on narrow windows); the diff is stripped from the model's
   context.
 - **Inline media (built 2026-11-07).** Images and sounds shown as blocks in
@@ -257,5 +260,7 @@ not Krastor's own voice or room noise; toggles `stt.denoise`/`stt.echo_cancel`
   and `/play <file|beep>` commands plus reply tokens `[image: src | w | h]`
   / `[sound: src]` the model is prompted to prefer for images. Images always
   fit the chat text area (aspect-preserving fit-inside), click copies them to
-  the clipboard; sounds play through a mini player (own miniaudio device,
-  play/stop + progress). Headless self-test `krastor --media-test`.
+  the clipboard; sounds play through a mini player row (own miniaudio device:
+  play/pause, seekable progress, speaker-icon mute, volume pill slider with
+  click-to-set level; `[sound: stop/pause]` control tokens, autoplay via
+  `gui.media_autoplay`). Headless self-test `krastor --media-test`.

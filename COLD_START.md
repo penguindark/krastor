@@ -163,19 +163,24 @@ Le chat sono **salvate automaticamente** in `sessions\` (una cartella per
 sessione): `Ctrl+O` apre il gestore sessioni, `Ctrl+Shift+O` cicla le
 recenti, `/compact` riassume la sessione con il modello attivo, `/clean`
 (pulsante gomma) pulisce lo schermo senza toccare la sessione, `F1` o
-`/help` apre l'elenco di comandi e scorciatoie.
+`/help` apre l'elenco di comandi e scorciatoie. L'input box ha la cronologia
+dei messaggi inviati (`Su`/`Giù` a campo vuoto, stile bash) e i taglia-riga
+`Ctrl+K` (dal cursore a fine riga) e `Ctrl+Shift+K` (riga intera).
 Il compact è in stile opencode: template strutturato (Objective/Requirements/
 Decisions/Work State/Next Move/Relevant Files), modalità *update* quando
 esiste già un checkpoint, e **auto-compact** a fine turno quando il contesto
 supera `context_size − compact_buffer` (default 15%, minimo 16k token); se
 il provider rifiuta il contesto troppo lungo, Krastor compatta e **ritenta
 il turno una volta**. Le modifiche ai file dei tool `files edit/write`
-rendono un blocco diff cliccabile (`← Edit path +N −M`): side-by-side
-vecchio/nuovo con righe rosse/verdi, unified su finestre strette.
+rendono un blocco diff cliccabile (`<- Edit path +N -M`, marcatori ASCII
+perché il font non ha i glifi ← e −): side-by-side vecchio/nuovo con
+righe rosse/verdi continue, unified su finestre strette.
 Media nel chat: `/image <file|clipboard|base64:...> [w [h]]` mostra
 un'immagine (dimensioni opzionali, `-` = automatica; l'immagine è sempre
 contenuta nell'area testo), `/play <file|beep>` riproduce un audio con un
-mini player (play/stop + avanzamento). Clic su un'immagine = copiata negli
+mini player (play/pausa + avanzamento trascinabile + volume con mute:
+click sulla barra imposta il livello, click sull'altoparlante tace).
+Clic su un'immagine = copiata negli
 appunti (come la selezione di testo). Il modello può fare lo stesso con i
 token su riga dedicata `[image: src | w | h]` e `[sound: src]` (istruito
 nel system prompt a preferire `[image: ...]` per mostrare immagini); i

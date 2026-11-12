@@ -21,11 +21,14 @@ reacts to the assistant's state, with a terminal-style chat on top.
 
 **Terminal-style chat GUI (GLFW + Nuklear)**
 - Markdown rendering: headings, tables with box borders, code blocks with
-  syntax highlighting (JSON language packs), Thought blocks, color emoji
+  modular syntax highlighting (JSON language packs: code, markup, yaml,
+  markdown modes), Thought blocks, color emoji
 - Full ANSI/SGR support: the agent can print colored output and ANSI art
   (16/256/truecolor), line-level passthrough keeps markdown around it intact
 - Text selection & copy (raw UTF-8), follow-bottom scrolling, Ctrl±0 font zoom,
-  drag & drop and Ctrl+V attachments (images render inline, sounds play)
+  input history (Up/Down) + line-kill keys (Ctrl+K, Ctrl+Shift+K),
+  drag & drop and Ctrl+V attachments (images render inline, sounds play
+  in an inline mini player with transport, volume and mute)
 - Per-response stats (model · time · tok/s) and a live context-usage footer
 
 **GLSL shader backgrounds with a real event feed**
