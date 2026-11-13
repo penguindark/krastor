@@ -2441,3 +2441,9 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   will not survive the restart is never invisible.
 - Test hygiene: stop deleting the user's bin/state.json after test runs.
 - Both toolchains clean; all --*-test PASS.
+
+## 2026-11-13 - help modal sized to the window
+- F1 help overlay now occupies 70% of the window height and half its
+  width (was a fixed 680x520 clamp), so the full command list fits
+  without scrolling on normal windows.
+- Both toolchains clean; all --*-test PASS.

@@ -2278,8 +2278,10 @@ void help_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
         return;
     nk_style_push_style_item(ctx, &ctx->style.window.fixed_background,
                              nk_style_item_color(nk_rgba(16, 18, 24, 240)));
-    const int mw = (std::max)(420, (std::min)(680, win_w - 60));
-    const int mh = (std::max)(300, (std::min)(520, win_h - 80));
+    // Sized to the window: half the width, 70% of the height (the full
+    // command list fits without scrolling on normal windows).
+    const int mw = win_w / 2;
+    const int mh = static_cast<int>(win_h * 0.70f);
     if (!nk_begin(ctx, "Help",
                   nk_rect((win_w - mw) / 2.0f, (win_h - mh) / 2.0f,
                           (float)mw, (float)mh),
