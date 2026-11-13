@@ -39,7 +39,7 @@ product. Never part of the shipped agent.
 
 ## Agent tools system (Phase 6, 2026-11-07)
 Since Phase 6 this folder is ALSO the runtime tools folder of the agent (see
-`../tools_plan.md`): first-level `tool_<name>.jsonc` manifests + the tool
+`../src/development.md`): first-level `tool_<name>.jsonc` manifests + the tool
 executables (built by CMake into `tools/`, git-ignored like all `*.exe`).
 
 | Tool | Manifest | Executable | What it does |
@@ -60,7 +60,7 @@ URL decode) live in `html_util.h` (header-only, used by webfetch+websearch).
   without Krastor's `_approved` stamp.
 - Protocol + permission model (sandbox `~/Documents/KrastorWorkspace`,
   `deny_always` floors re-checked by the tools themselves): see
-  `../tools_plan.md` and `../src/development.md`.
+  `../src/development.md`.
 - Debug without the LLM: `..\bin\krastor.exe --tool-run files '{"action":"list","path":"."}'`
   (pwsh: single-quote the JSON, no backslash escapes); full suite:
   `..\bin\krastor.exe --tool-test`. `FILETOOL_DEBUG=<logfile>` makes filetool

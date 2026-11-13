@@ -1,4 +1,4 @@
-// Krastor — tool permission policies (see tools_plan.md section 4).
+// Krastor — tool permission policies (see development.md).
 // A policy is a set of per-class rules (read/write/net/run), each with glob
 // `allow`/`deny` lists and an `ask` flag. Precedence: deny_always > deny >
 // allow > ask > default-deny. `~` expands to the user home; on Windows
@@ -35,7 +35,7 @@ std::string canonical_path(const std::string& p,
 // lowercased on Windows, '/' separators) before matching.
 bool glob_match(const std::string& pattern, const std::string& path);
 
-// The writable sandbox (tools_plan.md): ~/Documents/KrastorWorkspace.
+// The writable sandbox (development.md): ~/Documents/KrastorWorkspace.
 // Created on demand; every "write"-class default policy allows it freely.
 std::string workspace_dir();
 

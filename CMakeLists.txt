@@ -112,7 +112,7 @@ target_include_directories(krastor PRIVATE
 
 target_link_libraries(krastor PRIVATE glfw lunasvg::lunasvg rnnoise speexdsp)
 
-# --- Agent tools (tools_plan.md) ----------------------------------------
+# --- Agent tools (see src/development.md) ----------------------------------------
 # Small standalone exes built into tools/ next to their tool_*.jsonc
 # manifests. filetool reuses src/permissions.cpp (glob matcher + policy).
 add_executable(filetool tools/filetool/filetool.cpp src/permissions.cpp)

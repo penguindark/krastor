@@ -1,4 +1,4 @@
-// Krastor — agentic tool loop (see tools_plan.md section 5).
+// Krastor — agentic tool loop (see development.md).
 // Wraps LlmClient::complete(): when the model requests tool calls, each call
 // goes through the ToolRunner (permission gate inside), the results are fed
 // back as "tool" messages and the model is asked again — up to a hard round

@@ -88,7 +88,7 @@ void print_voice(const krastor::VoiceRegistry& voices)
               << '\n';
 }
 
-// ---- session command helpers (CLI, see sessions_plan.md) ----
+// ---- session command helpers (CLI, see development.md) ----
 
 // Resolve a `/session open|delete` argument: list index ("3" or "#3"),
 // exact id, or unique id prefix. Empty = not found/ambiguous.
@@ -813,7 +813,7 @@ int run_tool_test()
     return failed;
 }
 
-// Headless self-test for the session store (sessions_plan.md): folder-per-
+// Headless self-test for the session store (development.md): folder-per-
 // session round-trip with images and tool calls, crash tolerance, rename,
 // list ordering, compaction archive, delete. Exit code = failed checks.
 int run_session_test()
@@ -1556,7 +1556,7 @@ int main(int argc, char** argv)
     krastor::apply_agent_llm(cfg.llm, base_llm,
                              cfg.find_agent(cfg.agent.active), models);
 
-    // ---- session CLI flags (sessions_plan.md) --------------------------------
+    // ---- session CLI flags (development.md) --------------------------------
     // Handled before the heavy voice stack: pure store operations exit here.
     krastor::SessionStore store(krastor::SessionStore::default_dir(cfg.sessions.dir));
     if (list_sessions_flag) {
@@ -1630,7 +1630,7 @@ int main(int argc, char** argv)
                      "KRASTOR_API_KEY) — LLM calls will fail\n";
 
     krastor::LlmClient llm(cfg.llm);
-    // External tools (see tools_plan.md): the CLI asks interactively on stdin.
+    // External tools (see development.md): the CLI asks interactively on stdin.
     krastor::GrantStore tool_grants;
     krastor::ToolRegistry tool_registry;
     krastor::ToolRunner tool_runner(tool_grants, nlohmann::json{});
@@ -1676,7 +1676,7 @@ int main(int argc, char** argv)
         });
     krastor::Conversation conversation(sys_prompt);
 
-    // ---- session selection (sessions_plan.md) ---------------------------------
+    // ---- session selection (development.md) ---------------------------------
     // --session <id> > --new-session > continue the most recent > fresh session.
     std::string session_id;
     std::string session_title;

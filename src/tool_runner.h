@@ -1,4 +1,4 @@
-// Krastor — external tool runner (see tools_plan.md section 3).
+// Krastor — external tool runner (see development.md).
 // Spawns a tool executable, writes the JSON args (+ effective _policy) on
 // stdin, captures stdout/stderr with a hard timeout and an output cap, and
 // parses the {"ok":...} envelope. Every call passes the permission gate:

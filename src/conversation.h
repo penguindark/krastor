@@ -48,7 +48,7 @@ public:
 
     // Replaces the whole history (system prompt kept as first message);
     // `history` must not contain a system message. Used to restore persisted
-    // sessions and compacted histories (see sessions_plan.md).
+    // sessions and compacted histories (see development.md).
     void replace_history(std::vector<Message> history);
 
     // Messages added since index `idx` (used to persist new turns).

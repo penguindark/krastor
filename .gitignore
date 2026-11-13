@@ -42,7 +42,7 @@ config.json
 config.jsonc
 state.json
 
-# Chat sessions (personal data, one folder per session - see sessions_plan.md)
+# Chat sessions (personal data, one folder per session - see src/development.md)
 sessions/
 
 # Editor / OS noise

@@ -1,4 +1,4 @@
-// Krastor tool manifest: web text fetcher (tools_plan.md section 2).
+// Krastor tool manifest: web text fetcher (development.md).
 // wget-like: fetch one URL and return its readable text to the LLM.
 {
   "name": "webfetch",

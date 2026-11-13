@@ -2474,3 +2474,12 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   report "timeout after N s ... (raise llm.timeout_s in config.jsonc)".
 - config.example.jsonc documented; --config-test +2 (default/clamp).
 - Both toolchains clean; all --*-test PASS.
+
+## 2026-11-14 - retired the design plan files
+- tools_plan.md, effects_plan.md and sessions_plan.md removed: all three
+  were fully implemented (verified item-by-item against the code), so they
+  carried no open work and their details already live in
+  src/development.md / tools/development.md.
+- References re-pointed in README.md, project.md, AGENT.md, COLD_START.md,
+  src/development.md, tools/development.md (design docs now = development
+  docs). development_log.md keeps its historical mentions untouched.

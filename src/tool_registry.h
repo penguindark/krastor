@@ -1,4 +1,4 @@
-// Krastor — external tool registry (see tools_plan.md sections 1-2).
+// Krastor — external tool registry (see development.md sections 1-2).
 // Scans the tools/ folder (sibling of the executable, fallback: next to it)
 // for `tool_<name>.jsonc` manifests. Each manifest describes one external
 // executable: what it does (LLM-facing description), its input JSON Schema

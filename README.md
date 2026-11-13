@@ -107,9 +107,7 @@ No mocks — the test modes exercise the real subsystems:
 - [`project.md`](project.md) — vision, architecture, roadmap
 - [`development_log.md`](development_log.md) — chronological development history
 - [`COLD_START.md`](COLD_START.md) — clone-to-running guide (IT)
-- [`AGENT.md`](AGENT.md) — entry point + index of folder-level docs
-- Design plans: [`tools_plan.md`](tools_plan.md), [`sessions_plan.md`](sessions_plan.md),
-  [`effects_plan.md`](effects_plan.md)
+- [`AGENT.md`](AGENT.md) - entry point + index of folder-level docs
 
 ## License
 

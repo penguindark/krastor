@@ -256,7 +256,7 @@ CompactResult compact_conversation(
         --res.messages_before;
     }
 
-    // Budget tuned to the model (sessions_plan.md §3.1).
+    // Budget tuned to the model (development.md).
     const int ctx = context_size > 0 ? context_size : 8192;
     const int headroom = (std::max)(512, ctx / 16);
     const int budget = ctx - reserve_out - headroom;

@@ -1,6 +1,6 @@
 # Creates the agent's dedicated Python virtualenv (tools/python/venv) and
 # installs tools/python/requirements.txt into it. Safe to re-run: an existing
-# venv is reused, packages are refreshed. See tools_plan.md section 6.3.
+# venv is reused, packages are refreshed. See development.md.3.
 
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path

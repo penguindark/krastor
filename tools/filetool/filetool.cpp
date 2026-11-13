@@ -1,5 +1,5 @@
 // Krastor files tool — file/folder management for the agent (Phase B of
-// tools_plan.md). One executable, JSON in on stdin, JSON out on stdout:
+// development.md). One executable, JSON in on stdin, JSON out on stdout:
 //   in:  {"action":"read","path":"...","start":0,"end":4096,"_approved":true,
 //         "_policy":{...},"_workspace":"..."}
 //   out: {"ok":true,"result":{...}} | {"ok":false,"error":"..."}

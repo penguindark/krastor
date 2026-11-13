@@ -598,7 +598,7 @@ struct AppState : AskHandler {
     std::mutex heard_mtx;
     std::vector<std::string> heard;
 
-    // ---- External tools (see tools_plan.md) ----
+    // ---- External tools (see development.md) ----
     GrantStore tool_grants;      // session-scoped "always allow" answers
     ToolRegistry tool_registry;  // tools/tool_*.jsonc (loaded in the ctor)
     ToolRunner tool_runner;
@@ -648,7 +648,7 @@ struct AppState : AskHandler {
     std::mutex tev_mtx;
     std::vector<ToolEvent> tev_ready;
 
-    // ---- Sessions (see sessions_plan.md) ----
+    // ---- Sessions (see development.md) ----
     SessionStore store;
     std::string session_id, session_title;
     size_t saved_count = 0;      // messages persisted so far (autosave cursor)
@@ -749,7 +749,7 @@ struct AppState : AskHandler {
                                   "Shift+Enter = newline). Ctrl+V pastes text or "
                                   "an image (a [imageN] marker lands in the "
                                   "text). Settings = LLM/voice config."});
-        // ---- session restore (sessions_plan.md): continue the session that
+        // ---- session restore (development.md): continue the session that
         // was active on the previous run (state's sessions.last_id), falling
         // back to the most recent one; a restored history rebuilds the chat
         // and the session's agent is restored with it.
@@ -1059,7 +1059,7 @@ struct AppState : AskHandler {
 
     void send(const std::string& text)
     {
-        // Slash commands never reach the LLM (sessions_plan.md §4).
+        // Slash commands never reach the LLM (development.md).
         if (!text.empty() && text[0] == '/') {
             handle_command(text);
             return;
@@ -1235,7 +1235,7 @@ struct AppState : AskHandler {
     }
 
     // ------------------------------------------------------------- sessions
-    // Persist everything appended since the last save (see sessions_plan.md);
+    // Persist everything appended since the last save (see development.md);
     // auto-titles an untitled session from its first user message.
     void autosave_turn()
     {
@@ -2180,7 +2180,7 @@ void word_range(const AppState& app, int line, int cp, int& lo, int& hi)
 }
 
 // ------------------------------------------------------------- settings modal
-// Permission request modal for external tools (tools_plan.md section 4):
+// Permission request modal for external tools (development.md):
 // the LLM worker is blocked in AppState::ask() until one of the three
 // buttons answers the pending request.
 void permission_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
@@ -2384,7 +2384,7 @@ void help_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
     nk_style_pop_style_item(ctx);
 }
 
-// Session manager: list / switch / new / rename / delete (sessions_plan.md §5).
+// Session manager: list / switch / new / rename / delete (development.md).
 void session_modal(struct nk_context* ctx, AppState& app, int win_w, int win_h)
 {
     if (!app.sessions_open)
@@ -2674,7 +2674,7 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         }
     }
 
-    // External tools master switch (see tools_plan.md). The manifest scan
+    // External tools master switch (see development.md). The manifest scan
     // happens at startup, so toggling takes effect after a restart.
     nk_layout_row_dynamic(ctx, 28, 1);
     {
@@ -4964,7 +4964,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             {
                 // Current-session button: opens the session manager modal
                 // (the same one Ctrl+O toggles), so switching/deleting/
-                // renaming live in exactly one place (sessions_plan.md §5).
+                // renaming live in exactly one place (development.md).
                 // Labels do not clip, so the title is fitted to the column.
                 const struct nk_panel* lay = ctx->current->layout;
                 const float col_w = 0.40f * nk_layout_row_calculate_usable_space(
@@ -5385,7 +5385,7 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
 
         settings_modal(ctx, cfg, voices, app.settings, w, h, fx, app.models,
                        app.icons);
-        // Session manager (list/switch/new/rename/delete, sessions_plan.md).
+        // Session manager (list/switch/new/rename/delete, development.md).
         session_modal(ctx, app, w, h);
         // Help overlay (F1 or /help): commands + shortcuts.
         help_modal(ctx, app, w, h);

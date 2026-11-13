@@ -111,10 +111,10 @@ working dir; i commenti `//` sono permessi e preservati per sempre):
    switch con Shift+Tab o il menu in alto a sinistra),
    `tts.default_voice` (`it-it-paola`), `stt.input_device` (-1 = default),
    `gui.*` (font, effetto sfondo, dimensione finestra, key_repeat_speed 0.25..4x per la ripetizione tasti nei campi testo), `agent.*`,
-   `tools.enabled` (master switch dei tool esterni, vedi `tools_plan.md`),
+   `tools.enabled` (master switch dei tool esterni, vedi `src/development.md`),
     `sessions.*` (`dir` vuoto = `sessions\` accanto a `bin\`, `autosave`,
     `continue_last`, `auto_compact` (default true) e `compact_buffer`
-     (default `"15%"`) — vedi `sessions_plan.md`).
+     (default `"15%"`) — vedi `src/development.md`).
    La GUI salva qui le proprie modifiche (Settings, zoom font, resize).
 
 ## 6. Compilare

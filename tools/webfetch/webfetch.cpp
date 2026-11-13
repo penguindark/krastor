@@ -1,5 +1,5 @@
 // Krastor webfetch tool — wget-like text fetcher for the agent (Phase C of
-// tools_plan.md). One executable, JSON in on stdin, JSON out on stdout:
+// development.md). One executable, JSON in on stdin, JSON out on stdout:
 //   in:  {"url":"https://...","max_chars":40000,"_approved":true,
 //         "_policy":{...}}
 //   out: {"ok":true,"result":{"status":200,"text":"..."}}

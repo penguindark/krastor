@@ -113,7 +113,7 @@ compile with MinGW + MSVC, Windows + Linux; see `libs/development.md`):
 
 Frame model: update -> GLSL background pass -> UI pass -> swap buffers.
 
-### 4.4 External tools system (built 2026-11-07 — see `tools_plan.md`)
+### 4.4 External tools system (built 2026-11-07)
 The agent gains world-interaction tools as external executables supervised by
 Krastor through OpenAI function calling. The repo-level `tools/` folder holds
 one JSONC manifest per tool (`tool_<name>.jsonc`, first level: description,
@@ -128,7 +128,7 @@ writes, everything else asks; deny floors not overridable, re-checked by the
 tools themselves). Core modules: `src/permissions`, `src/tool_registry`,
 `src/tool_runner`, `src/tool_loop`. Headless self-test `krastor --tool-test`;
 debug single calls via `krastor --tool-run <tool> <json>`. Full design in
-**`tools_plan.md`** (project root).
+**`src/development.md`**.
 
 ## 5. Folder structure
 
@@ -139,7 +139,7 @@ obj/       build intermediates (CMake binary dirs) — git ignored
 bin/       executables — git ignored
 models/    local AI models, one subfolder per model — git ignored
 tools/     python prototypes/scripts (uses .venv) + agent tool system
-           (manifests tool_*.jsonc, tool exes, python/venv — see tools_plan.md)
+           (manifests tool_*.jsonc, tool exes, python/venv)
 libs/      third-party libraries: vendored headers + git submodules
 scripts/   build/dev scripts
 .venv/     python virtual env (C:\Python313) — git ignored
@@ -234,8 +234,8 @@ not Krastor's own voice or room noise; toggles `stt.denoise`/`stt.echo_cancel`
 - **Phase 6 - External tools system (built 2026-11-07).** Agent calls external
   tools (file manager with confirmed delete, web text fetcher, web search,
   Python venv) through OpenAI function calling, supervised by a JSONC-manifest
-  + permission-policy system in `tools/`. Detailed design in `tools_plan.md`
-  (project root): phases A-D, sandbox `~/Documents/KrastorWorkspace/`,
+  + permission-policy system in `tools/`. Design documented in
+  `src/development.md`: sandbox `~/Documents/KrastorWorkspace/`,
   ask-permission modals, `ask_actions` forced confirmations, headless
   self-test `krastor --tool-test`.
 - **Phase 7 - Sessions (built 2026-11-07).** Persistent chat sessions in `sessions/`
@@ -244,7 +244,7 @@ not Krastor's own voice or room noise; toggles `stt.denoise`/`stt.echo_cancel`
   switcher, Ctrl+O modal, `/sessions` `/session` `/compact` commands),
   LLM-driven context compaction tuned to the active model's context window,
   headless self-test `krastor --session-test`. Detailed design in
-  `sessions_plan.md` (project root).
+  `src/development.md`.
 - **Compaction v2 + edit diffs (built 2026-11-07).** The compactor follows
   opencode v2: fixed structured summary template, progressive transcript
   clipping, update mode over an existing checkpoint, **auto-compact** near the

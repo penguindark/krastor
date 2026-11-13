@@ -128,7 +128,7 @@ struct AgentConfig {
 };
 
 struct ToolsConfig {
-    // Global switch for the external tools system (see tools_plan.md).
+    // Global switch for the external tools system (see development.md).
     // Per-tool overrides (enabled/permissions) live in the tool manifests
     // and can be patched here as "tools.<name>.{enabled,permissions}".
     bool enabled = true;
@@ -136,7 +136,7 @@ struct ToolsConfig {
 };
 
 struct SessionsConfig {
-    // Persistent chat sessions (see sessions_plan.md).
+    // Persistent chat sessions (see development.md).
     std::string dir;                  // "" -> sessions/ next to the executable
     bool autosave = true;             // persist every completed turn
     bool continue_last = true;        // startup resumes the most recent session

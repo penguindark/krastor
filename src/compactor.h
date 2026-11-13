@@ -1,4 +1,4 @@
-// Krastor — LLM-driven conversation compaction (see sessions_plan.md §3).
+// Krastor — LLM-driven conversation compaction (see development.md).
 // Replaces the conversation history with a dense summary produced by the
 // *currently active* LLM plus the most recent tail kept verbatim. The
 // summarization budget is tuned to the model's context window: oversized

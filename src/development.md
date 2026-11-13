@@ -43,7 +43,7 @@ microphone, runs the VAD loop and times out cleanly on silence. sherpa-onnx bina
 are git-ignored — run `tools/download_deps.py` once after cloning.
 
 ## External tools system (Phase 6, 2026-11-07)
-See `../tools_plan.md` for the full design. The agent calls external `.exe`
+The agent calls external `.exe`
 tools through OpenAI function calling; Krastor supervises every call.
 | Module | Responsibility |
 |---|---|
@@ -57,7 +57,7 @@ tools through OpenAI function calling; Krastor supervises every call.
 | `main.cpp` (tools) | CLI `ConsoleAsk` (y/N/a prompt), tool system-prompt hint with the sandbox path, debug flags: `--tool-run <tool> <json>` single call (auto-allow), `--tool-test` headless self-test (44 checks: sandbox write/read/edit/list, delete confirm+deny+floor, deny floors, ask-deny honour, read-only agent overrides, webfetch text + file:// block, websearch results [SKIP when DDG's anti-bot page answers], python run + traceback + ask gate, always-allow stickiness for targetless run tools) |
 
 ## Sessions system (Phase 7, 2026-11-07)
-See `../sessions_plan.md` for the full design. Persistent chat sessions,
+Persistent chat sessions,
 session switching and LLM-driven compaction.
 | Module | Responsibility |
 |---|---|

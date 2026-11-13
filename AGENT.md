@@ -4,10 +4,8 @@ Read this first. It is the entry point for any AI agent or developer working on 
 
 ## Source of truth
 - **`project.md`** — what the project is, architecture, requirements, roadmap.
-- **`development_log.md`** — chronological log of all development. Append a dated entry
+- **`development_log.md`** - chronological log of all development. Append a dated entry
   after every working session.
-- Design plans: `tools_plan.md` (external tools system, built),
-  `sessions_plan.md` (sessions, switching, compaction — built).
 
 ## Working rules
 1. All documentation, code comments and logs are in **English**.

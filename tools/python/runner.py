@@ -1,4 +1,4 @@
-# Krastor python tool runner (tools_plan.md section 6.3).
+# Krastor python tool runner (development.md.3).
 # Invoked as: venv/Scripts/python.exe tools/python/runner.py
 # Reads one JSON object on stdin (the LLM args + Krastor's _policy/_approved/
 # _workspace), executes inline `code` OR `script` + `args`, and prints one

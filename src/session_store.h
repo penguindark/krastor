@@ -1,4 +1,4 @@
-// Krastor — persistent chat sessions (see sessions_plan.md).
+// Krastor — persistent chat sessions (see development.md).
 // One folder per session inside sessions/ (next to the executable):
 //   <id>/meta.json       mutable metadata (title, dates, counters)
 //   <id>/log.jsonl       append-only message log, one JSON object per line

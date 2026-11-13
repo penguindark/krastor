@@ -1,4 +1,4 @@
-// Krastor tool manifest: file/folder management (tools_plan.md section 2).
+// Krastor tool manifest: file/folder management (development.md).
 // The LLM sees name/description/input_schema; Krastor enforces permissions
 // before spawning, and filetool re-checks the deny floor itself.
 {

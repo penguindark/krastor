@@ -1,5 +1,5 @@
 // Krastor tool manifest: the agent's dedicated Python interpreter
-// (tools_plan.md section 6.3). Runs code in tools/python/venv, created by
+// (development.md.3). Runs code in tools/python/venv, created by
 // tools/python/setup.ps1. Every execution asks for permission by default:
 // the dialog shows the code about to run.
 {
