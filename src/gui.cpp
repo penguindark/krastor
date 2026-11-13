@@ -2598,7 +2598,10 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
                     try {
                         cfg.save();  // validated: the plugin compiled
                         s.status = "effect applied: " + name;
-                    } catch (const std::exception&) {
+                    } catch (const std::exception& e) {
+                        // Never swallow: the user must see that the choice
+                        // will NOT survive the restart (state.json unwritable).
+                        s.status = std::string("saved failed: ") + e.what();
                     }
                 } else {
                     s.status = "effect failed: " + fx.error();

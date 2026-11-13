@@ -2428,3 +2428,16 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
 - config.example.jsonc documents it; --config-test +2 checks (parsed
   value, default 16).
 - Both toolchains clean; all --*-test PASS.
+
+## 2026-11-13 - effect-off restart bug: diagnosis + visible save errors
+- User report: background effect reappeared after restart despite off+saved.
+  Diagnosis: the two-file merge (config.jsonc < state.json) is correct (probe
+  on the live files loads "off"); the stale "ring spectrogram" left in
+  config.jsonc resurfaces whenever state.json is missing - my test-sandbox
+  cleanup had been deleting bin/state.json after test runs. Live config.jsonc
+  synced to "off" so the fallback matches the user's wish.
+- gui.cpp: the effect combo silently swallowed cfg.save() exceptions; a failed
+  save now shows "saved failed: ..." in the settings status so a choice that
+  will not survive the restart is never invisible.
+- Test hygiene: stop deleting the user's bin/state.json after test runs.
+- Both toolchains clean; all --*-test PASS.
