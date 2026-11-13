@@ -1264,6 +1264,11 @@ int run_config_test()
     check("jsonc comments parse",
           cfg.llm.model == "m1" && cfg.gui.font_size == 22);
     check("key_repeat_speed parsed", cfg.gui.key_repeat_speed == 2.5);
+    check("timeout_s default 600", krastor::Config{}.llm.timeout_s == 600);
+    { std::ofstream(dir / "tmo.jsonc") << "{ \"llm\": { \"timeout_s\": 99999 } }\n"; }
+    check("timeout_s clamped to 3600",
+          krastor::Config::load((dir / "tmo.jsonc").string())
+              .llm.timeout_s == 3600);
     check("key_repeat_speed default 1.0",
           krastor::Config{}.gui.key_repeat_speed == 1.0);
     { std::ofstream(dir / "clamp.jsonc") << "{ \"gui\": { \"key_repeat_speed\": 99 } }\n"; }

@@ -2463,3 +2463,14 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   checks on a fake clock (delay, rate, speed change, release, special keys,
   char gate, Ctrl guard). CLI keeps the OS console repeat (getline-based).
 - Both toolchains clean; all --*-test PASS.
+
+## 2026-11-14 - configurable LLM request timeout (llm.timeout_s)
+- User hit "WinHttpReceiveResponse failed (12002)" (ERROR_WINHTTP_TIMEOUT):
+  the read timeout was hard-coded at 120 s, too short for big-context prefill
+  on local servers (response headers arrive only when generation starts).
+- New llm.timeout_s (default 600, clamped 30..3600): https_post takes an
+  optional read_timeout_s (0 = built-in 120 s, so web tools keep it short),
+  the LLM client passes config_.timeout_s; WinHTTP 12002 and curl 28 now
+  report "timeout after N s ... (raise llm.timeout_s in config.jsonc)".
+- config.example.jsonc documented; --config-test +2 (default/clamp).
+- Both toolchains clean; all --*-test PASS.

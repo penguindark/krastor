@@ -283,7 +283,7 @@ LlmReply LlmClient::complete(const Conversation& conversation,
 
     const std::string payload = body.dump();
     const auto res = https_post(url, headers, payload, "application/json",
-                                cancel);
+                                cancel, config_.timeout_s);
     if (res.status == 0) {
         reply.error = "HTTP request failed: " + res.error;
         return reply;

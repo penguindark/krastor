@@ -57,9 +57,12 @@ std::wstring wstr(const std::string& s)
 HttpResponse request(const wchar_t* method, const std::string& url,
                      const std::map<std::string, std::string>& headers,
                      const std::string& body, const std::string& content_type,
-                     CancelToken* cancel)
+                     CancelToken* cancel, int read_timeout_s = 0)
 {
     HttpResponse out;
+    const DWORD read_ms =
+        read_timeout_s > 0 ? static_cast<DWORD>(read_timeout_s) * 1000
+                           : kReadTimeoutMs;
 
     const std::wstring wurl = wstr(url);
 
@@ -107,7 +110,7 @@ HttpResponse request(const wchar_t* method, const std::string& url,
     }
 
     WinHttpSetTimeouts(guard.h, kConnectTimeoutMs, kConnectTimeoutMs,
-                       kConnectTimeoutMs, kReadTimeoutMs);
+                       kConnectTimeoutMs, read_ms);
 
     std::wstring header_blob;
     for (const auto& [name, value] : headers)
@@ -129,10 +132,16 @@ HttpResponse request(const wchar_t* method, const std::string& url,
     }
 
     if (!WinHttpReceiveResponse(guard.h, nullptr)) {
+        const DWORD gle = GetLastError();
         out.error = cancel && cancel->load()
                         ? "cancelled"
-                        : "WinHttpReceiveResponse failed (" +
-                              std::to_string(GetLastError()) + ")";
+                        : gle == ERROR_WINHTTP_TIMEOUT
+                              ? "timeout after " +
+                                    std::to_string(read_ms / 1000) +
+                                    " s waiting for the response "
+                                    "(raise llm.timeout_s in config.jsonc)"
+                              : "WinHttpReceiveResponse failed (" +
+                                    std::to_string(gle) + ")";
         return out;
     }
 
@@ -186,9 +195,10 @@ HttpResponse https_post(const std::string& url,
                         const std::map<std::string, std::string>& headers,
                         const std::string& body,
                         const std::string& content_type,
-                        CancelToken* cancel)
+                        CancelToken* cancel, int read_timeout_s)
 {
-    return request(L"POST", url, headers, body, content_type, cancel);
+    return request(L"POST", url, headers, body, content_type, cancel,
+                   read_timeout_s);
 }
 
 HttpResponse https_get(const std::string& url,

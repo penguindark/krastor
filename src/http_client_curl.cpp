@@ -34,7 +34,7 @@ int progress_callback(void* clientp, curl_off_t, curl_off_t, curl_off_t,
 HttpResponse request(const char* method, const std::string& url,
                      const std::map<std::string, std::string>& headers,
                      const std::string& body, const std::string& content_type,
-                     CancelToken* cancel)
+                     CancelToken* cancel, int read_timeout_s = 0)
 {
     HttpResponse out;
     std::call_once(curl_global_init_flag,
@@ -56,7 +56,9 @@ HttpResponse request(const char* method, const std::string& url,
     if (method && std::string(method) != "POST")
         curl_easy_setopt(curl.get(), CURLOPT_CUSTOMREQUEST, method);
     curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
-    curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 120L);
+    curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT,
+                     read_timeout_s > 0 ? static_cast<long>(read_timeout_s)
+                                        : 120L);
     curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl.get(), CURLOPT_MAXREDIRS, 5L);
     curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, write_callback);
@@ -83,7 +85,14 @@ HttpResponse request(const char* method, const std::string& url,
     if (rc != CURLE_OK) {
         out.error = rc == CURLE_ABORTED_BY_CALLBACK
                         ? "cancelled"
-                        : curl_easy_strerror(rc);
+                        : rc == CURLE_OPERATION_TIMEDOUT
+                              ? "timeout after " +
+                                    std::to_string(read_timeout_s > 0
+                                                       ? read_timeout_s
+                                                       : 120) +
+                                    " s waiting for the response "
+                                    "(raise llm.timeout_s in config.jsonc)"
+                              : curl_easy_strerror(rc);
         return out;
     }
 
@@ -103,9 +112,10 @@ HttpResponse https_post(const std::string& url,
                         const std::map<std::string, std::string>& headers,
                         const std::string& body,
                         const std::string& content_type,
-                        CancelToken* cancel)
+                        CancelToken* cancel, int read_timeout_s)
 {
-    return request("POST", url, headers, body, content_type, cancel);
+    return request("POST", url, headers, body, content_type, cancel,
+                   read_timeout_s);
 }
 
 HttpResponse https_get(const std::string& url,

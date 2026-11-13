@@ -33,6 +33,9 @@ struct LlmConfig {
     double temperature = 0.7;
     int max_tokens = 1024;
     int context_size = 131072;      // model context window (footer usage %)
+    // How long a chat completion may take before it is aborted (seconds).
+    // Big local contexts need minutes of prefill: default 600, clamped 30..3600.
+    int timeout_s = 600;
     // Set from llm_models.jsonc capabilities.tools by apply_model_ref():
     // external tools are only offered to models that support function calling.
     bool supports_tools = false;

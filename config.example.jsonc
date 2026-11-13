@@ -17,6 +17,7 @@
     "system_prompt": "You are Krastor, a helpful voice assistant. Answer concisely; your replies may be spoken aloud.",
     "temperature": 0.7,
     "max_tokens": 1024,
+    "timeout_s": 600,               // max seconds per chat request (30..3600)
     "context_size": 131072,
     // Global thinking effort "low"|"medium"|"max" ("" = the model entry's
     // "thinking" from llm_models.jsonc). Sent as reasoning_effort when set.

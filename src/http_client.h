@@ -45,12 +45,15 @@ struct HttpResponse {
 // Blocking HTTPS POST. `url` must be https:// (or http:// for local servers).
 // Returns status==0 with `error` set on any transport failure; never throws.
 // When `cancel` is given, cancel() from another thread aborts the call
-// immediately (error text "cancelled").
+// immediately (error text "cancelled"). `read_timeout_s` caps how long the
+// response may take (0 = the built-in 120 s; the LLM client passes
+// llm.timeout_s, web tools keep the default).
 HttpResponse https_post(const std::string& url,
                         const std::map<std::string, std::string>& headers,
                         const std::string& body,
                         const std::string& content_type = "application/json",
-                        CancelToken* cancel = nullptr);
+                        CancelToken* cancel = nullptr,
+                        int read_timeout_s = 0);
 
 // Blocking HTTPS GET (used by the webfetch tool). Same contract as POST.
 HttpResponse https_get(const std::string& url,

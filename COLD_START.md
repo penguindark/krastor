@@ -106,7 +106,7 @@ working dir; i commenti `//` sono permessi e preservati per sempre):
    accanto all'exe, che ha precedenza sul config.jsonc.
    Campi principali: `llm.model_ref` (voce di `llm_models.jsonc` selezionata;
    in alternativa `llm.base_url`/`api_key`/`model` per un endpoint one-off,
-   con fallback env `KRASTOR_API_KEY` → `OPENAI_API_KEY`),
+   con fallback env `KRASTOR_API_KEY` (e `llm.timeout_s` = secondi massimi per richiesta LLM, default 600) → `OPENAI_API_KEY`),
    `agents` (agenti selezionabili: nome, colore, prompt, model_ref, thinking —
    switch con Shift+Tab o il menu in alto a sinistra),
    `tts.default_voice` (`it-it-paola`), `stt.input_device` (-1 = default),

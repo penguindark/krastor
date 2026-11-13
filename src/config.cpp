@@ -48,6 +48,8 @@ void apply_json(Config& cfg, const nlohmann::json& root, bool user_only)
         cfg.llm.temperature = j.value("temperature", cfg.llm.temperature);
         cfg.llm.max_tokens = j.value("max_tokens", cfg.llm.max_tokens);
         cfg.llm.context_size = j.value("context_size", cfg.llm.context_size);
+        cfg.llm.timeout_s =
+            (std::clamp)(j.value("timeout_s", cfg.llm.timeout_s), 30, 3600);
         cfg.llm.reasoning_effort =
             j.value("reasoning_effort", cfg.llm.reasoning_effort);
     }
@@ -340,6 +342,7 @@ void Config::save(const std::string& path) const
         {"temperature", llm.temperature},
         {"max_tokens", llm.max_tokens},
         {"context_size", llm.context_size},
+        {"timeout_s", llm.timeout_s},
         {"reasoning_effort", llm.reasoning_effort},
     };
     root["tts"] = {
