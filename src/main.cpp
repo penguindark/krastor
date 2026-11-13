@@ -1251,7 +1251,7 @@ int run_config_test()
         f << "{\n"
              "  // base model\n"
              "  \"llm\": { \"model\": \"m1\", /* inline */ \"model_ref\": \"p/m1\" },\n"
-             "  \"gui\": { \"font_size\": 22 },\n"
+             "  \"gui\": { \"font_size\": 22, \"key_repeat_speed\": 2.5 },\n"
              "  \"agents\": {\n"
              "    \"poeta\": { \"name\": \"Poeta\", \"color\": \"#E5A93C\",\n"
              "                 \"system_prompt\": \"Sei un poeta.\", \"thinking\": \"max\" },\n"
@@ -1263,6 +1263,13 @@ int run_config_test()
     krastor::Config cfg = krastor::Config::load((dir / "config.jsonc").string());
     check("jsonc comments parse",
           cfg.llm.model == "m1" && cfg.gui.font_size == 22);
+    check("key_repeat_speed parsed", cfg.gui.key_repeat_speed == 2.5);
+    check("key_repeat_speed default 1.0",
+          krastor::Config{}.gui.key_repeat_speed == 1.0);
+    { std::ofstream(dir / "clamp.jsonc") << "{ \"gui\": { \"key_repeat_speed\": 99 } }\n"; }
+    check("key_repeat_speed clamped to 4.0",
+          krastor::Config::load((dir / "clamp.jsonc").string())
+              .gui.key_repeat_speed == 4.0);
     check("agents parsed + base synthesized",
           cfg.agents.size() == 3 && cfg.agents[0].id == "krastor" &&
               cfg.agents[1].id == "poeta" && cfg.agents[2].id == "sec");

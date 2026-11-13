@@ -2447,3 +2447,19 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
   width (was a fixed 680x520 clamp), so the full command list fits
   without scrolling on normal windows.
 - Both toolchains clean; all --*-test PASS.
+
+## 2026-11-13 - configurable in-app key repeat (gui.key_repeat_speed)
+- New KeyRepeater (src/key_repeat.h/.cpp): the GUI now owns key repeat for
+  every text field. gui.cpp wraps the GLFW key/char callbacks installed by
+  nk_glfw3_init: OS GLFW_REPEAT events and their repeated chars are
+  swallowed (char gate), and the main loop re-synthesizes repeats through
+  the backend's own callbacks - fixed 400 ms delay, then 30/s scaled by
+  gui.key_repeat_speed (0.25..4, default 1.0 ~ Windows default). Ctrl/Alt
+  chords never repeat. Covers chat input (incl. history Up/Down and the
+  kill keys), Settings fields, session modal, numeric properties.
+- Settings knob "Key repeat speed" (debounced save like Effect brightness,
+  live while dragging); config parse/save + clamp; config.example.jsonc.
+- Tests: --config-test +3 (parsed/default/clamp), --gui-test +10 KeyRepeater
+  checks on a fake clock (delay, rate, speed change, release, special keys,
+  char gate, Ctrl guard). CLI keeps the OS console repeat (getline-based).
+- Both toolchains clean; all --*-test PASS.

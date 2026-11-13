@@ -48,6 +48,7 @@
 #include "highlight.h"
 #include "emoji.h"
 #include "input_history.h"
+#include "key_repeat.h"
 #include "icons.h"
 #include "stt.h"
 #include "tts.h"
@@ -351,6 +352,8 @@ struct SettingsState {
     std::string effect = "gradient";
     float effect_intensity = 1.0f;   // brightness knob, debounced auto-save
     double intensity_due = 0.0;      // save timestamp, 0 = nothing pending
+    float key_repeat_speed = 1.0f;   // in-app key repeat rate x (see key_repeat.h)
+    double repeat_due = 0.0;         // save timestamp for the repeat knob
 
     void load_from(const Config& cfg, const VoiceRegistry& voices)
     {
@@ -361,6 +364,7 @@ struct SettingsState {
         temperature = static_cast<float>(cfg.llm.temperature);
         max_tokens = cfg.llm.max_tokens;
         effect_intensity = static_cast<float>(cfg.gui.effect_intensity);
+        key_repeat_speed = static_cast<float>(cfg.gui.key_repeat_speed);
         const auto* v = voices.current();
         voice = v ? v->id : (voices.voices().empty() ? std::string() : voices.voices()[0].id);
     }
@@ -2633,6 +2637,28 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         }
     }
 
+    // Key repeat speed: multiplies the in-app repeat rate of every text
+    // field (backspace, arrows, typed chars: see key_repeat.h). Live while
+    // dragging, auto-saved 500 ms after the last change like the knob above.
+    nk_layout_row_dynamic(ctx, 26, 1);
+    nk_property_float(ctx, "Key repeat speed", 0.25f, &s.key_repeat_speed,
+                      4.0f, 0.05f, 0.05f);
+    if (std::fabs(s.key_repeat_speed - cfg.gui.key_repeat_speed) > 1e-4) {
+        cfg.gui.key_repeat_speed = s.key_repeat_speed;
+        s.repeat_due = glfwGetTime() + 0.5;  // debounce the write
+    }
+    if (s.repeat_due > 0.0 && glfwGetTime() >= s.repeat_due) {
+        s.repeat_due = 0.0;
+        try {
+            cfg.save();  // validated: the rate is live in the fields
+            char buf[48];
+            std::snprintf(buf, sizeof(buf), "key repeat: %.2fx",
+                          s.key_repeat_speed);
+            s.status = buf;
+        } catch (const std::exception&) {
+        }
+    }
+
     // Hands-free echo guard (saved immediately: a plain validated toggle).
     nk_layout_row_dynamic(ctx, 28, 1);
     {
@@ -4279,6 +4305,31 @@ static void krastor_copy(nk_handle usr, const char* text, int len)
         g_paste_app->notify_copied();
 }
 
+// ---- in-app key repeat (see key_repeat.h) --------------------------------
+// Wrappers installed over the backend callbacks: OS repeats never reach
+// Nuklear; the KeyRepeater re-synthesizes them at gui.key_repeat_speed
+// from the main loop. Single window, so a file-static pointer is enough.
+static krastor::KeyRepeater* g_keyrep = nullptr;
+
+static void kr_key_cb(GLFWwindow* win, int key, int sc, int action, int mods)
+{
+    if (g_keyrep)
+        g_keyrep->on_key(key, action, mods, glfwGetTime());
+    if (action == GLFW_REPEAT)
+        return;  // replaced by the synthesized repeat
+    nk_glfw3_key_callback(win, key, sc, action, mods);
+}
+
+static void kr_char_cb(GLFWwindow* win, unsigned int cp)
+{
+    if (g_keyrep) {
+        if (!g_keyrep->char_allowed())
+            return;  // repeated char: the repeater owns the stream
+        g_keyrep->on_char(cp);
+    }
+    nk_glfw3_char_callback(win, cp);
+}
+
 int run_gui(Config& cfg, VoiceRegistry& voices)
 {
     if (!glfwInit()) {
@@ -4335,6 +4386,13 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
 
     static struct nk_glfw device;
     nk_glfw3_init(&device, win, NK_GLFW3_INSTALL_CALLBACKS);
+    // In-app key repeat: own the key/char callbacks so OS repeats are
+    // swallowed and re-synthesized at gui.key_repeat_speed (key_repeat.h).
+    static krastor::KeyRepeater keyrep;
+    keyrep.set_speed(cfg.gui.key_repeat_speed);
+    g_keyrep = &keyrep;
+    glfwSetKeyCallback(win, kr_key_cb);
+    glfwSetCharCallback(win, kr_char_cb);
     struct nk_font_atlas* atlas = nullptr;
     nk_glfw3_font_stash_begin(&device, &atlas);
     // Monospace font with box-drawing/extended glyphs for terminal-style output;
@@ -4801,6 +4859,23 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             spec.synthetic(glfwGetTime() - t0);
         spec.advance();
         fx.check_reload();
+
+        // Synthesized key repeat: inject this frame's repeat (if any) into
+        // the backend's per-frame queues, the same path a real event takes.
+        // One fire per frame: at high speeds the rate caps at the frame rate.
+        keyrep.set_speed(cfg.gui.key_repeat_speed);  // live from settings
+        int rkey = 0;
+        unsigned int rcp = 0;
+        switch (keyrep.tick(glfwGetTime(), &rkey, &rcp)) {
+        case krastor::KeyRepeater::Fire::Char:
+            nk_glfw3_char_callback(win, rcp);
+            break;
+        case krastor::KeyRepeater::Fire::Key:
+            nk_glfw3_key_callback(win, rkey, 0, GLFW_PRESS, 0);
+            break;
+        default:
+            break;
+        }
 
         nk_glfw3_new_frame(&device);
         struct nk_context* ctx = &device.ctx;
@@ -5504,6 +5579,39 @@ int run_gui_stack_test()
         off.set_max(0);  // gui.history_size = 0
         off.push("anything");
         check(off.size() == 0 && !off.can_prev(), "max 0 disables the history");
+    }
+
+    // ---- KeyRepeater (in-app key repeat, see key_repeat.h) ----
+    {
+        using Fire = krastor::KeyRepeater::Fire;
+        krastor::KeyRepeater rp;
+        int k = 0;
+        unsigned int c = 0;
+        rp.on_key('A', GLFW_PRESS, 0, 0.0);
+        rp.on_char('a');
+        check(rp.char_allowed(), "repeat gate open on press");
+        check(rp.tick(0.3, &k, &c) == Fire::None, "no repeat before the delay");
+        rp.on_key('A', GLFW_REPEAT, 0, 0.35);
+        check(!rp.char_allowed(), "swallowed repeat closes the char gate");
+        check(rp.tick(0.45, &k, &c) == Fire::Char && c == 'a',
+              "char repeat fires after the delay");
+        check(rp.tick(0.48, &k, &c) == Fire::None, "rate-limited between repeats");
+        check(rp.tick(0.49, &k, &c) == Fire::Char,
+              "next repeat one interval later");
+        rp.on_key('A', GLFW_RELEASE, 0, 0.6);
+        check(rp.char_allowed(), "release reopens the char gate");
+        check(rp.tick(0.9, &k, &c) == Fire::None, "release stops the repeat");
+        rp.on_key(GLFW_KEY_BACKSPACE, GLFW_PRESS, 0, 1.0);
+        check(rp.tick(1.45, &k, &c) == Fire::Key && k == GLFW_KEY_BACKSPACE,
+              "special keys repeat as key events");
+        rp.set_speed(2.0);  // double speed: half the interval
+        rp.on_key('B', GLFW_PRESS, 0, 2.0);
+        rp.on_char('b');
+        check(rp.tick(2.45, &k, &c) == Fire::Char && c == 'b', "first fire at 2x");
+        check(rp.tick(2.48, &k, &c) == Fire::Char, "2x interval fits in 17 ms");
+        rp.on_key('C', GLFW_PRESS, GLFW_MOD_CONTROL, 3.0);
+        rp.on_char('c');
+        check(rp.tick(3.9, &k, &c) == Fire::None, "Ctrl chords never repeat");
     }
 
     // ---- cost formatting (usage.cost display) ----
