@@ -95,7 +95,6 @@ add_executable(krastor
     src/clipboard.cpp
     src/media.cpp
     src/effects.cpp
-src/key_repeat.cpp
     src/audio_analysis.cpp
     libs/glad/src/glad.c
     libs/miniaudio_impl.c

@@ -110,7 +110,7 @@ working dir; i commenti `//` sono permessi e preservati per sempre):
    `agents` (agenti selezionabili: nome, colore, prompt, model_ref, thinking —
    switch con Shift+Tab o il menu in alto a sinistra),
    `tts.default_voice` (`it-it-paola`), `stt.input_device` (-1 = default),
-   `gui.*` (font, effetto sfondo, dimensione finestra, key_repeat_speed 0.25..4x per la ripetizione tasti nei campi testo), `agent.*`,
+   `gui.*` (font, effetto sfondo, dimensione finestra), `agent.*`,
    `tools.enabled` (master switch dei tool esterni, vedi `src/development.md`),
     `sessions.*` (`dir` vuoto = `sessions\` accanto a `bin\`, `autosave`,
     `continue_last`, `auto_compact` (default true) e `compact_buffer`
@@ -165,9 +165,9 @@ recenti, `/compact` riassume la sessione con il modello attivo, `/clean`
 (pulsante gomma) pulisce lo schermo senza toccare la sessione, `F1` o
 `/help` apre l'elenco di comandi e scorciatoie. L'input box ha la cronologia
 dei messaggi inviati (`Su`/`Giù` a campo vuoto, stile bash) e i taglia-riga
-`Ctrl+K` (dal cursore a fine riga) e `Ctrl+Shift+K` (riga intera). La velocità
-di ripetizione tasti (backspace, frecce, caratteri tenuti premuti) in tutti i
-campi testo si regola in Settings con "Key repeat speed" (0.25..4x).
+`Ctrl+K` (dal cursore a fine riga) e `Ctrl+Shift+K` (riga intera). La ripetizione
+tasti nei campi testo segue il ritmo di Windows (Pannello di controllo →
+Tastiera).
 Il compact è in stile opencode: template strutturato (Objective/Requirements/
 Decisions/Work State/Next Move/Relevant Files), modalità *update* quando
 esiste già un checkpoint, e **auto-compact** a fine turno quando il contesto

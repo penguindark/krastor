@@ -91,7 +91,6 @@ struct GuiConfig {
     bool format_output = true;      // Markdown/syntax formatting of LLM replies
     int history_size = 100;         // input history lines kept (0 = off)
     bool media_autoplay = true;     // [sound: ...] from the model starts now
-    double key_repeat_speed = 1.0;  // in-app key repeat rate x (0.25..4)
 };
 
 // Basic chat color scheme (config.jsonc "colors", "#rrggbb"). User-owned

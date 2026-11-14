@@ -267,11 +267,16 @@ not Krastor's own voice or room noise; toggles `stt.denoise`/`stt.echo_cancel`
 - **Chat input & reliability increment (built 2026-11-12/14).** Input history
   for the chat field (bash-style Up/Down recall, `gui.history_size`,
   `src/input_history.h`), line-kill hotkeys `Ctrl+K` (caret to end of line)
-  and `Ctrl+Shift+K` (whole line), **configurable in-app key repeat** for
-  every text field (`gui.key_repeat_speed` 0.25..4x, `src/key_repeat.h/.cpp`:
-  OS repeats are swallowed at the GLFW callback boundary and re-synthesized
-  at the configured rate, live from Settings), a **configurable LLM request
+  and `Ctrl+Shift+K` (whole line), a **configurable LLM request
   timeout** (`llm.timeout_s`, default 600 s: big-context local-server prefills
   no longer hit WinHTTP error 12002), a configurable tool-loop round cap
   (`agent.max_tool_rounds`, default 16) and an F1 help modal sized to the
   window (70% height, half width).
+- **Input responsiveness (2026-11-14).** The in-app key repeat experiment
+  (`gui.key_repeat_speed`) was removed: swallowing OS repeats added a dead
+  zone and tied repeat rate to the frame rate, so key repeat is native OS
+  again. The chat panel no longer re-wraps and re-parses the whole history
+  every frame: wrapped token lines are cached per chat line, off-screen rows
+  skip their draw pass, and the selection document and diff rows rebuild only
+  when their inputs change - big sessions stay at full frame rate, so keys
+  and clicks are never dropped by slow frames.

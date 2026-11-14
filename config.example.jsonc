@@ -113,8 +113,7 @@
     "window_y": -1,
     "format_output": true,          // Markdown/syntax formatting of replies
     "history_size": 100,            // input lines kept for Up/Down recall (0 = off)
-    "media_autoplay": true,         // [sound: ...] shown by the model starts immediately
-    "key_repeat_speed": 1.0         // in-app key repeat rate x (0.25..4) in text fields
+    "media_autoplay": true          // [sound: ...] shown by the model starts immediately
   },
 
   "agent": {

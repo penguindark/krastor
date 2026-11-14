@@ -27,7 +27,6 @@ reacts to the assistant's state, with a terminal-style chat on top.
   (16/256/truecolor), line-level passthrough keeps markdown around it intact
 - Text selection & copy (raw UTF-8), follow-bottom scrolling, Ctrl±0 font zoom,
   input history (Up/Down) + line-kill keys (Ctrl+K, Ctrl+Shift+K),
-  key repeat speed configurable in Settings (`gui.key_repeat_speed`),
   drag & drop and Ctrl+V attachments (images render inline, sounds play
   in an inline mini player with transport, volume and mute)
 - Per-response stats (model · time · tok/s) and a live context-usage footer;

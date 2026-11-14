@@ -2483,3 +2483,58 @@ written). `content.find("")` always succeeds at `pos` without advancing, the
 - References re-pointed in README.md, project.md, AGENT.md, COLD_START.md,
   src/development.md, tools/development.md (design docs now = development
   docs). development_log.md keeps its historical mentions untouched.
+
+## 2026-11-14 - input responsiveness: key repeat reverted to OS, chat render cached
+- User reported the chat input felt slow, dropped keys and the first mouse
+  click after idle was missed. Two causes:
+  1. the in-app key repeat (added same day) swallowed OS repeats but only
+     re-synthesized one event per frame after a 400 ms delay (longer than
+     the OS delay) - held keys felt dead, and the rate was frame-rate bound;
+  2. the chat panel re-parsed and re-wrapped EVERY chat line every frame
+     (dry + real passes) and rebuild_chat_doc re-stripped the whole history
+     per frame: with a 170 KB session frames dropped enough for Nuklear's
+     per-frame key slots and polled mouse buttons to lose events.
+- Removed the key repeat feature entirely (key_repeat.h/.cpp, the GLFW
+  callback wrappers, the Settings knob, gui.key_repeat_speed): key repeat is
+  native OS again in every text field.
+- Chat render cache: ChatLine carries WrapCache slots (text/meta/thought
+  head+body/diff header) keyed by prefix+body+width+font+indent, so only
+  changed lines re-wrap; rows fully outside the scrolled viewport skip
+  their draw pass (layout slot still reserved); diff rows are parsed once
+  per line; rebuild_chat_doc runs only when an FNV-1a fingerprint of the
+  chat text changes.
+- Both toolchains clean; all --*-test PASS (config/gui tests shed the
+  key_repeat checks).
+
+## 2026-11-14 - fixed: input field could not hold a selection (mouse/Shift/Ctrl+Shift)
+- User reported mouse selection and Ctrl+Left/Right selection in the chat
+  input stopped working. Root cause predates today: since the attachment
+  token commit (1ad134d, 2026-11-09) sync_input_tokens ran every frame
+  before the edit widget and rewrote edit.cursor/sel_start/sel_end to the
+  caret whenever the field was focused - collapsing any selection one frame
+  after it was made (drag, Shift+arrows, Ctrl+Shift+Left/Right, double-
+  click, Ctrl+A all died on release/next frame).
+- Fix: sync_tokens_core now reports whether it actually modified the text
+  (token inserted / renumbered); sync_input_tokens rewrites the caret and
+  selection only then. Untouched frames leave the edit state alone.
+- --gui-test +1 (unchanged text reports changed=false).
+- Both toolchains clean; all --*-test PASS.
+
+## 2026-11-14 - tool round limit: wrap-up instruction + textual <tool_call> sanitizer
+- User session hit agent.max_tool_rounds (model made many small edits); the
+  tool-less wrap-up round came back with a raw Hermes-style textual
+  <tool_call><function=python>... block rendered as plain chat text.
+- The tool results of the final round now carry an explicit "do not call
+  any more tools, summarize" instruction, and the final answer is passed
+  through strip_textual_tool_calls(): every <tool_call>..</tool_call> block
+  (or an unterminated one: cut to the end) is replaced by a marker line
+  pointing at agent.max_tool_rounds.
+- --tool-test +3 (pass-through / block replaced / unterminated block).
+- Both toolchains clean; all --*-test PASS.
+
+## 2026-11-14 - removed the chat block cursor (thinking indicator under the input stays)
+- User: the blinking white block under the newest chat line looked like a stray
+  text cursor; the caret must live only in the input field. The thinking state
+  is already shown under the input (shimmer + block meter + esc hint), so the
+  chat block cursor (597e92e) was redundant - removed.
+- Both toolchains clean; all --*-test PASS.

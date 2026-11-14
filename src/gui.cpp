@@ -48,7 +48,6 @@
 #include "highlight.h"
 #include "emoji.h"
 #include "input_history.h"
-#include "key_repeat.h"
 #include "icons.h"
 #include "stt.h"
 #include "tts.h"
@@ -84,6 +83,24 @@ constexpr int kWinMinW = 480, kWinMinH = 360;
 // data/shaders/, fed with the mic spectrum (src/audio_analysis.h).
 
 // ------------------------------------------------------------- app state
+// Styled word token: a text fragment with its own colors, produced by
+// tokenize_runs and consumed by the word wrap in draw_chat_line.
+struct Word {
+    std::string text;
+    struct nk_color fg;
+    struct nk_color bg;   // a == 0 -> no background
+    bool force_break;
+    int cp_begin = -1;
+};
+
+// One display row of a file-edit diff (see diff_rows).
+struct DiffRow {
+    int old_no = 0, new_no = 0;
+    std::string old_text, new_text;
+    char kind = ' ';  // ' ' context | '-' del | '+' add | '~' changed pair
+    bool gap = false;  // hunk separator (line numbers jumped)
+};
+
 struct ChatLine {
     std::string who;   // "you" | "krastor" | "sys"
     std::string text;
@@ -107,6 +124,22 @@ struct ChatLine {
     // vertical bar in the left margin (captured at send time, so old
     // messages keep the color of the agent that wrote them).
     int bar_r = 120, bar_g = 180, bar_b = 255;
+    // ---- per-frame render cache (see draw_chat_line) ----
+    // Re-parsing and re-wrapping the whole chat every frame is what makes a
+    // big session crawl (dropped keys, missed clicks). Every styled string a
+    // line draws is cached here, keyed by the exact inputs of the wrap, so
+    // only lines whose text, width or font changed pay the wrap again.
+    struct WrapCache {
+        std::string key_prefix, key_body;
+        float key_w = -1.0f, key_rh = -1.0f, key_indent = -1.0f;
+        bool valid = false;
+        float total_h = 0.0f;
+        std::vector<std::vector<Word>> lines;
+    };
+    mutable WrapCache wc_text, wc_meta, wc_think_head, wc_think_body,
+        wc_diff_head;
+    mutable bool diff_rows_valid = false;
+    mutable std::vector<DiffRow> diff_rows_cache;
     ChatLine() = default;
     ChatLine(std::string w, std::string t, std::string m = {})
         : who(std::move(w)), text(std::move(t)), meta(std::move(m)) {}
@@ -352,8 +385,6 @@ struct SettingsState {
     std::string effect = "gradient";
     float effect_intensity = 1.0f;   // brightness knob, debounced auto-save
     double intensity_due = 0.0;      // save timestamp, 0 = nothing pending
-    float key_repeat_speed = 1.0f;   // in-app key repeat rate x (see key_repeat.h)
-    double repeat_due = 0.0;         // save timestamp for the repeat knob
 
     void load_from(const Config& cfg, const VoiceRegistry& voices)
     {
@@ -364,7 +395,6 @@ struct SettingsState {
         temperature = static_cast<float>(cfg.llm.temperature);
         max_tokens = cfg.llm.max_tokens;
         effect_intensity = static_cast<float>(cfg.gui.effect_intensity);
-        key_repeat_speed = static_cast<float>(cfg.gui.key_repeat_speed);
         const auto* v = voices.current();
         voice = v ? v->id : (voices.voices().empty() ? std::string() : voices.voices()[0].id);
     }
@@ -668,6 +698,10 @@ struct AppState : AskHandler {
     std::vector<std::string> doc_lines;
     std::vector<int> doc_start;   // codepoint offset where each line begins
     int doc_len = 0;
+    // rebuild_chat_doc cache: fingerprint of the chat text (line count plus
+    // per-line size and edge chars); the doc only rebuilds when it changes.
+    size_t doc_fp = 0;
+    bool doc_valid = false;
     std::vector<ChatHitLine> chat_hits;
     int sel_anchor = -1, sel_caret = -1;  // -1 = no selection
     bool chat_focused = false;    // click in the chat routes selection keys
@@ -971,8 +1005,11 @@ struct AppState : AskHandler {
                                 std::vector<Attachment>& attachments,
                                 std::vector<std::string>& pending_tokens,
                                 int caret_in,
-                                std::vector<std::string>* removed = nullptr)
+                                std::vector<std::string>* removed = nullptr,
+                                bool* changed = nullptr)
     {
+        if (changed)
+            *changed = false;
         for (const auto& tok : pending_tokens) {
             const size_t cur = std::strlen(input);
             if (cur + tok.size() >= cap - 1)
@@ -984,6 +1021,8 @@ struct AppState : AskHandler {
             std::memcpy(input, s.c_str(), s.size() + 1);
             if (caret_in >= 0)
                 caret_in += (int)tok.size();  // ASCII token
+            if (changed)
+                *changed = true;
         }
         pending_tokens.clear();
 
@@ -1016,6 +1055,8 @@ struct AppState : AskHandler {
             std::memcpy(input, s.c_str(), s.size() + 1);
             if (caret_byte >= 0 && (int)off < caret_byte)
                 caret_byte += (int)newtok.size() - (int)oldtok.size();
+            if (changed)
+                *changed = true;
         }
         return caret_byte >= 0 ? byte_glyph(input, (size_t)NK_MAX(caret_byte, 0))
                                : -1;
@@ -1029,13 +1070,18 @@ struct AppState : AskHandler {
         const int caret_in =
             input_active ? ctx->current->edit.cursor : -1;
         std::vector<std::string> removed;
+        bool changed = false;
         const int caret_out = sync_tokens_core(input, sizeof(input),
                                                attachments, pending_tokens,
-                                               caret_in, &removed);
+                                               caret_in, &removed, &changed);
         for (const auto& tok : removed)
             lines.push_back({"sys", "attachment removed: " + tok +
                                     " (token deleted from the input)"});
-        if (caret_out >= 0) {
+        // Rewrite the caret only when the text actually changed (a token was
+        // inserted or renumbered). Rewriting it every frame also collapsed
+        // sel_start/sel_end, which killed every selection made in the field:
+        // mouse drag, Shift+arrows, Ctrl+Shift+Left/Right, double-click.
+        if (caret_out >= 0 && changed) {
             ctx->current->edit.cursor = caret_out;
             ctx->current->edit.sel_start = caret_out;
             ctx->current->edit.sel_end = caret_out;
@@ -2090,6 +2136,19 @@ struct AppState : AskHandler {
 // stripped (exactly what the renderer draws), joined by '\n' in the offsets.
 void rebuild_chat_doc(AppState& app)
 {
+    // Cheap content fingerprint (only l.text feeds the doc): FNV-1a over the
+    // line count and every text byte - a plain byte loop, orders of magnitude
+    // cheaper than the re-parse it skips. Streaming appends and session
+    // switches always move it.
+    size_t fp = 1469598103934665603ull;
+    fp = (fp ^ app.lines.size()) * 1099511628211ull;
+    for (const auto& l : app.lines)
+        for (const char ch : l.text)
+            fp = (fp ^ static_cast<unsigned char>(ch)) * 1099511628211ull;
+    if (app.doc_valid && fp == app.doc_fp)
+        return;
+    app.doc_fp = fp;
+    app.doc_valid = true;
     app.doc_lines.clear();
     app.doc_start.clear();
     app.doc_len = 0;
@@ -2637,28 +2696,6 @@ bool settings_modal(struct nk_context* ctx, Config& cfg, VoiceRegistry& voices,
         }
     }
 
-    // Key repeat speed: multiplies the in-app repeat rate of every text
-    // field (backspace, arrows, typed chars: see key_repeat.h). Live while
-    // dragging, auto-saved 500 ms after the last change like the knob above.
-    nk_layout_row_dynamic(ctx, 26, 1);
-    nk_property_float(ctx, "Key repeat speed", 0.25f, &s.key_repeat_speed,
-                      4.0f, 0.05f, 0.05f);
-    if (std::fabs(s.key_repeat_speed - cfg.gui.key_repeat_speed) > 1e-4) {
-        cfg.gui.key_repeat_speed = s.key_repeat_speed;
-        s.repeat_due = glfwGetTime() + 0.5;  // debounce the write
-    }
-    if (s.repeat_due > 0.0 && glfwGetTime() >= s.repeat_due) {
-        s.repeat_due = 0.0;
-        try {
-            cfg.save();  // validated: the rate is live in the fields
-            char buf[48];
-            std::snprintf(buf, sizeof(buf), "key repeat: %.2fx",
-                          s.key_repeat_speed);
-            s.status = buf;
-        } catch (const std::exception&) {
-        }
-    }
-
     // Hands-free echo guard (saved immediately: a plain validated toggle).
     nk_layout_row_dynamic(ctx, 28, 1);
     {
@@ -2983,14 +3020,6 @@ float draw_token_mixed(struct nk_command_buffer* canvas, float tx, float y,
 // Newlines are represented by a token with force_break = true.
 // cp_begin is the token's first codepoint within the body text (-1 for the
 // role prefix and other non-selectable tokens).
-struct Word {
-    std::string text;
-    struct nk_color fg;
-    struct nk_color bg;   // a == 0 -> no background
-    bool force_break;
-    int cp_begin = -1;
-};
-
 // Splits styled runs into space/word/newline tokens, preserving indentation
 // (runs of spaces are kept as their own tokens so code blocks stay aligned).
 // runs[0] is the role prefix (not selectable); the remaining runs carry the
@@ -3090,7 +3119,8 @@ float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
                      float text_w, int src_line,
                      std::vector<ChatHitLine>* hits, const SelRange* sel,
                      const EmojiAtlas* em = nullptr, float indent = 0.0f,
-                     bool dry = false)
+                     bool dry = false, ChatLine::WrapCache* cache = nullptr,
+                     const struct nk_rect* vis = nullptr)
 {
     const struct nk_user_font* f = ctx->style.font;
     const float row_h = f && f->height > 0.0f ? f->height : 18.0f;
@@ -3099,6 +3129,18 @@ float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
     if (text_w < 20.0f)
         text_w = 20.0f;
 
+    // Cache hit: same styled string, same wrap inputs -> reuse the wrapped
+    // token lines (this is what keeps a big chat at full frame rate).
+    const bool cache_hit =
+        cache && cache->valid && cache->key_w == text_w &&
+        cache->key_rh == row_h && cache->key_indent == indent &&
+        cache->key_prefix == prefix && cache->key_body == body;
+
+    std::vector<std::vector<Word>> fresh;
+    float total_h = 0.0f;
+    if (cache_hit) {
+        total_h = cache->total_h;
+    } else {
     std::vector<AnsiRun> runs;
     runs.push_back({prefix, default_color.r, default_color.g, default_color.b,
                     false, 0, 0, 0, false});
@@ -3128,31 +3170,44 @@ float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
     }
 
     // Greedy word wrap into visual lines.
-    std::vector<std::vector<Word>> lines;
-    lines.emplace_back();
+    fresh.emplace_back();
     float x = 0.0f;
     for (auto& w : toks) {
         if (w.force_break) {
-            lines.emplace_back();
+            fresh.emplace_back();
             x = 0.0f;
             continue;
         }
         const float ww = text_w_px(f, w.text.data(), (int)w.text.size());
-        if (!lines.back().empty() && x + ww > text_w) {
-            lines.emplace_back();
+        if (!fresh.back().empty() && x + ww > text_w) {
+            fresh.emplace_back();
             x = 0.0f;
             if (w.text == std::string(w.text.size(), ' '))
                 continue;  // drop spaces at a wrap point
         }
         x += ww;
-        lines.back().push_back(std::move(w));
+        fresh.back().push_back(std::move(w));
     }
-    if (lines.size() == 1 && lines[0].empty())
-        lines[0].push_back({" ", default_color, nk_rgba(0, 0, 0, 0), false});
+    if (fresh.size() == 1 && fresh[0].empty())
+        fresh[0].push_back({" ", default_color, nk_rgba(0, 0, 0, 0), false});
+
+    total_h = static_cast<float>(fresh.size()) * row_h + 6.0f;
+    if (cache) {
+        cache->key_prefix = prefix;
+        cache->key_body = body;
+        cache->key_w = text_w;
+        cache->key_rh = row_h;
+        cache->key_indent = indent;
+        cache->total_h = total_h;
+        cache->lines = std::move(fresh);
+        cache->valid = true;
+    }
+    }
+    const std::vector<std::vector<Word>>& lines =
+        cache ? cache->lines : fresh;
 
     // Reserve the space, then draw tokens manually at absolute positions so
     // each word keeps its own color (nk_label cannot do styled runs).
-    const float total_h = static_cast<float>(lines.size()) * row_h + 6.0f;
     if (dry)
         return total_h;  // measure-only pass: a block panel needs its height
                          // before the first content row is drawn
@@ -3160,6 +3215,12 @@ float draw_chat_line(struct nk_context* ctx, const std::string& prefix,
     struct nk_rect area = nk_widget_bounds(ctx);
     area.x += indent;
     area.w -= indent;
+    // Off-screen culling: with `vis` (the caller's scrolled viewport) given,
+    // a row fully outside it has already reserved its layout slot above - so
+    // the scroll extent stays correct - but skips the per-token draw and the
+    // hit-map work. This is the other half of keeping big chats at full rate.
+    if (vis && (area.y + total_h < vis->y || area.y > vis->y + vis->h))
+        return total_h;
     struct nk_command_buffer* canvas = nk_window_get_canvas(ctx);
     float y = area.y;
     for (const auto& ln : lines) {
@@ -3278,13 +3339,6 @@ std::string clip_line_w(const struct nk_user_font* f, const std::string& s,
 }
 
 // One rendered diff row: left/right cells; kind drives the backgrounds.
-struct DiffRow {
-    int old_no = 0, new_no = 0;
-    std::string old_text, new_text;
-    char kind = ' ';  // ' ' context | '-' del | '+' add | '~' changed pair
-    bool gap = false;  // hunk separator (line numbers jumped)
-};
-
 // Build display rows from filetool's flat op list: a run of '-'/'+' ops is
 // paired row-by-row into the side-by-side view; a context line whose numbers
 // jump over untouched lines inserts a gap separator.
@@ -3352,7 +3406,8 @@ std::vector<DiffRow> diff_rows(const nlohmann::json& diff)
 float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
                       int src_line, const EmojiAtlas* em,
                       std::vector<std::pair<int, struct nk_rect>>* rects,
-                      float indent = 0.0f, bool dry = false)
+                      float indent = 0.0f, bool dry = false,
+                      const struct nk_rect* vis = nullptr)
 {
     const struct nk_user_font* f = ctx->style.font;
     const float row_h = f && f->height > 0.0f ? f->height : 18.0f;
@@ -3381,7 +3436,8 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
         std::to_string(l.diff_removed) + "\x1b[0m";
     float total = draw_chat_line(ctx, "<- ", head,
                                  nk_rgb(230, 150, 60), text_w, -1, nullptr,
-                                 nullptr, em, indent, dry);
+                                 nullptr, em, indent, dry,
+                                 &l.wc_diff_head, vis);
     if (!dry)
         rects->push_back({src_line, nk_widget_bounds(ctx)});
     const bool open = l.diff_open && l.diff.is_object() &&
@@ -3391,7 +3447,14 @@ float draw_diff_block(struct nk_context* ctx, const ChatLine& l, float text_w,
         return total;
     }
 
-    const auto rows = diff_rows(l.diff);
+    // The diff json is immutable once the line exists (set before the line
+    // is pushed), so the parsed rows are cached on the line: re-parsing the
+    // ops JSON every frame (dry + real) was a big cost in tool-heavy chats.
+    if (!l.diff_rows_valid) {
+        l.diff_rows_cache = diff_rows(l.diff);
+        l.diff_rows_valid = true;
+    }
+    const std::vector<DiffRow>& rows = l.diff_rows_cache;
     const bool side = inner_w >= 640.0f;
     const float gutter = 4.0f * text_w_px(f, "0", 1) + 6.0f;
     const float gap_w = 10.0f;
@@ -4062,12 +4125,13 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                     inner_h += draw_chat_line(ctx, "", thought_head(l),
                                               app.col_thinking, text_w, -1,
                                               nullptr, nullptr, &app.emoji,
-                                              indent_in, true);
+                                              indent_in, true,
+                                              &l.wc_think_head);
                     if (l.thought_open)
                         inner_h += draw_chat_line(
                             ctx, "  \xE2\x94\x82 ", l.thinking,
                             app.col_think_body, text_w, -1, nullptr, nullptr,
-                            &app.emoji, indent_in, true);
+                            &app.emoji, indent_in, true, &l.wc_think_body);
                 }
                 if (l.media) {
                     panel = true;
@@ -4082,7 +4146,8 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                     panel = true;
                     inner_h += draw_chat_line(ctx, "", l.text, app.col_text,
                                               text_w, src, nullptr, nullptr,
-                                              &app.emoji, indent_in, true);
+                                              &app.emoji, indent_in, true,
+                                              &l.wc_text);
                 }
             }
             if (panel) {
@@ -4102,19 +4167,21 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                                          ph - 4.0f), 0.0f, bar_col);
                 if (!l.diff.is_null()) {
                     draw_diff_block(ctx, l, text_w, src, &app.emoji,
-                                    &app.diff_rects, indent_in, false);
+                                    &app.diff_rects, indent_in, false, &gb);
                 }
                 else {
                     if (!l.thinking.empty()) {
                         draw_chat_line(ctx, "", thought_head(l),
                                        app.col_thinking, text_w, -1, nullptr,
-                                       nullptr, &app.emoji, indent_in);
+                                       nullptr, &app.emoji, indent_in, false,
+                                       &l.wc_think_head, &gb);
                         app.thought_rects.push_back({src, nk_widget_bounds(ctx)});
                         if (l.thought_open)
                             draw_chat_line(
                                 ctx, "  \xE2\x94\x82 ", l.thinking,
                                 app.col_think_body, text_w, -1, nullptr,
-                                nullptr, &app.emoji, indent_in);
+                                nullptr, &app.emoji, indent_in, false,
+                                &l.wc_think_body, &gb);
                     }
                     if (l.media) {
                         if (l.media->kind == MediaBlock::Kind::Image)
@@ -4128,7 +4195,7 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                         draw_chat_line(ctx, "", l.text, app.col_text, text_w,
                                        src, &app.chat_hits,
                                        has_sel ? &sel : nullptr, &app.emoji,
-                                       indent_in);
+                                       indent_in, false, &l.wc_text, &gb);
                 }
                 nk_layout_row_dynamic(ctx, lay.pad_y, 1);
                 content_h += ph + block_gap;
@@ -4139,13 +4206,15 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                     content_h += draw_chat_line(ctx, prefix, l.text, col,
                                                 text_w, src, &app.chat_hits,
                                                 has_sel ? &sel : nullptr,
-                                                &app.emoji) +
+                                                &app.emoji, 0.0f, false,
+                                                &l.wc_text, &gb) +
                                  block_gap;
             } else if (has_text) {
                 // Plain flow: assistant/sys text (and empty placeholders).
                 content_h += draw_chat_line(ctx, prefix, l.text, col, text_w, src,
                                             &app.chat_hits, has_sel ? &sel : nullptr,
-                                            &app.emoji) +
+                                            &app.emoji, 0.0f, false,
+                                            &l.wc_text, &gb) +
                              block_gap;
             }
             // Dim stats sub-line under the reply (model - time - tok/s).
@@ -4153,24 +4222,10 @@ void chat_panel(struct nk_context* ctx, AppState& app, float height)
                 content_h += draw_chat_line(ctx, "  \xC2\xB7 ", l.meta,
                                             app.col_meta, text_w,
                                             -1, nullptr, nullptr,
-                                            &app.emoji) +
+                                            &app.emoji, 0.0f, false,
+                                            &l.wc_meta, &gb) +
                              block_gap;
             ++src;
-        }
-        // opencode-style block cursor: while the LLM thinks, a blinking █
-        // sits on a fresh line under the newest content (where the reply
-        // will land). Drawn as a filled rect (no glyph atlas dependency).
-        // nk_widget_bounds (NOT nk_layout_widget_bounds) subtracts the group
-        // scroll offset, so the slot is in screen coordinates like every
-        // chat line.
-        if (app.worker == AppState::Worker::Thinking) {
-            const struct nk_user_font* f = ctx->style.font;
-            nk_layout_row_dynamic(ctx, f->height + spacing, 1);
-            const struct nk_rect slot = nk_widget_bounds(ctx);
-            if (std::fmod(glfwGetTime(), 1.1) < 0.6)
-                fill_px(&ctx->current->buffer, slot.x,
-                        slot.y + (slot.h - f->height) / 2.0f,
-                        f->height * 0.55f, f->height, nk_rgb(232, 236, 242));
         }
         // Follow-bottom pinning: keep the newest line in view while following.
         // The group keeps its own persistent scroll offset (nk_window_set_scroll
@@ -4305,31 +4360,6 @@ static void krastor_copy(nk_handle usr, const char* text, int len)
         g_paste_app->notify_copied();
 }
 
-// ---- in-app key repeat (see key_repeat.h) --------------------------------
-// Wrappers installed over the backend callbacks: OS repeats never reach
-// Nuklear; the KeyRepeater re-synthesizes them at gui.key_repeat_speed
-// from the main loop. Single window, so a file-static pointer is enough.
-static krastor::KeyRepeater* g_keyrep = nullptr;
-
-static void kr_key_cb(GLFWwindow* win, int key, int sc, int action, int mods)
-{
-    if (g_keyrep)
-        g_keyrep->on_key(key, action, mods, glfwGetTime());
-    if (action == GLFW_REPEAT)
-        return;  // replaced by the synthesized repeat
-    nk_glfw3_key_callback(win, key, sc, action, mods);
-}
-
-static void kr_char_cb(GLFWwindow* win, unsigned int cp)
-{
-    if (g_keyrep) {
-        if (!g_keyrep->char_allowed())
-            return;  // repeated char: the repeater owns the stream
-        g_keyrep->on_char(cp);
-    }
-    nk_glfw3_char_callback(win, cp);
-}
-
 int run_gui(Config& cfg, VoiceRegistry& voices)
 {
     if (!glfwInit()) {
@@ -4386,13 +4416,6 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
 
     static struct nk_glfw device;
     nk_glfw3_init(&device, win, NK_GLFW3_INSTALL_CALLBACKS);
-    // In-app key repeat: own the key/char callbacks so OS repeats are
-    // swallowed and re-synthesized at gui.key_repeat_speed (key_repeat.h).
-    static krastor::KeyRepeater keyrep;
-    keyrep.set_speed(cfg.gui.key_repeat_speed);
-    g_keyrep = &keyrep;
-    glfwSetKeyCallback(win, kr_key_cb);
-    glfwSetCharCallback(win, kr_char_cb);
     struct nk_font_atlas* atlas = nullptr;
     nk_glfw3_font_stash_begin(&device, &atlas);
     // Monospace font with box-drawing/extended glyphs for terminal-style output;
@@ -4859,23 +4882,6 @@ int run_gui(Config& cfg, VoiceRegistry& voices)
             spec.synthetic(glfwGetTime() - t0);
         spec.advance();
         fx.check_reload();
-
-        // Synthesized key repeat: inject this frame's repeat (if any) into
-        // the backend's per-frame queues, the same path a real event takes.
-        // One fire per frame: at high speeds the rate caps at the frame rate.
-        keyrep.set_speed(cfg.gui.key_repeat_speed);  // live from settings
-        int rkey = 0;
-        unsigned int rcp = 0;
-        switch (keyrep.tick(glfwGetTime(), &rkey, &rcp)) {
-        case krastor::KeyRepeater::Fire::Char:
-            nk_glfw3_char_callback(win, rcp);
-            break;
-        case krastor::KeyRepeater::Fire::Key:
-            nk_glfw3_key_callback(win, rkey, 0, GLFW_PRESS, 0);
-            break;
-        default:
-            break;
-        }
 
         nk_glfw3_new_frame(&device);
         struct nk_context* ctx = &device.ctx;
@@ -5581,39 +5587,6 @@ int run_gui_stack_test()
         check(off.size() == 0 && !off.can_prev(), "max 0 disables the history");
     }
 
-    // ---- KeyRepeater (in-app key repeat, see key_repeat.h) ----
-    {
-        using Fire = krastor::KeyRepeater::Fire;
-        krastor::KeyRepeater rp;
-        int k = 0;
-        unsigned int c = 0;
-        rp.on_key('A', GLFW_PRESS, 0, 0.0);
-        rp.on_char('a');
-        check(rp.char_allowed(), "repeat gate open on press");
-        check(rp.tick(0.3, &k, &c) == Fire::None, "no repeat before the delay");
-        rp.on_key('A', GLFW_REPEAT, 0, 0.35);
-        check(!rp.char_allowed(), "swallowed repeat closes the char gate");
-        check(rp.tick(0.45, &k, &c) == Fire::Char && c == 'a',
-              "char repeat fires after the delay");
-        check(rp.tick(0.48, &k, &c) == Fire::None, "rate-limited between repeats");
-        check(rp.tick(0.49, &k, &c) == Fire::Char,
-              "next repeat one interval later");
-        rp.on_key('A', GLFW_RELEASE, 0, 0.6);
-        check(rp.char_allowed(), "release reopens the char gate");
-        check(rp.tick(0.9, &k, &c) == Fire::None, "release stops the repeat");
-        rp.on_key(GLFW_KEY_BACKSPACE, GLFW_PRESS, 0, 1.0);
-        check(rp.tick(1.45, &k, &c) == Fire::Key && k == GLFW_KEY_BACKSPACE,
-              "special keys repeat as key events");
-        rp.set_speed(2.0);  // double speed: half the interval
-        rp.on_key('B', GLFW_PRESS, 0, 2.0);
-        rp.on_char('b');
-        check(rp.tick(2.45, &k, &c) == Fire::Char && c == 'b', "first fire at 2x");
-        check(rp.tick(2.48, &k, &c) == Fire::Char, "2x interval fits in 17 ms");
-        rp.on_key('C', GLFW_PRESS, GLFW_MOD_CONTROL, 3.0);
-        rp.on_char('c');
-        check(rp.tick(3.9, &k, &c) == Fire::None, "Ctrl chords never repeat");
-    }
-
     // ---- cost formatting (usage.cost display) ----
     check(fmt_cost(0.0042) == "$0.0042" && fmt_cost(1.5) == "$1.50",
           "fmt_cost: 4 decimals below $1, 2 at/above");
@@ -5663,9 +5636,19 @@ int run_gui_stack_test()
         c1.num = 1;
         atts = {c1};
         pend = {c1.token()};
-        check(AppState::sync_tokens_core(buf, sizeof(buf), atts, pend, 2) == 10 &&
-                  std::strcmp(buf, "ab[image1]") == 0,
+        bool chg = false;
+        check(AppState::sync_tokens_core(buf, sizeof(buf), atts, pend, 2,
+                                         nullptr, &chg) == 10 &&
+                  std::strcmp(buf, "ab[image1]") == 0 && chg,
               "pending token lands at the caret and caret moves past it");
+        // A no-op pass must NOT report a change: the caller only rewrites the
+        // caret/selection when the text changed, else every selection made in
+        // the input field would collapse on the next frame.
+        chg = true;
+        check(AppState::sync_tokens_core(buf, sizeof(buf), atts, pend, 2,
+                                         nullptr, &chg) == 2 &&
+                  !chg,
+              "unchanged text reports changed=false (selection survives)");
     }
 
     struct nk_context ctx;

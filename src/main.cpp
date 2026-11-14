@@ -451,6 +451,21 @@ int run_tool_test()
     check("utf8_clean cuts truncated tail",
           krastor::utf8_clean("ok\xe2\x82") == "ok??");
 
+    // strip_textual_tool_calls: the tool-less wrap-up round after the round
+    // limit must never leak a raw Hermes <tool_call> block into the chat.
+    check("strip: no marker passes through",
+          krastor::strip_textual_tool_calls("plain prose") == "plain prose");
+    check("strip: block replaced by marker",
+          krastor::strip_textual_tool_calls(
+              "wrap up. <tool_call>\n<function=python>\nx\n</function>\n"
+              "</tool_call>\nbye") ==
+              "wrap up. [tool call attempted after the round limit - raise "
+              "agent.max_tool_rounds in config.jsonc]\nbye");
+    check("strip: unterminated block cuts to the end",
+          krastor::strip_textual_tool_calls("a <tool_call><function=t>") ==
+              "a [tool call attempted after the round limit - raise "
+              "agent.max_tool_rounds in config.jsonc]");
+
     // tool usage prompt: sandbox + the "python is the last resort" rule.
     {
         const std::string up = krastor::tool_usage_prompt();
@@ -1251,7 +1266,7 @@ int run_config_test()
         f << "{\n"
              "  // base model\n"
              "  \"llm\": { \"model\": \"m1\", /* inline */ \"model_ref\": \"p/m1\" },\n"
-             "  \"gui\": { \"font_size\": 22, \"key_repeat_speed\": 2.5 },\n"
+             "  \"gui\": { \"font_size\": 22 },\n"
              "  \"agents\": {\n"
              "    \"poeta\": { \"name\": \"Poeta\", \"color\": \"#E5A93C\",\n"
              "                 \"system_prompt\": \"Sei un poeta.\", \"thinking\": \"max\" },\n"
@@ -1263,18 +1278,11 @@ int run_config_test()
     krastor::Config cfg = krastor::Config::load((dir / "config.jsonc").string());
     check("jsonc comments parse",
           cfg.llm.model == "m1" && cfg.gui.font_size == 22);
-    check("key_repeat_speed parsed", cfg.gui.key_repeat_speed == 2.5);
     check("timeout_s default 600", krastor::Config{}.llm.timeout_s == 600);
     { std::ofstream(dir / "tmo.jsonc") << "{ \"llm\": { \"timeout_s\": 99999 } }\n"; }
     check("timeout_s clamped to 3600",
           krastor::Config::load((dir / "tmo.jsonc").string())
               .llm.timeout_s == 3600);
-    check("key_repeat_speed default 1.0",
-          krastor::Config{}.gui.key_repeat_speed == 1.0);
-    { std::ofstream(dir / "clamp.jsonc") << "{ \"gui\": { \"key_repeat_speed\": 99 } }\n"; }
-    check("key_repeat_speed clamped to 4.0",
-          krastor::Config::load((dir / "clamp.jsonc").string())
-              .gui.key_repeat_speed == 4.0);
     check("agents parsed + base synthesized",
           cfg.agents.size() == 3 && cfg.agents[0].id == "krastor" &&
               cfg.agents[1].id == "poeta" && cfg.agents[2].id == "sec");
