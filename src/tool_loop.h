@@ -24,6 +24,12 @@ class CancelToken;
 // before it enters the conversation.
 std::string utf8_clean(const std::string& in);
 
+// Tool-trained models sometimes answer the tool-less wrap-up round (after the
+// round limit) with a textual Hermes-style <tool_call> block instead of
+// prose; rendered raw it floods the chat with XML. Replace every such block
+// with a one-line marker telling the user to raise agent.max_tool_rounds.
+std::string strip_textual_tool_calls(const std::string& text);
+
 // Info about one requested call, for UI/status rendering.
 struct ToolCallInfo {
     std::string tool;    // manifest name

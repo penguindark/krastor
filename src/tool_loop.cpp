@@ -4,6 +4,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstring>
+
 #include "http_client.h"  // CancelToken
 
 namespace krastor {
@@ -33,6 +35,33 @@ std::string utf8_clean(const std::string& in)
         if (!ok) { out += '?'; ++i; continue; }
         out.append(in, i, len);
         i += len;
+    }
+    return out;
+}
+
+std::string strip_textual_tool_calls(const std::string& text)
+{
+    static const char* kOpen = "<tool_call>";
+    static const char* kClose = "</tool_call>";
+    if (text.find(kOpen) == std::string::npos)
+        return text;  // the overwhelmingly common case
+    const std::string marker =
+        "[tool call attempted after the round limit - raise "
+        "agent.max_tool_rounds in config.jsonc]";
+    std::string out;
+    size_t i = 0;
+    while (true) {
+        const size_t s = text.find(kOpen, i);
+        if (s == std::string::npos) {
+            out.append(text, i, std::string::npos);
+            break;
+        }
+        out.append(text, i, s - i);
+        const size_t e = text.find(kClose, s);
+        out += marker;
+        if (e == std::string::npos)
+            break;  // unterminated block: the rest of the message is the call
+        i = e + std::strlen(kClose);
     }
     return out;
 }
@@ -108,11 +137,18 @@ LlmReply agent_complete(const LlmClient& client, Conversation& conv,
         }
         if (++rounds > max_rounds) {
             // Keep the history consistent, tell the model to wrap up and take
-            // one final tool-less answer.
+            // one final tool-less answer. The explicit instruction matters:
+            // without it tool-trained models often answer this round with a
+            // textual <tool_call> block that would leak raw XML into the chat.
             conv.add_assistant(reply.content, reply.tool_calls);
             for (const auto& tc : reply.tool_calls)
-                conv.add_tool(tc.id, "ERROR: tool loop limit reached");
+                conv.add_tool(tc.id,
+                              "ERROR: tool loop limit reached. Do not call "
+                              "any more tools; summarize what you did and "
+                              "what remains to do.");
             reply = next_round(std::string());
+            if (reply.ok)
+                reply.content = strip_textual_tool_calls(reply.content);
             break;
         }
 
